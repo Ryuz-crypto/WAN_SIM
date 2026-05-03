@@ -13,370 +13,8 @@ fi
 exec > >(tee -a /tmp/wansim_debug.log) 2>&1
 
 # SECCIÓN 1: Configuración Inicial y Funciones Auxiliares
-
-# =============================================
-# FUNCIONES PARA PUENTE L2 (LAN TO LAN)
-# =============================================
-
-# Función para detectar y seleccionar interfaces para el puente L2
-select_bridge_interfaces() {
-    local selected_interfaces=()
-    local interface_count=0
-
-    echo "${COLOR_CYAN}=== Configuración de Puente L2 (LAN to LAN) ===${COLOR_RESET}"
-    echo "${COLOR_INFO}Interfaces de red disponibles:${COLOR_RESET}"
-
-    # Listar interfaces disponibles (excluyendo loopback, puente existente, etc.)
-    local available_interfaces=($(ip -o link show | awk -F': ' '{print $2}' | grep -v -E 'lo|br0|virbr|docker' | sed 's/@.*//'))
-
-    if [ ${#available_interfaces[@]} -eq 0 ]; then
-        echo "${COLOR_ERROR}No se encontraron interfaces de red disponibles.${COLOR_RESET}"
-        return 1
-    fi
-
-    for i in "${!available_interfaces[@]}"; do
-        local iface="${available_interfaces[$i]}"
-        local mac=$(ip link show "$iface" | grep link/ether | awk '{print $2}')
-        echo "${COLOR_INFO}[$((i+1))] ${iface} (MAC: ${mac})${COLOR_RESET}"
-    done
-
-    # Preguntar al usuario cuáles interfaces quiere usar (1 a 3)
-    while [ $interface_count -lt 3 ]; do
-        read -p "${COLOR_INFO}Selecciona la interfaz para L2L$(($interface_count+1)) (1-${#available_interfaces[@]} o 's' para terminar): ${COLOR_RESET}" choice
-        if [[ "$choice" == "s" || "$choice" == "S" ]]; then
-            break
-        fi
-
-        if [[ "$choice" =~ ^[0-9]+$ && $choice -le ${#available_interfaces[@]} && $choice -gt 0 ]]; then
-            local selected_index=$((choice-1))
-            selected_interfaces+=("${available_interfaces[$selected_index]}")
-            ((interface_count++))
-            echo "${COLOR_OK}Interfaz ${available_interfaces[$selected_index]} seleccionada para L2L$interface_count.${COLOR_RESET}"
-        else
-            echo "${COLOR_ERROR}Selección no válida. Intenta de nuevo.${COLOR_RESET}"
-        fi
-    done
-
-    if [ ${#selected_interfaces[@]} -eq 0 ]; then
-        echo "${COLOR_ERROR}Debes seleccionar al menos una interfaz.${COLOR_RESET}"
-        return 1
-    fi
-
-    echo "${selected_interfaces[@]}"
-    return 0
-}
-
-# Función para crear el puente L2 y asignar interfaces
-create_bridge_l2() {
-    local interfaces=("$@")
-    local bridge_name="br0"
-
-    # Crear el puente si no existe
-    if ! ip link show "$bridge_name" >/dev/null 2>&1; then
-        sudo ip link add name "$bridge_name" type bridge
-        sudo ip link set "$bridge_name" up
-        log_message "OK" "Puente $bridge_name creado."
-    else
-        log_message "WARN" "El puente $bridge_name ya existe. Reutilizándolo."
-    fi
-
-    # Asignar interfaces al puente
-    for iface in "${interfaces[@]}"; do
-        if ip link show "$iface" >/dev/null 2>&1; then
-            sudo ip link set "$iface" master "$bridge_name"
-            sudo ip link set "$iface" up
-            log_message "OK" "Interfaz $iface asignada a $bridge_name."
-        else
-            log_message "ERROR" "Interfaz $iface no existe. No se asignó al puente."
-        fi
-    done
-
-    # Guardar las interfaces del puente en un archivo para el dashboard
-    echo "${interfaces[@]}" | tr ' ' '\n' > "${USER_HOME}/bridge_interfaces.txt"
-    echo "$bridge_name" > "${USER_HOME}/active_bridge.txt"
-}
-
-# Función para aplicar controles de tráfico en el puente
-apply_bridge_traffic_control() {
-    local bridge_name="br0"
-    local delay=${1:-0}
-    local jitter=${2:-0}
-    local loss=${3:-0}
-
-    if ! ip link show "$bridge_name" >/dev/null 2>&1; then
-        echo "${COLOR_ERROR}El puente $bridge_name no existe.${COLOR_RESET}"
-        return 1
-    fi
-
-    # Eliminar reglas existentes de tc
-    sudo tc qdisc del dev "$bridge_name" root >/dev/null 2>&1 || true
-
-    # Aplicar nuevas reglas
-    local tc_cmd="sudo tc qdisc add dev $bridge_name root netem"
-    [ "$delay" -gt 0 ] && tc_cmd+=" delay ${delay}ms"
-    [ "$jitter" -gt 0 ] && tc_cmd+=" ${jitter}ms"
-    [ "$loss" -gt 0 ] && tc_cmd+=" loss ${loss}%"
-
-    if eval "$tc_cmd"; then
-        log_message "OK" "Controles de tráfico aplicados en $bridge_name: delay=${delay}ms, jitter=${jitter}ms, loss=${loss}%."
-        echo "$delay $jitter $loss" > "${USER_HOME}/bridge_traffic.txt"
-    else
-        log_message "ERROR" "No se pudieron aplicar controles de tráfico en $bridge_name."
-        return 1
-    fi
-}
-
-# Función para mostrar el estado del puente L2
-show_bridge_status() {
-    local bridge_name="br0"
-    if ! ip link show "$bridge_name" >/dev/null 2>&1; then
-        echo "${COLOR_ERROR}El puente $bridge_name no está activo.${COLOR_RESET}"
-        return 1
-    fi
-
-    echo "${COLOR_CYAN}=== Estado del Puente L2 ($bridge_name) ===${COLOR_RESET}"
-    echo "${COLOR_INFO}Interfaces asignadas:${COLOR_RESET}"
-    ip link show master "$bridge_name" | grep -v "^[0-9]:" | awk '{print $2}' | sed 's/://'
-
-    if [ -f "${USER_HOME}/bridge_traffic.txt" ]; then
-        read delay jitter loss < "${USER_HOME}/bridge_traffic.txt"
-        echo "${COLOR_INFO}Controles de tráfico:${COLOR_RESET}"
-        echo "  Latencia: ${delay}ms"
-        echo "  Jitter: ${jitter}ms"
-        echo "  Pérdida: ${loss}%"
-    else
-        echo "${COLOR_INFO}No hay controles de tráfico aplicados.${COLOR_RESET}"
-    fi
-}
-
-# Función para eliminar el puente L2
-delete_bridge_l2() {
-    local bridge_name="br0"
-    if ip link show "$bridge_name" >/dev/null 2>&1; then
-        # Eliminar controles de tráfico
-        sudo tc qdisc del dev "$bridge_name" root >/dev/null 2>&1 || true
-        # Eliminar el puente
-        sudo ip link del "$bridge_name" >/dev/null 2>&1
-        log_message "OK" "Puente $bridge_name y sus controles de tráfico eliminados."
-        # Limpiar archivos temporales
-        rm -f "${USER_HOME}/bridge_interfaces.txt" "${USER_HOME}/bridge_traffic.txt" "${USER_HOME}/active_bridge.txt"
-    else
-        log_message "WARN" "El puente $bridge_name no existe."
-    fi
-}
-
-# Función para generar el dashboard con soporte para L2/L3
-generate_dashboard() {
-    local mode="L3"  # Modo por defecto
-    if [ -f "${USER_HOME}/wansim_mode.txt" ]; then
-        mode=$(cat "${USER_HOME}/wansim_mode.txt")
-    fi
-
-    # Leer estadísticas del puente si está en modo L2
-    local bridge_stats=""
-    if [ "$mode" == "L2" ]; then
-        if [ -f "${USER_HOME}/bridge_traffic.txt" ]; then
-            read delay jitter loss < "${USER_HOME}/bridge_traffic.txt"
-            bridge_stats="{"delay": $delay, "jitter": $jitter, "loss": $loss}"
-        fi
-        if [ -f "${USER_HOME}/bridge_interfaces.txt" ]; then
-            bridge_interfaces=$(cat "${USER_HOME}/bridge_interfaces.txt" | tr '\n' ', ')
-            bridge_interfaces="["${bridge_interfaces%, }"]"
-        fi
-    fi
-
-    # Leer estadísticas de VLANs (para modo L3)
-    local vlan_stats="[]"
-
-    cat <<'EOF' > "$WANSIM_DASHBOARD"
-from flask import Flask, render_template_string, request, redirect, url_for
-import subprocess
-import json
-import os
-
-app = Flask(__name__)
-
-# Cargar configuración inicial
-MODE = "L3"
-BRIDGE_STATS = {}
-BRIDGE_INTERFACES = []
-VLAN_STATS = []
-
-# Leer modo actual
-if os.path.exists(os.path.expanduser("~/wansim_mode.txt")):
-    with open(os.path.expanduser("~/wansim_mode.txt"), "r") as f:
-        MODE = f.read().strip()
-
-# Leer estadísticas del puente si está en modo L2
-if MODE == "L2":
-    if os.path.exists(os.path.expanduser("~/bridge_traffic.txt")):
-        with open(os.path.expanduser("~/bridge_traffic.txt"), "r") as f:
-            delay, jitter, loss = map(int, f.read().split())
-            BRIDGE_STATS = {"delay": delay, "jitter": jitter, "loss": loss}
-    if os.path.exists(os.path.expanduser("~/bridge_interfaces.txt")):
-        with open(os.path.expanduser("~/bridge_interfaces.txt"), "r") as f:
-            BRIDGE_INTERFACES = [line.strip() for line in f.readlines()]
-
-HTML_TEMPLATE = '''
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WAN Simulator - Modo {{ mode }}</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <style>
-        body { background-color: #f8f9fa; }
-        .card { margin-bottom: 20px; border-left: 4px solid #0d6efd; }
-        .mode-badge { font-size: 1.2rem; }
-        .btn-mode { margin: 5px; }
-        .chart-container { position: relative; height: 300px; }
-    </style>
-</head>
-<body>
-    <div class="container mt-4">
-        <div class="d-flex justify-content-between align-items-center mb-4">
-            <h1>WAN Simulator</h1>
-            <div>
-                <span class="badge bg-primary mode-badge">Modo: {{ mode }}</span>
-                <a href="/set_mode?mode=L2" class="btn btn-outline-primary btn-mode">Modo L2</a>
-                <a href="/set_mode?mode=L3" class="btn btn-outline-primary btn-mode">Modo L3</a>
-            </div>
-        </div>
-
-        {% if mode == "L2" %}
-            <div class="alert alert-info">Se está trabajando en <strong>modo L2 (Puente)</strong>.</div>
-            <div class="card">
-                <div class="card-header">
-                    <h3>Puente br0</h3>
-                </div>
-                <div class="card-body">
-                    <p><strong>Interfaces:</strong> {{ bridge_interfaces|join(", ") }}</p>
-                    <p><strong>Latencia:</strong> {{ bridge_stats.delay|default(0) }} ms</p>
-                    <p><strong>Jitter:</strong> {{ bridge_stats.jitter|default(0) }} ms</p>
-                    <p><strong>Pérdida:</strong> {{ bridge_stats.loss|default(0) }}%</p>
-                    <div class="chart-container">
-                        <canvas id="bridgeChart"></canvas>
-                    </div>
-                </div>
-            </div>
-            <form action="/apply_bridge" method="post" class="card p-4">
-                <h4>Aplicar Controles de Tráfico en br0</h4>
-                <div class="mb-3">
-                    <label class="form-label">Latencia (ms):</label>
-                    <input type="number" class="form-control" name="delay" min="0" step="1" value="{{ bridge_stats.delay|default(0) }}">
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">Jitter (ms):</label>
-                    <input type="number" class="form-control" name="jitter" min="0" step="1" value="{{ bridge_stats.jitter|default(0) }}">
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">Pérdida (%):</label>
-                    <input type="number" class="form-control" name="loss" min="0" max="100" step="1" value="{{ bridge_stats.loss|default(0) }}">
-                </div>
-                <button type="submit" class="btn btn-primary">Aplicar</button>
-            </form>
-        {% else %}
-            <div class="alert alert-info">Se está trabajando en <strong>modo L3 (Router)</strong>.</div>
-            <div class="card">
-                <div class="card-header">
-                    <h3>VLANs Configuradas</h3>
-                </div>
-                <div class="card-body">
-                    {% for vlan in vlan_stats %}
-                        <div class="mb-3 p-3 border rounded">
-                            <h4>{{ vlan.name }}</h4>
-                            <p>Latencia: {{ vlan.delay|default(0) }} ms</p>
-                            <p>Jitter: {{ vlan.jitter|default(0) }} ms</p>
-                        </div>
-                    {% endfor %}
-                </div>
-            </div>
-        {% endif %}
-    </div>
-
-    <script>
-        // Gráfico para el puente L2
-        {% if mode == "L2" %}
-            const ctx = document.getElementById('bridgeChart').getContext('2d');
-            const bridgeChart = new Chart(ctx, {
-                type: 'bar',
-                data: {
-                    labels: ['Latencia (ms)', 'Jitter (ms)', 'Pérdida (%)'],
-                    datasets: [{
-                        label: 'Valores Actuales',
-                        data: [
-                            {{ bridge_stats.delay|default(0) }},
-                            {{ bridge_stats.jitter|default(0) }},
-                            {{ bridge_stats.loss|default(0) }}
-                        ],
-                        backgroundColor: [
-                            'rgba(255, 99, 132, 0.7)',
-                            'rgba(54, 162, 235, 0.7)',
-                            'rgba(255, 206, 86, 0.7)'
-                        ]
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    scales: {
-                        y: { beginAtZero: true }
-                    }
-                }
-            });
-        {% endif %}
-    </script>
-</body>
-</html>
-'''
-
-@app.route('/')
-def index():
-    return render_template_string(HTML_TEMPLATE, mode=MODE, bridge_stats=BRIDGE_STATS,
-                                 bridge_interfaces=BRIDGE_INTERFACES, vlan_stats=VLAN_STATS)
-
-@app.route('/set_mode')
-def set_mode():
-    global MODE
-    new_mode = request.args.get('mode', 'L3')
-    if new_mode in ['L2', 'L3']:
-        MODE = new_mode
-        with open(os.path.expanduser("~/wansim_mode.txt"), "w") as f:
-            f.write(new_mode)
-    return redirect(url_for('index'))
-
-@app.route('/apply_bridge', methods=['POST'])
-def apply_bridge():
-    delay = request.form.get('delay', '0')
-    jitter = request.form.get('jitter', '0')
-    loss = request.form.get('loss', '0')
-    # Ejecutar comando para aplicar tc en br0
-    subprocess.run([
-        "sudo", "tc", "qdisc", "del", "dev", "br0", "root"
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.run([
-        "sudo", "tc", "qdisc", "add", "dev", "br0", "root", "netem",
-        f"delay {delay}ms", f"{jitter}ms", f"loss {loss}%"
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    # Actualizar estadísticas
-    global BRIDGE_STATS
-    BRIDGE_STATS = {"delay": int(delay), "jitter": int(jitter), "loss": int(loss)}
-    return redirect(url_for('index'))
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=${DASHBOARD_PORT}, debug=True)
-EOF
-}
-
 # -----------------------------------------------
 # Variables de configuración
-
-# Inicializar modo (L2 o L3)
-if [ ! -f "${USER_HOME}/wansim_mode.txt" ]; then
-    echo "L3" > "${USER_HOME}/wansim_mode.txt"
-fi
-
 USER_HOME=$(eval echo ~$(whoami))
 LOGFILE="${USER_HOME}/emix_abundix.log"
 CONFIG_FILE="${USER_HOME}/emix_abundix.conf"
@@ -960,6 +598,55 @@ if [ "$INTERACTIVE" -eq 1 ]; then
             echo "${COLOR_CYAN}│ primera VLAN, etc.                                        │${COLOR_RESET}"
             echo "${COLOR_CYAN}└───────────────────────────────────────────────────────────┘${COLOR_RESET}"
             while true; do
+
+# Menú Principal
+if [ "$INTERACTIVE" -eq 1 ]; then
+    echo "${COLOR_CYAN}┌─────────────────── Menú Principal ───────────────────────┐${COLOR_RESET}"
+    echo "${COLOR_CYAN}│ Selecciona una opción:                                  │${COLOR_RESET}"
+    echo "${COLOR_CYAN}│  1) L3                                               │${COLOR_RESET}"
+    echo "${COLOR_CYAN}│  2) Opción 2                                          │${COLOR_RESET}"
+    echo "${COLOR_CYAN}│  3) Opción 3                                          │${COLOR_RESET}"
+    echo "${COLOR_CYAN}│  4) Bridge                                            │${COLOR_RESET}"
+    echo "${COLOR_CYAN}│  5) Salir                                             │${COLOR_RESET}"
+    echo "${COLOR_CYAN}└───────────────────────────────────────────────────────────┘${COLOR_RESET}"
+    read -p "Selecciona una opción: " main_option
+    case $main_option in
+        1) l3_menu ;;
+        4) bridge_menu ;;
+        5) exit 0 ;;
+        *) echo "${COLOR_ERROR}Opción inválida${COLOR_RESET}" ;;
+    esac
+fi
+
+
+# Función para el menú Bridge
+function bridge_menu() {
+    echo "${COLOR_CYAN}┌─────────────────── Interfaces de Bridge ─────────────────────┐${COLOR_RESET}"
+    echo "${COLOR_CYAN}│ Interfaces disponibles:                                │${COLOR_RESET}"
+
+    # Mostrar interfaces con MAC address
+    ip -o link show | awk -F': ' '{print \$2, \$NF}' | grep -v lo | while read -r iface mac; do
+        echo "${COLOR_GREEN}  - $iface (MAC: $mac)${COLOR_RESET}"
+    done
+
+    read -p "${COLOR_INFO}[ENTRADA] Selecciona la interfaz a intervenir: ${COLOR_RESET}" selected_iface
+
+    if ! ip link show "\$selected_iface" &>/dev/null; then
+        log_message "ERROR" "Interfaz $selected_iface no existe."
+        return 1
+    fi
+
+    read -p "${COLOR_INFO}[ENTRADA] ¿Cuántas interfaces deseas configurar (1-3)? ${COLOR_RESET}" num_ifaces
+    if [[ ! "\$num_ifaces" =~ ^[1-3]$ ]]; then
+        log_message "ERROR" "Debes seleccionar entre 1 y 3 interfaces."
+        return 1
+    fi
+
+    echo "$selected_iface" > /tmp/bridge_interfaces.txt
+    log_message "OK" "Interfaces seleccionadas para Bridge: $(cat /tmp/bridge_interfaces.txt)"
+    echo "${COLOR_OK}Espera los parámetros desde Flask o Telegram...${COLOR_RESET}"
+}
+
                 read -p "${COLOR_INFO}[ENTRADA] Ingresa el tercer octeto inicial para las VLANs (1-254) [predeterminado 10]: ${COLOR_RESET}" BASE_OCTET
                 BASE_OCTET=${BASE_OCTET:-10}
                 if [[ "$BASE_OCTET" =~ ^[0-9]+$ && "$BASE_OCTET" -ge 1 && "$BASE_OCTET" -le 254 ]]; then
@@ -2571,3 +2258,22 @@ fi
 
 # Mensaje final
 echo "${COLOR_OK}Script completado. Revisa $LOGFILE para más detalles.${COLOR_RESET}"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
