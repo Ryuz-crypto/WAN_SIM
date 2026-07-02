@@ -430,7 +430,7 @@ done
 # Instalación de dependencias de Python
 log_message "DEBUG" "Instalando dependencias de Python..."
 echo "${COLOR_INFO}Instalando dependencias de Python...${COLOR_RESET}"
-pip3 install --user flask requests python-telegram-bot==20.7 pyOpenSSL --no-warn-script-location || {
+pip3 install --user --break-system-packages flask requests python-telegram-bot==20.7 pyOpenSSL --no-warn-script-location || {
     log_message "ERROR" "Falló la instalación de dependencias de Python."
     echo "${COLOR_ERROR} [✗]${COLOR_RESET}"
     exit 1
