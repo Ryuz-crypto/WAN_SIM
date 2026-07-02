@@ -15,7 +15,8 @@
   - **NAT único**: Simula una salida a Internet con NAT para múltiples VLANs.
   - **Puente LAN-to-LAN**: Conecta dos interfaces de red en modo puente (bridge).
 - **Servidor DHCP automático** para asignar IPs a las VLANs.
-- **Dashboard web** basado en Flask para monitorear y configurar parámetros.
+- **Dashboard web funcional** basado en Flask para monitorear y configurar parámetros.
+- **Base ReactUI/FastAPI** incluida como evolución del dashboard sin retirar la funcionalidad actual.
 - **Integración con Telegram** para controlar el simulador mediante un bot.
 - **Persistencia de configuración** (guarda los parámetros para futuras ejecuciones).
 
@@ -40,14 +41,12 @@
 
 El script **incluye un motor de instalación robusto** que se encarga de todo: dependencias del sistema, dependencias de Python, permisos de sudo y configuraciones iniciales.
 
-### 1️⃣ Descargar el Script
+### 1️⃣ Descargar el repositorio en Ubuntu Server
+En Ubuntu Server usa el repositorio completo. No ejecutes el script sin cambiar permisos primero.
+
 ```bash
-# Clonar el repositorio
 git clone https://github.com/Ryuz-crypto/WAN_SIM.git
 cd WAN_SIM
-
-# O descargar solo el script
-wget https://raw.githubusercontent.com/Ryuz-crypto/WAN_SIM/main/WANsim2.sh
 chmod +x WANsim2.sh
 ```
 
@@ -67,7 +66,8 @@ echo "8021q" | sudo tee -a /etc/modules
 ✅ Configurar permisos de sudo automáticamente.
 ✅ Actualizar los repositorios de paquetes.
 ✅ Instalar todas las dependencias del sistema (python3, iproute2, vlan, etc.).
-✅ Instalar dependencias de Python (flask, requests, python-telegram-bot, pyOpenSSL).
+✅ Instalar dependencias de Python obligatorias (flask, requests, pyOpenSSL), usando APT primero y pip como respaldo.
+✅ Instalar `python-telegram-bot` solo si eliges activar Telegram.
 ✅ Verificar que todo esté listo antes de continuar.
 
 ---
@@ -188,9 +188,11 @@ http://<IP_DEL_SERVIDOR>:5000
 
 ---
 
-## 🧭 Dashboard React/FastAPI
+## 🧭 ReactUI/FastAPI
 
 La base de la interfaz React solicitada vive en [`DashboardAPI-EC/`](DashboardAPI-EC/README.md). Incluye frontend React + TypeScript + Material UI, backend FastAPI, PostgreSQL/TimescaleDB, Redis, Celery y Nginx para una evolución modular del dashboard.
+
+Importante: `WANsim2.sh` conserva el dashboard Flask como interfaz operativa completa porque ahí viven hoy las acciones de control de latencia, jitter, pérdida, VLANs, métricas y Telegram. ReactUI debe usarse como evolución paralela hasta que consuma los mismos endpoints y alcance paridad funcional. No reemplaces Flask por ReactUI si necesitas mantener todas las funciones actuales.
 
 Arranque local:
 ```bash
@@ -273,10 +275,14 @@ sudo apt install -y <paquete>
 ```
 
 ### ❌ Error: timeout al instalar Flask desde PyPI
-El instalador de `WANsim2.sh` ahora usa reintentos, `--prefer-binary`, timeout de 300 segundos y `--break-system-packages` solo cuando tu versión de pip lo soporta. Si tu red sigue cortando la descarga, reintenta con:
+El instalador de `WANsim2.sh` intenta instalar Flask, requests y pyOpenSSL desde APT primero (`python3-flask`, `python3-requests`, `python3-openssl`). Si APT no puede resolverlos, usa pip con reintentos, `--prefer-binary`, timeout de 300 segundos y `--break-system-packages` solo cuando tu versión de pip lo soporta.
+
+Si ves `Connection reset by peer` o tu red sigue cortando la descarga de PyPI, normalmente el script continuará usando APT para Flask. Para forzar más margen en pip:
 ```bash
 PIP_TIMEOUT=600 PIP_RETRIES=15 ./WANsim2.sh
 ```
+
+Si no usas Telegram, puedes continuar sin `python-telegram-bot`; el dashboard base no depende de ese paquete.
 
 ### ❌ Error: "No se pudo obtener el Chat ID de Telegram"
 **Solución:**

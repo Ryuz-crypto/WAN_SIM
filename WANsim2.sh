@@ -364,27 +364,46 @@ PIP_BREAK_SYSTEM_PACKAGES=()
 if pip3 install --help 2>/dev/null | grep -q -- "--break-system-packages"; then
     PIP_BREAK_SYSTEM_PACKAGES=(--break-system-packages)
 fi
-PIP_COMMON_ARGS=(--user "${PIP_BREAK_SYSTEM_PACKAGES[@]}" --default-timeout="$PIP_TIMEOUT" --retries "$PIP_RETRIES" --prefer-binary --no-warn-script-location)
+PIP_COMMON_ARGS=(--user "${PIP_BREAK_SYSTEM_PACKAGES[@]}" --default-timeout="$PIP_TIMEOUT" --retries "$PIP_RETRIES" --prefer-binary --no-cache-dir --no-warn-script-location)
+
+python_check() {
+    local check_code="$1"
+    python3 -c "$check_code" >/dev/null 2>&1
+}
 
 install_python_package() {
     local install_spec="$1"
     local dist_name="$2"
-    local import_name="$3"
+    local check_code="$3"
+    local apt_package="${4:-}"
     local attempt
 
-    if python3 -c "import ${import_name}" >/dev/null 2>&1; then
+    if python_check "$check_code"; then
         log_message "OK" "$dist_name ya está instalado."
         return 0
+    fi
+
+    if [ -n "$apt_package" ]; then
+        log_message "INFO" "Instalando $dist_name desde repositorios APT ($apt_package)..."
+        if sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y "$apt_package"; then
+            if python_check "$check_code"; then
+                log_message "OK" "$dist_name instalado desde APT."
+                return 0
+            fi
+            log_message "ADVERTENCIA" "$apt_package se instaló, pero Python no pudo cargar $dist_name."
+        else
+            log_message "ADVERTENCIA" "APT no pudo instalar $apt_package. Se intentará con pip."
+        fi
     fi
 
     for attempt in 1 2 3; do
         log_message "INFO" "Instalando $install_spec (intento $attempt/3, timeout ${PIP_TIMEOUT}s)..."
         if pip3 install "${PIP_COMMON_ARGS[@]}" "$install_spec"; then
-            if python3 -c "import ${import_name}" >/dev/null 2>&1; then
+            if python_check "$check_code"; then
                 log_message "OK" "$dist_name instalado."
                 return 0
             fi
-            log_message "ADVERTENCIA" "$dist_name se instaló, pero Python no pudo importar $import_name."
+            log_message "ADVERTENCIA" "$dist_name se instaló, pero Python no pudo cargarlo."
         fi
         if [ "$attempt" -lt 3 ]; then
             log_message "INFO" "Reintentando instalación de $install_spec en 5 segundos..."
@@ -396,22 +415,33 @@ install_python_package() {
     return 1
 }
 
-PYTHON_PACKAGES=(
-    "flask:flask:flask"
-    "requests:requests:requests"
-    "python-telegram-bot==20.7:python-telegram-bot:telegram"
-    "pyOpenSSL:pyOpenSSL:OpenSSL"
+PYTHON_REQUIRED_PACKAGES=(
+    "flask|flask|import flask|python3-flask"
+    "requests|requests|import requests|python3-requests"
+    "pyOpenSSL|pyOpenSSL|import OpenSSL|python3-openssl"
 )
+TELEGRAM_PACKAGE="python-telegram-bot==20.7|python-telegram-bot|from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup; from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, ConversationHandler, MessageHandler, filters|"
+
+install_required_python_packages() {
+    local package_entry install_spec dist_name check_code apt_package
+    for package_entry in "${PYTHON_REQUIRED_PACKAGES[@]}"; do
+        IFS='|' read -r install_spec dist_name check_code apt_package <<< "$package_entry"
+        if ! install_python_package "$install_spec" "$dist_name" "$check_code" "$apt_package"; then
+            echo "${COLOR_ERROR}No se pudo instalar $dist_name. Revisa tu conexión o ejecuta: sudo apt-get install ${apt_package:-$dist_name}${COLOR_RESET}"
+            return 1
+        fi
+    done
+}
+
+install_telegram_package() {
+    local install_spec dist_name check_code apt_package
+    IFS='|' read -r install_spec dist_name check_code apt_package <<< "$TELEGRAM_PACKAGE"
+    install_python_package "$install_spec" "$dist_name" "$check_code" "$apt_package"
+}
 
 # Instalando dependencias de Python
 log_message "DEBUG" "Instalando dependencias de Python..."
-for package_entry in "${PYTHON_PACKAGES[@]}"; do
-    IFS=':' read -r install_spec dist_name import_name <<< "$package_entry"
-    if ! install_python_package "$install_spec" "$dist_name" "$import_name"; then
-        echo "${COLOR_ERROR}No se pudo instalar $dist_name. Revisa tu conexión a internet o ejecuta: pip3 install --user ${install_spec}${COLOR_RESET}"
-        exit 1
-    fi
-done
+install_required_python_packages || exit 1
 log_message "OK" "Dependencias de Python instaladas."
 
 # Mostrar banner
@@ -469,14 +499,11 @@ done
 # Instalación de dependencias de Python
 log_message "DEBUG" "Instalando dependencias de Python..."
 echo "${COLOR_INFO}Instalando dependencias de Python...${COLOR_RESET}"
-for package_entry in "${PYTHON_PACKAGES[@]}"; do
-    IFS=':' read -r install_spec dist_name import_name <<< "$package_entry"
-    if ! install_python_package "$install_spec" "$dist_name" "$import_name"; then
-        log_message "ERROR" "Falló la instalación de $dist_name."
-        echo "${COLOR_ERROR} [✗]${COLOR_RESET}"
-        exit 1
-    fi
-done
+if ! install_required_python_packages; then
+    log_message "ERROR" "Falló la instalación de dependencias Python obligatorias."
+    echo "${COLOR_ERROR} [✗]${COLOR_RESET}"
+    exit 1
+fi
 log_message "OK" "Dependencias de Python instaladas."
 echo "${COLOR_OK} [✔] Dependencias de Python instaladas${COLOR_RESET}"
 
@@ -778,7 +805,20 @@ function bridge_menu() {
     if [ "$INTEGRATE_TELEGRAM" = "s" ]; then
         read -p "${COLOR_INFO}[ENTRADA] Ingresa el token del Bot de Telegram: ${COLOR_RESET}" TELEGRAM_TOKEN
         read -p "${COLOR_INFO}[ENTRADA] Ingresa el Chat ID (deja vacío para obtenerlo automáticamente): ${COLOR_RESET}" TELEGRAM_CHAT_ID
-        if [ -z "$TELEGRAM_CHAT_ID" ]; then
+        if ! install_telegram_package; then
+            log_message "ADVERTENCIA" "No se pudo instalar python-telegram-bot. Se puede continuar sin Telegram."
+            read -p "${COLOR_WARN}[ENTRADA] ¿Continuar sin Telegram? (s/n) [predeterminado s]: ${COLOR_RESET}" CONTINUE_WITHOUT_TELEGRAM
+            CONTINUE_WITHOUT_TELEGRAM=${CONTINUE_WITHOUT_TELEGRAM:-s}
+            if [[ "$CONTINUE_WITHOUT_TELEGRAM" =~ ^[sS]$ ]]; then
+                INTEGRATE_TELEGRAM="n"
+                TELEGRAM_TOKEN=""
+                TELEGRAM_CHAT_ID=""
+            else
+                echo "${COLOR_ERROR}No se puede habilitar Telegram sin python-telegram-bot. Reintenta cuando PyPI esté disponible.${COLOR_RESET}"
+                exit 1
+            fi
+        fi
+        if [ "$INTEGRATE_TELEGRAM" = "s" ] && [ -z "$TELEGRAM_CHAT_ID" ]; then
             get_telegram_chat_id "$TELEGRAM_TOKEN"
         fi
     else
@@ -1346,13 +1386,15 @@ fi
 
 # Verificar dependencias de Python
 log_message "INFO" "Verificando dependencias de Python..."
-for package_entry in "${PYTHON_PACKAGES[@]}"; do
-    IFS=':' read -r install_spec dist_name import_name <<< "$package_entry"
-    if ! install_python_package "$install_spec" "$dist_name" "$import_name"; then
-        echo "${COLOR_ERROR}Fallo al instalar $dist_name. Revisa con 'pip3 list'.${COLOR_RESET}"
+install_required_python_packages || exit 1
+if [ "$INTEGRATE_TELEGRAM" = "s" ]; then
+    if ! install_telegram_package; then
+        echo "${COLOR_ERROR}Fallo al instalar python-telegram-bot. Revisa con 'pip3 list' o ejecuta sin Telegram.${COLOR_RESET}"
         exit 1
     fi
-done
+else
+    log_message "INFO" "Telegram deshabilitado; se omite python-telegram-bot."
+fi
 
 # Asegurar PATH para Python
 export PATH="$HOME/.local/bin:$PATH"

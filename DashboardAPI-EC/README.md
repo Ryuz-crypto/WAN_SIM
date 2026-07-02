@@ -14,6 +14,8 @@ Esta fase deja una base instalable y modular:
 - Nginx como punto de entrada.
 - Documentos MTDS y ADR para guiar las siguientes fases.
 
+Nota de integracion con `WANsim2.sh`: esta ReactUI es la base para migrar la experiencia web, pero el dashboard Flask generado por `WANsim2.sh` sigue siendo la interfaz con paridad funcional completa para latencia, jitter, perdida, VLANs, metricas y Telegram. No retires Flask del flujo operativo hasta que ReactUI consuma esos mismos controles.
+
 ## Arranque local
 
 1. Copiar variables:
