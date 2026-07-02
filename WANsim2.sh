@@ -357,20 +357,58 @@ if ! command -v pip3 >/dev/null 2>&1; then
 fi
 log_message "OK" "pip3 encontrado en $(which pip3)."
 
+PIP_TIMEOUT="${PIP_TIMEOUT:-300}"
+PIP_RETRIES="${PIP_RETRIES:-10}"
+PIP_BREAK_SYSTEM_PACKAGES=()
+if pip3 install --help 2>/dev/null | grep -q -- "--break-system-packages"; then
+    PIP_BREAK_SYSTEM_PACKAGES=(--break-system-packages)
+fi
+PIP_COMMON_ARGS=(--user "${PIP_BREAK_SYSTEM_PACKAGES[@]}" --default-timeout="$PIP_TIMEOUT" --retries "$PIP_RETRIES" --prefer-binary --no-warn-script-location)
+
+install_python_package() {
+    local install_spec="$1"
+    local dist_name="$2"
+    local import_name="$3"
+    local attempt
+
+    if python3 -c "import ${import_name}" >/dev/null 2>&1; then
+        log_message "OK" "$dist_name ya está instalado."
+        return 0
+    fi
+
+    for attempt in 1 2 3; do
+        log_message "INFO" "Instalando $install_spec (intento $attempt/3, timeout ${PIP_TIMEOUT}s)..."
+        if pip3 install "${PIP_COMMON_ARGS[@]}" "$install_spec"; then
+            if python3 -c "import ${import_name}" >/dev/null 2>&1; then
+                log_message "OK" "$dist_name instalado."
+                return 0
+            fi
+            log_message "ADVERTENCIA" "$dist_name se instaló, pero Python no pudo importar $import_name."
+        fi
+        if [ "$attempt" -lt 3 ]; then
+            log_message "INFO" "Reintentando instalación de $install_spec en 5 segundos..."
+            sleep 5
+        fi
+    done
+
+    log_message "ERROR" "Falló la instalación de $install_spec tras varios intentos."
+    return 1
+}
+
+PYTHON_PACKAGES=(
+    "flask:flask:flask"
+    "requests:requests:requests"
+    "python-telegram-bot==20.7:python-telegram-bot:telegram"
+    "pyOpenSSL:pyOpenSSL:OpenSSL"
+)
+
 # Instalando dependencias de Python
 log_message "DEBUG" "Instalando dependencias de Python..."
-PYTHON_DEPS=("flask" "requests" "python-telegram-bot" "pyOpenSSL")
-for dep in "${PYTHON_DEPS[@]}"; do
-    if ! pip3 show "$dep" >/dev/null 2>&1; then
-        log_message "INFO" "Instalando $dep..."
-        if ! pip3 install --user --break-system-packages --default-timeout=100 "$dep" --no-warn-script-location; then
-            log_message "ERROR" "Falló la instalación de $dep."
-            echo "${COLOR_ERROR}No se pudo instalar $dep. Revisa con 'pip3 install $dep'.${COLOR_RESET}"
-            exit 1
-        fi
-        log_message "OK" "$dep instalado."
-    else
-        log_message "OK" "$dep ya está instalado."
+for package_entry in "${PYTHON_PACKAGES[@]}"; do
+    IFS=':' read -r install_spec dist_name import_name <<< "$package_entry"
+    if ! install_python_package "$install_spec" "$dist_name" "$import_name"; then
+        echo "${COLOR_ERROR}No se pudo instalar $dist_name. Revisa tu conexión a internet o ejecuta: pip3 install --user ${install_spec}${COLOR_RESET}"
+        exit 1
     fi
 done
 log_message "OK" "Dependencias de Python instaladas."
@@ -414,7 +452,7 @@ for dep in "${DEPENDENCIES[@]}"; do
     echo -n "${COLOR_INFO}Instalando $dep...${COLOR_RESET}"
     if ! command -v "$dep" >/dev/null 2>&1 && ! dpkg -l | grep -q "$dep"; then
         log_message "INFO" "$dep no está instalado. Instalando automáticamente..."
-        if ! sudo apt-get update && sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y "$dep" >/tmp/install_$dep.log 2>&1; then
+        if ! sudo apt-get update || ! sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y "$dep" >/tmp/install_$dep.log 2>&1; then
             log_message "ERROR" "Falló la instalación de $dep. Detalles en /tmp/install_$dep.log."
             echo "${COLOR_ERROR} [✗]${COLOR_RESET}"
             exit 1
@@ -430,11 +468,14 @@ done
 # Instalación de dependencias de Python
 log_message "DEBUG" "Instalando dependencias de Python..."
 echo "${COLOR_INFO}Instalando dependencias de Python...${COLOR_RESET}"
-pip3 install --user --break-system-packages --default-timeout=100 flask requests python-telegram-bot==20.7 pyOpenSSL --no-warn-script-location || {
-    log_message "ERROR" "Falló la instalación de dependencias de Python."
-    echo "${COLOR_ERROR} [✗]${COLOR_RESET}"
-    exit 1
-}
+for package_entry in "${PYTHON_PACKAGES[@]}"; do
+    IFS=':' read -r install_spec dist_name import_name <<< "$package_entry"
+    if ! install_python_package "$install_spec" "$dist_name" "$import_name"; then
+        log_message "ERROR" "Falló la instalación de $dist_name."
+        echo "${COLOR_ERROR} [✗]${COLOR_RESET}"
+        exit 1
+    fi
+done
 log_message "OK" "Dependencias de Python instaladas."
 echo "${COLOR_OK} [✔] Dependencias de Python instaladas${COLOR_RESET}"
 
@@ -1297,21 +1338,18 @@ log_message "INFO" "Liberando puerto y verificando dependencias..."
 free_port
 
 # Configurar PYTHONPATH antes de la verificación
-export PYTHONPATH="$HOME/.local/lib/python3.8/site-packages:/usr/local/lib/python3.8/dist-packages:$PYTHONPATH"
+USER_SITE=$(python3 -m site --user-site 2>/dev/null || true)
+if [ -n "$USER_SITE" ]; then
+    export PYTHONPATH="$USER_SITE:$PYTHONPATH"
+fi
 
 # Verificar dependencias de Python
 log_message "INFO" "Verificando dependencias de Python..."
-for module in flask requests python-telegram-bot pyOpenSSL; do
-    if ! python3 -c "import $module" 2>/dev/null; then
-        log_message "ERROR" "Módulo Python $module no encontrado. Instalando..."
-        if ! pip3 install --user --break-system-packages --default-timeout=100 "$module" --no-warn-script-location; then
-            log_message "ERROR" "No se pudo instalar $module."
-            echo "${COLOR_ERROR}Fallo al instalar $module. Revisa con 'pip3 list'.${COLOR_RESET}"
-            exit 1
-        fi
-        log_message "OK" "$module instalado."
-    else
-        log_message "OK" "$module ya está instalado."
+for package_entry in "${PYTHON_PACKAGES[@]}"; do
+    IFS=':' read -r install_spec dist_name import_name <<< "$package_entry"
+    if ! install_python_package "$install_spec" "$dist_name" "$import_name"; then
+        echo "${COLOR_ERROR}Fallo al instalar $dist_name. Revisa con 'pip3 list'.${COLOR_RESET}"
+        exit 1
     fi
 done
 

@@ -188,6 +188,24 @@ http://<IP_DEL_SERVIDOR>:5000
 
 ---
 
+## 🧭 Dashboard React/FastAPI
+
+La base de la interfaz React solicitada vive en [`DashboardAPI-EC/`](DashboardAPI-EC/README.md). Incluye frontend React + TypeScript + Material UI, backend FastAPI, PostgreSQL/TimescaleDB, Redis, Celery y Nginx para una evolución modular del dashboard.
+
+Arranque local:
+```bash
+cd DashboardAPI-EC
+cp .env.example .env
+docker compose up --build
+```
+
+URLs principales:
+- UI React: `http://localhost:8080`
+- API: `http://localhost:8080/api/v1`
+- Swagger: `http://localhost:8080/api/v1/docs`
+
+---
+
 ## 🤖 Integración con Telegram
 
 Si configuraste Telegram, podrás controlar el simulador mediante un bot:
@@ -252,6 +270,12 @@ sudo fuser -k 5000/tcp
 ```bash
 sudo apt update
 sudo apt install -y <paquete>
+```
+
+### ❌ Error: timeout al instalar Flask desde PyPI
+El instalador de `WANsim2.sh` ahora usa reintentos, `--prefer-binary`, timeout de 300 segundos y `--break-system-packages` solo cuando tu versión de pip lo soporta. Si tu red sigue cortando la descarga, reintenta con:
+```bash
+PIP_TIMEOUT=600 PIP_RETRIES=15 ./WANsim2.sh
 ```
 
 ### ❌ Error: "No se pudo obtener el Chat ID de Telegram"
