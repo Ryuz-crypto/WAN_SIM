@@ -4,24 +4,20 @@
 # -----------------------------------------------
 
 set -e
-
-# Asegurar que se use bash explícitamente
-if [ -z "$BASH_VERSION" ]; then
-    exec bash "$0" "$@"
-fi
-
-# Redirigir salida y errores al log (compatible con bash)
 exec > >(tee -a /tmp/wansim_debug.log) 2>&1
 
 # SECCIÓN 1: Configuración Inicial y Funciones Auxiliares
 # -----------------------------------------------
 # Variables de configuración
-USER_HOME=$(eval echo ~$(whoami))
-LOGFILE="${USER_HOME}/emix_abundix.log"
-CONFIG_FILE="${USER_HOME}/emix_abundix.conf"
-WANSIM_DASHBOARD="${USER_HOME}/wansim_dashboard.py"
-API_TOKENS="${USER_HOME}/api_tokens.json"
+LOGFILE="/home/axis/emix_abundix.log"
+CONFIG_FILE="/home/axis/emix_abundix.conf"
+WANSIM_DASHBOARD="/home/axis/wansim_dashboard.py"
+API_TOKENS="/home/axis/api_tokens.json"
 SERVICE_FILE="/etc/systemd/system/wansim.service"
+PERSIST_SCRIPT="/usr/local/sbin/wansim_l2_persist.sh"
+PERSIST_SERVICE="/etc/systemd/system/wansim-l2-persist.service"
+NETEM_STATE_FILE="/home/axis/wansim_netem_state.json"
+USER_HOME="/home/axis"
 CURRENT_USER=$(whoami)
 DASHBOARD_PORT=5000
 HOST_IP=$(ip addr show | grep 'inet ' | grep -v '127.0.0.1' | awk '{print $2}' | cut -d'/' -f1 | head -n 1)
@@ -37,14 +33,14 @@ COLOR_GREEN=$(tput setaf 2)
 COLOR_CYAN=$(tput setaf 6)
 COLOR_RESET=$(tput sgr0)
 
-# Función para registrar mensajes
+# Asegurar permisos del archivo de log principal
 log_message() {
     local tipo_msg="$1"
     local contenido_msg="$2"
     local marca_tiempo=$(date '+%Y-%m-%d %H:%M:%S')
     local linea=$(caller 0 | awk '{print $1}')
     local mensaje_completo="[$marca_tiempo] [$tipo_msg] Línea $linea: $contenido_msg"
-    echo "$mensaje_completo" >> "/tmp/wansim_debug.log"
+    echo "$mensaje_completo" >> "/tmp/wansim_debug.log"  # Escribir temporalmente en debug log
     case "$tipo_msg" in
         INFO) echo "${COLOR_INFO}[INFO] $contenido_msg${COLOR_RESET}" ;;
         OK) echo "${COLOR_OK}[OK] $contenido_msg${COLOR_RESET}" ;;
@@ -54,7 +50,6 @@ log_message() {
     esac
 }
 
-# Configuración del archivo de log principal
 if [ -f "$LOGFILE" ]; then
     if ! sudo rm -f "$LOGFILE"; then
         log_message "ERROR" "No se pudo eliminar el archivo de log existente $LOGFILE."
@@ -62,26 +57,15 @@ if [ -f "$LOGFILE" ]; then
         exit 1
     fi
 fi
-
-if ! touch "$LOGFILE"; then
+touch "$LOGFILE" || {
     log_message "ERROR" "No se pudo crear el archivo de log $LOGFILE."
-    echo "${COLOR_ERROR}No se pudo crear $LOGFILE. Revisa permisos con 'ls -ld $USER_HOME'.${COLOR_RESET}"
+    echo "${COLOR_ERROR}No se pudo crear $LOGFILE. Revisa permisos con 'ls -ld /home/axis'.${COLOR_RESET}"
     exit 1
-fi
+}
+chmod 640 "$LOGFILE"
+chown "$CURRENT_USER:$CURRENT_USER" "$LOGFILE"
 
-if ! chmod 640 "$LOGFILE"; then
-    log_message "ERROR" "No se pudieron establecer permisos para $LOGFILE."
-    echo "${COLOR_ERROR}No se pudieron establecer permisos para $LOGFILE.${COLOR_RESET}"
-    exit 1
-fi
-
-if ! chown "$CURRENT_USER:$CURRENT_USER" "$LOGFILE"; then
-    log_message "ERROR" "No se pudo cambiar el propietario de $LOGFILE."
-    echo "${COLOR_ERROR}No se pudo cambiar el propietario de $LOGFILE.${COLOR_RESET}"
-    exit 1
-fi
-
-# Redefinir log_message para usar LOGFILE
+# Redefinir log_message para usar LOGFILE ahora que existe
 log_message() {
     local tipo_msg="$1"
     local contenido_msg="$2"
@@ -100,15 +84,45 @@ log_message() {
     esac
 }
 
+# Rutina robusta para deshacer bridges L2 generados por WAN Simulator
+cleanup_bridges() {
+    log_message "INFO" "Restaurando bridges L2 generados por WAN Simulator..."
+    local bridge_list=""
+    bridge_list=$(ip -o link show type bridge 2>/dev/null | awk -F': ' '{print $2}' | cut -d'@' -f1 | grep '^br_wan' || true)
+    if [ -z "$bridge_list" ]; then
+        log_message "DEBUG" "No se encontraron bridges br_wan* existentes."
+        return 0
+    fi
+    while IFS= read -r br; do
+        [ -z "$br" ] && continue
+        log_message "INFO" "Deshaciendo bridge $br..."
+        local members=""
+        members=$(find /sys/class/net/"$br"/brif -maxdepth 1 -mindepth 1 -printf '%f\n' 2>/dev/null || true)
+        while IFS= read -r iface; do
+            [ -z "$iface" ] && continue
+            log_message "INFO" "Liberando interfaz $iface de $br y limpiando qdisc..."
+            sudo tc qdisc del dev "$iface" root >/dev/null 2>&1 || true
+            sudo ip link set "$iface" nomaster >/dev/null 2>&1 || true
+            sudo ip link set "$iface" up >/dev/null 2>&1 || true
+        done <<< "$members"
+        sudo ip link set "$br" down >/dev/null 2>&1 || true
+        sudo ip link delete "$br" type bridge >/dev/null 2>&1 || true
+        if ip link show "$br" >/dev/null 2>&1; then
+            log_message "ADVERTENCIA" "No se pudo eliminar completamente $br. Verifica con 'ip link show type bridge'."
+        else
+            log_message "OK" "Bridge $br eliminado y miembros restaurados."
+        fi
+    done <<< "$bridge_list"
+}
+
 # Función de limpieza
 cleanup() {
+    cleanup_bridges
     log_message "INFO" "Iniciando limpieza de archivos generados..."
     local archivos=("$CONFIG_FILE" "$WANSIM_DASHBOARD" "$API_TOKENS" "$LOGFILE" "/tmp/wansim_debug.log" "/tmp/server.crt" "/tmp/server.key")
     for archivo in "${archivos[@]}"; do
         if [ -f "$archivo" ]; then
-            if ! shred -u "$archivo" 2>/dev/null; then
-                rm -f "$archivo" 2>/dev/null
-            fi
+            shred -u "$archivo" 2>/dev/null || rm -f "$archivo" 2>/dev/null
             [ ! -f "$archivo" ] && log_message "OK" "Eliminado $archivo" || log_message "ERROR" "No se pudo eliminar $archivo"
         fi
     done
@@ -120,11 +134,9 @@ cleanup() {
             log_message "OK" "Eliminado /tmp/wansim_dashboard.log"
         fi
     fi
-    if ! sudo rm -f "$SERVICE_FILE" 2>/dev/null; then
-        log_message "ERROR" "No se pudo eliminar $SERVICE_FILE"
-    else
-        log_message "OK" "Eliminado $SERVICE_FILE"
-    fi
+    sudo systemctl disable --now wansim-l2-persist.service >/dev/null 2>&1 || true
+    sudo rm -f "$PERSIST_SERVICE" "$PERSIST_SCRIPT" "$NETEM_STATE_FILE" 2>/dev/null || true
+    sudo rm -f "$SERVICE_FILE" 2>/dev/null && log_message "OK" "Eliminado $SERVICE_FILE" || log_message "ERROR" "No se pudo eliminar $SERVICE_FILE"
     log_message "OK" "Limpieza completada."
     echo "${COLOR_OK}✔ Todos los archivos generados han sido eliminados${COLOR_RESET}"
 }
@@ -168,20 +180,19 @@ free_port() {
 }
 
 # Intentar detener cualquier proceso en el puerto 5000
-log_message "INFO" "Intentando liberar el puerto 5000..."
+echo "Intentando liberar el puerto 5000..."
 for attempt in {1..20}; do
     pid=$(sudo fuser 5000/tcp 2>/dev/null | awk '{print $1}')
     if [ -n "$pid" ]; then
-        log_message "INFO" "Terminando proceso $pid en puerto 5000..."
+        echo "Terminando proceso $pid en puerto 5000..."
         sudo kill -9 "$pid" 2>/dev/null
         sleep 1
     else
-        log_message "OK" "Puerto 5000 liberado."
+        echo "Puerto 5000 liberado."
         break
     fi
     if [ "$attempt" -eq 20 ]; then
-        log_message "ERROR" "No se pudo liberar el puerto 5000 después de 20 intentos."
-        echo "${COLOR_ERROR}No se pudo liberar el puerto 5000 después de 20 intentos.${COLOR_RESET}"
+        echo "ERROR: No se pudo liberar el puerto 5000 después de 20 intentos."
         echo "Intenta manualmente con 'sudo fuser -k 5000/tcp'."
         exit 1
     fi
@@ -234,7 +245,7 @@ log_message "OK" "Ejecutando como usuario $CURRENT_USER."
 # Configurar permisos de sudo para el usuario actual
 log_message "DEBUG" "Configurando permisos de sudo para $CURRENT_USER..."
 SUDOERS_FILE="/etc/sudoers.d/wansim"
-SUDOERS_CONTENT="$CURRENT_USER ALL=(ALL) NOPASSWD: /usr/bin/apt-get, /usr/sbin/tc, /usr/bin/systemctl stop unattended-upgrades, /usr/bin/systemctl restart wansim.service, /usr/bin/fuser, /usr/bin/kill, /usr/bin/rm, /usr/sbin/dpkg"
+SUDOERS_CONTENT="$CURRENT_USER ALL=(ALL) NOPASSWD: /usr/bin/apt-get, /usr/sbin/tc, /usr/bin/tc, /usr/sbin/ip, /usr/bin/ip, /usr/sbin/iptables, /usr/sbin/iptables-save, /usr/sbin/sysctl, /usr/sbin/dhcpd, /usr/bin/systemctl, /usr/bin/systemctl stop unattended-upgrades, /usr/bin/systemctl restart wansim.service, /usr/bin/fuser, /usr/bin/kill, /usr/bin/rm, /usr/sbin/dpkg, /usr/bin/tee, /usr/bin/mv, /usr/bin/chmod, /usr/bin/chown"
 if ! sudo -n true 2>/dev/null; then
     log_message "INFO" "Configurando permisos de sudo automáticamente..."
     # Intentar configurar sudoers usando una contraseña temporal o existente
@@ -272,16 +283,6 @@ fi
 log_message "OK" "Lista de paquetes actualizada."
 
 # Verificar e instalar dependencias del sistema
-# Pre-configurar respuestas para iptables-persistent para evitar ventanas de confirmación
-log_message "INFO" "Pre-configurando respuestas para iptables-persistent..."
-if command -v debconf-set-selections >/dev/null 2>&1; then
-    echo "iptables-persistent iptables-persistent/autosave_v4 boolean true" | sudo debconf-set-selections 2>/dev/null
-    echo "iptables-persistent iptables-persistent/autosave_v6 boolean true" | sudo debconf-set-selections 2>/dev/null
-    log_message "OK" "Respuestas para iptables-persistent pre-configuradas."
-else
-    log_message "ADVERTENCIA" "debconf-set-selections no disponible. Se intentará configurar manualmente."
-fi
-
 log_message "DEBUG" "Verificando e instalando dependencias..."
 DEPENDENCIES=("python3" "python3-pip" "iproute2" "ifstat" "qrencode" "net-tools" "vlan" "sudo" "lsof" "isc-dhcp-server" "iptables-persistent")
 LOCK_FILES=("/var/lib/dpkg/lock-frontend" "/var/lib/apt/lists/lock" "/var/cache/apt/archives/lock")
@@ -320,28 +321,12 @@ for dep in "${DEPENDENCIES[@]}"; do
             fi
             log_message "OK" "Sistema preparado tras liberar bloqueos."
         fi
-        if ! sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y "$dep"; then
+        if ! sudo apt-get install -y "$dep"; then
             log_message "ERROR" "No se pudo instalar $dep."
             echo "${COLOR_ERROR}No se pudo instalar $dep. Verifica tu conexión a internet o intenta de nuevo.${COLOR_RESET}"
             exit 1
         fi
         log_message "OK" "$dep instalado."
-        # Configurar iptables-persistent automáticamente si es el paquete instalado
-        if [ "$dep" = "iptables-persistent" ]; then
-            log_message "INFO" "Configurando iptables-persistent automáticamente..."
-            sudo mkdir -p /etc/iptables
-            if [ ! -f /etc/iptables/rules.v4 ]; then
-                sudo bash -c "touch /etc/iptables/rules.v4"
-                sudo chmod 644 /etc/iptables/rules.v4
-            fi
-            if [ ! -f /etc/iptables/rules.v6 ]; then
-                sudo bash -c "touch /etc/iptables/rules.v6"
-                sudo chmod 644 /etc/iptables/rules.v6
-            fi
-            sudo bash -c "iptables-save > /etc/iptables/rules.v4" 2>/dev/null || true
-            sudo bash -c "ip6tables-save > /etc/iptables/rules.v6" 2>/dev/null || true
-            log_message "OK" "iptables-persistent configurado automáticamente."
-        fi
     else
         log_message "OK" "$dep ya está instalado."
     fi
@@ -358,90 +343,28 @@ if ! command -v pip3 >/dev/null 2>&1; then
 fi
 log_message "OK" "pip3 encontrado en $(which pip3)."
 
-PIP_TIMEOUT="${PIP_TIMEOUT:-300}"
-PIP_RETRIES="${PIP_RETRIES:-10}"
-PIP_BREAK_SYSTEM_PACKAGES=()
-if pip3 install --help 2>/dev/null | grep -q -- "--break-system-packages"; then
-    PIP_BREAK_SYSTEM_PACKAGES=(--break-system-packages)
-fi
-PIP_COMMON_ARGS=(--user "${PIP_BREAK_SYSTEM_PACKAGES[@]}" --default-timeout="$PIP_TIMEOUT" --retries "$PIP_RETRIES" --prefer-binary --no-cache-dir --no-warn-script-location)
-
-python_check() {
-    local check_code="$1"
-    python3 -c "$check_code" >/dev/null 2>&1
-}
-
-install_python_package() {
-    local install_spec="$1"
-    local dist_name="$2"
-    local check_code="$3"
-    local apt_package="${4:-}"
-    local attempt
-
-    if python_check "$check_code"; then
-        log_message "OK" "$dist_name ya está instalado."
-        return 0
-    fi
-
-    if [ -n "$apt_package" ]; then
-        log_message "INFO" "Instalando $dist_name desde repositorios APT ($apt_package)..."
-        if sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y "$apt_package"; then
-            if python_check "$check_code"; then
-                log_message "OK" "$dist_name instalado desde APT."
-                return 0
-            fi
-            log_message "ADVERTENCIA" "$apt_package se instaló, pero Python no pudo cargar $dist_name."
-        else
-            log_message "ADVERTENCIA" "APT no pudo instalar $apt_package. Se intentará con pip."
-        fi
-    fi
-
-    for attempt in 1 2 3; do
-        log_message "INFO" "Instalando $install_spec (intento $attempt/3, timeout ${PIP_TIMEOUT}s)..."
-        if pip3 install "${PIP_COMMON_ARGS[@]}" "$install_spec"; then
-            if python_check "$check_code"; then
-                log_message "OK" "$dist_name instalado."
-                return 0
-            fi
-            log_message "ADVERTENCIA" "$dist_name se instaló, pero Python no pudo cargarlo."
-        fi
-        if [ "$attempt" -lt 3 ]; then
-            log_message "INFO" "Reintentando instalación de $install_spec en 5 segundos..."
-            sleep 5
-        fi
-    done
-
-    log_message "ERROR" "Falló la instalación de $install_spec tras varios intentos."
-    return 1
-}
-
-PYTHON_REQUIRED_PACKAGES=(
-    "flask|flask|import flask|python3-flask"
-    "requests|requests|import requests|python3-requests"
-    "pyOpenSSL|pyOpenSSL|import OpenSSL|python3-openssl"
-)
-TELEGRAM_PACKAGE="python-telegram-bot==20.7|python-telegram-bot|from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup; from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, ConversationHandler, MessageHandler, filters|"
-
-install_required_python_packages() {
-    local package_entry install_spec dist_name check_code apt_package
-    for package_entry in "${PYTHON_REQUIRED_PACKAGES[@]}"; do
-        IFS='|' read -r install_spec dist_name check_code apt_package <<< "$package_entry"
-        if ! install_python_package "$install_spec" "$dist_name" "$check_code" "$apt_package"; then
-            echo "${COLOR_ERROR}No se pudo instalar $dist_name. Revisa tu conexión o ejecuta: sudo apt-get install ${apt_package:-$dist_name}${COLOR_RESET}"
-            return 1
-        fi
-    done
-}
-
-install_telegram_package() {
-    local install_spec dist_name check_code apt_package
-    IFS='|' read -r install_spec dist_name check_code apt_package <<< "$TELEGRAM_PACKAGE"
-    install_python_package "$install_spec" "$dist_name" "$check_code" "$apt_package"
-}
-
 # Instalando dependencias de Python
 log_message "DEBUG" "Instalando dependencias de Python..."
-install_required_python_packages || exit 1
+PYTHON_DEPS=("flask" "requests" "pyOpenSSL")
+for dep in "${PYTHON_DEPS[@]}"; do
+    if ! pip3 show "$dep" >/dev/null 2>&1; then
+        log_message "INFO" "Instalando $dep..."
+        if ! pip3 install --user "$dep" --no-warn-script-location; then
+            log_message "ERROR" "Falló la instalación de $dep."
+            echo "${COLOR_ERROR}No se pudo instalar $dep. Revisa con 'pip3 install $dep'.${COLOR_RESET}"
+            exit 1
+        fi
+        log_message "OK" "$dep instalado."
+    else
+        log_message "OK" "$dep ya está instalado."
+    fi
+done
+log_message "INFO" "Instalando versión compatible de python-telegram-bot (13.15)..."
+if ! pip3 install --user --force-reinstall "python-telegram-bot==13.15" --no-warn-script-location; then
+    log_message "ERROR" "Falló la instalación de python-telegram-bot==13.15."
+    echo "${COLOR_ERROR}No se pudo instalar python-telegram-bot==13.15.${COLOR_RESET}"
+    exit 1
+fi
 log_message "OK" "Dependencias de Python instaladas."
 
 # Mostrar banner
@@ -450,7 +373,7 @@ clear
 cat << 'EOF'
 ┌═════════════════════════════════════════════════════════════┐
 │                                                             │
-│  Ryuz WAN Simulator - Versión 1.100                         │
+│  Ryuz WAN Simulator - Versión 1.107                         │
 │  Solución Empresarial para Simulación de Redes WAN          │
 │  Créditos: decameru@outlook.com                             │
 │  Ejecutando en Linux                                        │
@@ -470,44 +393,6 @@ if [[ "$limpiar" =~ ^[sS]$ ]]; then
     echo "${COLOR_OK}✔ Limpieza completada. Continuando con la configuración...${COLOR_RESET}"
 fi
 
-
-
-# SECCIÓN 3: Instalación de Dependencias
-# --------------------------------------
-log_message "DEBUG" "Verificando e instalando dependencias..."
-echo "${COLOR_CYAN}┌─────────────────── Instalando Dependencias ────────────────┐${COLOR_RESET}"
-echo "${COLOR_CYAN}│ Instalando paquetes requeridos...                         │${COLOR_RESET}"
-echo "${COLOR_CYAN}└───────────────────────────────────────────────────────────┘${COLOR_RESET}"
-DEPENDENCIES=("python3" "python3-pip" "iproute2" "ifstat" "qrencode" "net-tools" "vlan" "sudo" "lsof" "isc-dhcp-server" "iptables-persistent")
-for dep in "${DEPENDENCIES[@]}"; do
-    echo -n "${COLOR_INFO}Instalando $dep...${COLOR_RESET}"
-    if ! command -v "$dep" >/dev/null 2>&1 && ! dpkg -l | grep -q "$dep"; then
-        log_message "INFO" "$dep no está instalado. Instalando automáticamente..."
-        if ! sudo apt-get update || ! sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y "$dep" >/tmp/install_$dep.log 2>&1; then
-            log_message "ERROR" "Falló la instalación de $dep. Detalles en /tmp/install_$dep.log."
-            echo "${COLOR_ERROR} [✗]${COLOR_RESET}"
-            exit 1
-        fi
-        log_message "OK" "$dep instalado."
-        echo "${COLOR_OK} [✔]${COLOR_RESET}"
-    else
-        log_message "OK" "$dep ya está instalado."
-        echo "${COLOR_OK} [✔]${COLOR_RESET}"
-    fi
-done
-
-# Instalación de dependencias de Python
-log_message "DEBUG" "Instalando dependencias de Python..."
-echo "${COLOR_INFO}Instalando dependencias de Python...${COLOR_RESET}"
-if ! install_required_python_packages; then
-    log_message "ERROR" "Falló la instalación de dependencias Python obligatorias."
-    echo "${COLOR_ERROR} [✗]${COLOR_RESET}"
-    exit 1
-fi
-log_message "OK" "Dependencias de Python instaladas."
-echo "${COLOR_OK} [✔] Dependencias de Python instaladas${COLOR_RESET}"
-
-export PATH="$HOME/.local/bin:$PATH"
 
 # SECCIÓN 4: Configuración Interactiva
 # ------------------------------------
@@ -538,8 +423,8 @@ fi
 if [ "$INTERACTIVE" -eq 1 ]; then
     echo "${COLOR_CYAN}┌─────────────────── Topología de Red ───────────────────────┐${COLOR_RESET}"
     echo "${COLOR_CYAN}│ Selecciona la topología de red:                           │${COLOR_RESET}"
-    echo "${COLOR_CYAN}│  1) NAT único (salida a Internet)                        │${COLOR_RESET}"
-    echo "${COLOR_CYAN}│  2) Puente LAN-to-LAN (peer-to-peer)                     │${COLOR_RESET}"
+    echo "${COLOR_CYAN}│  1) L3 / NAT único (VLANs + DHCP + salida a Internet)     │${COLOR_RESET}"
+    echo "${COLOR_CYAN}│  2) Bridge (intervenir interfaces físicas, 1 a 3)         │${COLOR_RESET}"
     echo "${COLOR_CYAN}└───────────────────────────────────────────────────────────┘${COLOR_RESET}"
     while true; do
         read -p "${COLOR_INFO}[ENTRADA] Opción [1-2, predeterminado 1]: ${COLOR_RESET}" TOPOLOGY
@@ -552,226 +437,118 @@ if [ "$INTERACTIVE" -eq 1 ]; then
     done
     echo ""
 
-    if [ "$TOPOLOGY_MODE" = "bridge" ]; then
-        echo "${COLOR_CYAN}┌─────────────────── Interfaces de Red ─────────────────────┐${COLOR_RESET}"
-        echo "${COLOR_CYAN}│ Interfaces de red disponibles en el sistema local:       │${COLOR_RESET}"
-        DEFAULT_IF=$(ip route | grep default | awk '{print $5}' | head -n 1)
-        VALID_INTERFACES=()
-        while IFS= read -r iface; do
-            if ip link show "$iface" >/dev/null 2>&1; then
-                VALID_INTERFACES+=("$iface")
-                IP_ADDR=$(ip addr show "$iface" | grep 'inet ' | awk '{print $2}' | cut -d'/' -f1)
-                MAC_ADDR=$(ip link show "$iface" | grep link/ether | awk '{print $2}')
-                if [ -n "$IP_ADDR" ]; then
-                    echo "${COLOR_GREEN}  - $iface (IP: $IP_ADDR, MAC: $MAC_ADDR)${COLOR_RESET}"
-                else
-                    echo "${COLOR_GREEN}  - $iface (Sin IP, MAC: $MAC_ADDR)${COLOR_RESET}"
-                fi
-                if [ "$iface" = "$DEFAULT_IF" ]; then
-                    echo "${COLOR_CYAN}    Salida a Internet detectada${COLOR_RESET}"
-                fi
+    echo "${COLOR_CYAN}┌─────────────────── Interfaces de Red ─────────────────────┐${COLOR_RESET}"
+    echo "${COLOR_CYAN}│ Interfaces de red disponibles en el sistema local:       │${COLOR_RESET}"
+    DEFAULT_IF=$(ip route | awk '/default/ {print $5; exit}')
+    VALID_INTERFACES=()
+    while IFS= read -r iface; do
+        if ip link show "$iface" >/dev/null 2>&1; then
+            VALID_INTERFACES+=("$iface")
+            IP_ADDR=$(ip -o -4 addr show "$iface" 2>/dev/null | awk '{print $4}' | cut -d'/' -f1 | head -n 1)
+            MAC_ADDR=$(cat "/sys/class/net/$iface/address" 2>/dev/null || echo "N/A")
+            STATE=$(cat "/sys/class/net/$iface/operstate" 2>/dev/null || echo "unknown")
+            if [ -n "$IP_ADDR" ]; then
+                echo "${COLOR_GREEN}  - $iface (IP: $IP_ADDR, MAC: $MAC_ADDR, Estado: $STATE)${COLOR_RESET}"
+            else
+                echo "${COLOR_GREEN}  - $iface (Sin IP, MAC: $MAC_ADDR, Estado: $STATE)${COLOR_RESET}"
             fi
-        done < <(ip link show | grep '^[0-9]' | awk '{print $2}' | sed 's/://' | grep -v '@')
+            if [ "$iface" = "$DEFAULT_IF" ]; then
+                echo "${COLOR_CYAN}    Salida a Internet detectada${COLOR_RESET}"
+            fi
+        fi
+    done < <(find /sys/class/net -maxdepth 1 -type l -printf '%f\n' | grep -Ev '^(lo|docker.*|br-[a-f0-9]+|veth.*|virbr.*|tun.*|tap.*)$' | sort)
+    echo "${COLOR_CYAN}└───────────────────────────────────────────────────────────┘${COLOR_RESET}"
+
+    if [ "$TOPOLOGY_MODE" = "bridge" ]; then
+        echo "${COLOR_CYAN}┌─────────────────── Modo Bridge L2 ────────────────────────┐${COLOR_RESET}"
+        echo "${COLOR_CYAN}│ Define de 1 a 3 bridges. Cada bridge usa 2 interfaces:    │${COLOR_RESET}"
+        echo "${COLOR_CYAN}│ una de ENTRADA y una de SALIDA.                           │${COLOR_RESET}"
+        echo "${COLOR_CYAN}│ Flask y Telegram controlarán cada puerto físico del par.   │${COLOR_RESET}"
         echo "${COLOR_CYAN}└───────────────────────────────────────────────────────────┘${COLOR_RESET}"
         while true; do
-            read -p "${COLOR_INFO}[ENTRADA] Ingresa la interfaz LAN: ${COLOR_RESET}" LAN_IF
-            if [[ -n "$LAN_IF" && " ${VALID_INTERFACES[*]} " =~ " $LAN_IF " ]]; then
-                log_message "OK" "Interfaz $LAN_IF válida en el sistema local."
-                break
-            else
-                log_message "ERROR" "Interfaz $LAN_IF no encontrada o inválida. Selecciona una interfaz válida."
-            fi
+            read -p "${COLOR_INFO}[ENTRADA] ¿Cuántos bridges L2 deseas crear? [1-3, predeterminado 1]: ${COLOR_RESET}" NUM_BRIDGE_PAIRS
+            NUM_BRIDGE_PAIRS=${NUM_BRIDGE_PAIRS:-1}
+            if [[ "$NUM_BRIDGE_PAIRS" =~ ^[1-3]$ ]]; then break; else log_message "ERROR" "Ingresa un número válido entre 1 y 3."; fi
         done
-        while true; do
-            read -p "${COLOR_INFO}[ENTRADA] Ingresa la interfaz de destino (salida): ${COLOR_RESET}" DEST_IF
-            if [[ -n "$DEST_IF" && " ${VALID_INTERFACES[*]} " =~ " $DEST_IF " && "$DEST_IF" != "$LAN_IF" ]]; then
-                log_message "OK" "Interfaz $DEST_IF válida en el sistema local."
-                break
-            else
-                log_message "ERROR" "Interfaz $DEST_IF no encontrada, inválida o igual a LAN ($LAN_IF)."
-            fi
+        BRIDGE_IN_IFS=(); BRIDGE_OUT_IFS=(); BRIDGE_INTERFACES=()
+        for (( idx=1; idx<=NUM_BRIDGE_PAIRS; idx++ )); do
+            while true; do
+                read -p "${COLOR_INFO}[ENTRADA] Bridge #$idx - interfaz de ENTRADA: ${COLOR_RESET}" in_iface
+                if [[ -n "$in_iface" && " ${VALID_INTERFACES[*]} " =~ " $in_iface " && ! " ${BRIDGE_INTERFACES[*]} " =~ " $in_iface " ]]; then break; fi
+                log_message "ERROR" "Interfaz $in_iface inválida o ya seleccionada."
+            done
+            while true; do
+                read -p "${COLOR_INFO}[ENTRADA] Bridge #$idx - interfaz de SALIDA: ${COLOR_RESET}" out_iface
+                if [[ -n "$out_iface" && " ${VALID_INTERFACES[*]} " =~ " $out_iface " && "$out_iface" != "$in_iface" && ! " ${BRIDGE_INTERFACES[*]} " =~ " $out_iface " ]]; then break; fi
+                log_message "ERROR" "Interfaz $out_iface inválida, duplicada o igual a la entrada."
+            done
+            BRIDGE_IN_IFS+=("$in_iface"); BRIDGE_OUT_IFS+=("$out_iface"); BRIDGE_INTERFACES+=("$in_iface" "$out_iface")
+            in_mac=$(cat "/sys/class/net/$in_iface/address" 2>/dev/null || echo "N/A")
+            out_mac=$(cat "/sys/class/net/$out_iface/address" 2>/dev/null || echo "N/A")
+            log_message "OK" "Bridge #$idx: entrada=$in_iface/$in_mac salida=$out_iface/$out_mac"
         done
-        while true; do
-            read -p "${COLOR_INFO}[ENTRADA] ¿Es la interfaz de destino ($DEST_IF) la interfaz de gestión con salida a Internet? (s/n) [predeterminado n]: ${COLOR_RESET}" IS_MGMT
-            IS_MGMT=${IS_MGMT:-n}
-            if [[ "$IS_MGMT" =~ ^[sSnN]$ ]]; then
-                IS_MGMT=$(echo "$IS_MGMT" | tr '[:upper:]' '[:lower:]')
-                break
-            else
-                log_message "ERROR" "Ingresa 's' o 'n'."
-            fi
-        done
-        while true; do
-            read -p "${COLOR_INFO}[ENTRADA] ¿Aplicar control de tráfico (latencia, jitter, pérdida) en el puente? (s/n) [predeterminado n]: ${COLOR_RESET}" CONFIG_TC
-            CONFIG_TC=${CONFIG_TC:-n}
-            if [[ "$CONFIG_TC" =~ ^[sSnN]$ ]]; then
-                CONFIG_TC=$(echo "$CONFIG_TC" | tr '[:upper:]' '[:lower:]')
-                break
-            else
-                log_message "ERROR" "Ingresa 's' o 'n'."
-            fi
-        done
+        LAN_IF="${BRIDGE_IN_IFS[0]}"; WAN_IF=""; DEST_IF="${BRIDGE_OUT_IFS[0]}"; CONFIG_TC="s"; CONFIG_DHCP="n"
+        NUM_VLANS=0; START_VLAN=0; SEGMENT_PREFIX="192.168"; BASE_OCTET=0
     else
-        echo "${COLOR_CYAN}┌─────────────────── Configuración de VLANs ─────────────────┐${COLOR_RESET}"
+        echo "${COLOR_CYAN}┌─────────────────── Configuración L3 / VLANs ──────────────┐${COLOR_RESET}"
         echo "${COLOR_CYAN}│ En este contexto, cada VLAN representa un enlace simulado │${COLOR_RESET}"
         while true; do
             read -p "${COLOR_INFO}[ENTRADA] ¿Cuántos enlaces (VLANs) simular? [predeterminado 10]: ${COLOR_RESET}" NUM_VLANS
             NUM_VLANS=${NUM_VLANS:-10}
-            if [[ "$NUM_VLANS" =~ ^[1-9][0-9]*$ ]]; then
-                break
-            else
-                log_message "ERROR" "Ingresa un número válido."
-            fi
+            if [[ "$NUM_VLANS" =~ ^[1-9][0-9]*$ ]]; then break; else log_message "ERROR" "Ingresa un número válido."; fi
         done
         while true; do
-            read -p "${COLOR_INFO}[ENTRADA] ¿Deseas definir los IDs de VLANs manualmente? (s/n) [predeterminado n]: ${COLOR_RESET}" define_vlans
-            define_vlans=${define_vlans:-n}
-            if [[ "$define_vlans" =~ ^[sSnN]$ ]]; then
-                define_vlans=$(echo "$define_vlans" | tr '[:upper:]' '[:lower:]')
-                if [[ "$define_vlans" =~ ^[sS]$ ]]; then
-                    while true; do
-                        read -p "${COLOR_INFO}[ENTRADA] Ingresa el ID inicial para las VLANs (1-4094): ${COLOR_RESET}" START_VLAN
-                        if [[ "$START_VLAN" =~ ^[0-9]+$ && "$START_VLAN" -ge 1 && "$START_VLAN" -le 4094 ]]; then
-                            break
-                        else
-                            log_message "ERROR" "ID inválido. Debe estar entre 1 y 4094."
-                        fi
-                    done
-                else
-                    START_VLAN=100
-                    log_message "INFO" "Usando ID de VLAN predeterminado: $START_VLAN"
-                fi
-                break
-            else
-                log_message "ERROR" "Ingresa 's' o 'n'."
-            fi
+            read -p "${COLOR_INFO}[ENTRADA] Ingresa el ID inicial para las VLANs (1-4094): ${COLOR_RESET}" START_VLAN
+            if [[ "$START_VLAN" =~ ^[0-9]+$ && "$START_VLAN" -ge 1 && "$START_VLAN" -le 4094 ]]; then break; else log_message "ERROR" "ID inválido. Debe estar entre 1 y 4094."; fi
         done
         while true; do
             read -p "${COLOR_INFO}[ENTRADA] ¿Configurar DHCP? (s/n) [predeterminado s]: ${COLOR_RESET}" CONFIG_DHCP
             CONFIG_DHCP=${CONFIG_DHCP:-s}
-            if [[ "$CONFIG_DHCP" =~ ^[sSnN]$ ]]; then
-                CONFIG_DHCP=$(echo "$CONFIG_DHCP" | tr '[:upper:]' '[:lower:]')
-                break
-            else
-                log_message "ERROR" "Ingresa 's' o 'n'."
-            fi
+            if [[ "$CONFIG_DHCP" =~ ^[sSnN]$ ]]; then CONFIG_DHCP=$(echo "$CONFIG_DHCP" | tr '[:upper:]' '[:lower:]'); break; else log_message "ERROR" "Ingresa 's' o 'n'."; fi
         done
         if [ "$CONFIG_DHCP" = "s" ]; then
             echo "${COLOR_CYAN}┌─────────────────── Segmento de Red ────────────────────────┐${COLOR_RESET}"
-            echo "${COLOR_CYAN}│ Selecciona el segmento base para las VLANs:               │${COLOR_RESET}"
             echo "${COLOR_CYAN}│  1) 10.254.X.0/24                                        │${COLOR_RESET}"
             echo "${COLOR_CYAN}│  2) 172.16.X.0/24                                        │${COLOR_RESET}"
             echo "${COLOR_CYAN}│  3) 192.168.X.0/24                                       │${COLOR_RESET}"
-            echo "${COLOR_CYAN}│  4) Custom (ingresar manualmente)                         │${COLOR_RESET}"
             echo "${COLOR_CYAN}└───────────────────────────────────────────────────────────┘${COLOR_RESET}"
             while true; do
-                read -p "${COLOR_INFO}[ENTRADA] Opción [1-4, predeterminado 3]: ${COLOR_RESET}" SEGMENT_OPTION
+                read -p "${COLOR_INFO}[ENTRADA] Opción [1-3, predeterminado 3]: ${COLOR_RESET}" SEGMENT_OPTION
                 SEGMENT_OPTION=${SEGMENT_OPTION:-3}
-                case "$SEGMENT_OPTION" in
-                    1) SEGMENT_PREFIX="10.254"; break ;;
-                    2) SEGMENT_PREFIX="172.16"; break ;;
-                    3) SEGMENT_PREFIX="192.168"; break ;;
-                    4)
-                        while true; do
-                            read -p "${COLOR_INFO}[ENTRADA] Ingresa el segmento base (ej: 192.168): ${COLOR_RESET}" custom_segment
-                            if [[ "$custom_segment" =~ ^[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-                                SEGMENT_PREFIX="$custom_segment"
-                                log_message "OK" "Segmento base personalizado configurado: $SEGMENT_PREFIX.X.0/24"
-                                break
-                            else
-                                log_message "ERROR" "Formato inválido. Usa el formato X.X (ej: 192.168)."
-                            fi
-                        done
-                        break ;;
-                    *) log_message "ERROR" "Opción inválida. Ingresa 1, 2, 3 o 4." ;;
-                esac
+                case "$SEGMENT_OPTION" in 1) SEGMENT_PREFIX="10.254"; break ;; 2) SEGMENT_PREFIX="172.16"; break ;; 3) SEGMENT_PREFIX="192.168"; break ;; *) log_message "ERROR" "Opción inválida. Ingresa 1, 2 o 3." ;; esac
             done
-            echo "${COLOR_CYAN}┌─────────────────── Dirección IP ───────────────────────────┐${COLOR_RESET}"
-            echo "${COLOR_CYAN}│ El tercer octeto define la subred de la VLAN en la IP.    │${COLOR_RESET}"
-            echo "${COLOR_CYAN}│ Ejemplo: Para $SEGMENT_PREFIX.X.0/24, un tercer octeto de │${COLOR_RESET}"
-            echo "${COLOR_CYAN}│ 10 genera direcciones como $SEGMENT_PREFIX.10.1 para la   │${COLOR_RESET}"
-            echo "${COLOR_CYAN}│ primera VLAN, etc.                                        │${COLOR_RESET}"
-            echo "${COLOR_CYAN}└───────────────────────────────────────────────────────────┘${COLOR_RESET}"
             while true; do
                 read -p "${COLOR_INFO}[ENTRADA] Ingresa el tercer octeto inicial para las VLANs (1-254) [predeterminado 10]: ${COLOR_RESET}" BASE_OCTET
                 BASE_OCTET=${BASE_OCTET:-10}
-                if [[ "$BASE_OCTET" =~ ^[0-9]+$ && "$BASE_OCTET" -ge 1 && "$BASE_OCTET" -le 254 ]]; then
-                    break
-                else
-                    log_message "ERROR" "Ingresa un número válido entre 1 y 254."
-                fi
+                if [[ "$BASE_OCTET" =~ ^[0-9]+$ && "$BASE_OCTET" -ge 1 && "$BASE_OCTET" -le 254 ]]; then break; else log_message "ERROR" "Ingresa un número válido entre 1 y 254."; fi
             done
+        else
+            SEGMENT_PREFIX="192.168"
+            BASE_OCTET=10
         fi
-        echo "${COLOR_CYAN}┌─────────────────── Interfaces de Red ─────────────────────┐${COLOR_RESET}"
-        echo "${COLOR_CYAN}│ Interfaces de red disponibles en el sistema local:       │${COLOR_RESET}"
-        DEFAULT_IF=$(ip route | grep default | awk '{print $5}' | head -n 1)
-        VALID_INTERFACES=()
-        while IFS= read -r iface; do
-            if ip link show "$iface" >/dev/null 2>&1; then
-                VALID_INTERFACES+=("$iface")
-                IP_ADDR=$(ip addr show "$iface" | grep 'inet ' | awk '{print $2}' | cut -d'/' -f1)
-                MAC_ADDR=$(ip link show "$iface" | grep link/ether | awk '{print $2}')
-                if [ -n "$IP_ADDR" ]; then
-                    echo "${COLOR_GREEN}  - $iface (IP: $IP_ADDR, MAC: $MAC_ADDR)${COLOR_RESET}"
-                else
-                    echo "${COLOR_GREEN}  - $iface (Sin IP, MAC: $MAC_ADDR)${COLOR_RESET}"
-                fi
-                if [ "$iface" = "$DEFAULT_IF" ]; then
-                    echo "${COLOR_CYAN}    Salida a Internet detectada${COLOR_RESET}"
-                fi
-            fi
-        done < <(ip link show | grep '^[0-9]' | awk '{print $2}' | sed 's/://' | grep -v '@')
-        echo "${COLOR_CYAN}└───────────────────────────────────────────────────────────┘${COLOR_RESET}"
         while true; do
             read -p "${COLOR_INFO}[ENTRADA] Ingresa la interfaz WAN: ${COLOR_RESET}" WAN_IF
-            if [[ -n "$WAN_IF" && " ${VALID_INTERFACES[*]} " =~ " $WAN_IF " ]]; then
-                log_message "OK" "Interfaz $WAN_IF válida en el sistema local."
-                break
-            else
-                log_message "ERROR" "Interfaz $WAN_IF no encontrada o inválida. Selecciona una interfaz válida."
-            fi
+            if [[ -n "$WAN_IF" && " ${VALID_INTERFACES[*]} " =~ " $WAN_IF " ]]; then log_message "OK" "Interfaz $WAN_IF válida en el sistema local."; break; else log_message "ERROR" "Interfaz $WAN_IF no encontrada o inválida. Selecciona una interfaz válida."; fi
         done
         while true; do
             read -p "${COLOR_INFO}[ENTRADA] Ingresa la interfaz LAN (para VLANs y DHCP): ${COLOR_RESET}" LAN_IF
-            if [[ -n "$LAN_IF" && " ${VALID_INTERFACES[*]} " =~ " $LAN_IF " && "$LAN_IF" != "$WAN_IF" ]]; then
-                log_message "OK" "Interfaz $LAN_IF válida en el sistema local."
-                break
-            else
-                log_message "ERROR" "Interfaz $LAN_IF no encontrada, inválida o igual a WAN ($WAN_IF)."
-            fi
+            if [[ -n "$LAN_IF" && " ${VALID_INTERFACES[*]} " =~ " $LAN_IF " && "$LAN_IF" != "$WAN_IF" ]]; then log_message "OK" "Interfaz $LAN_IF válida en el sistema local."; break; else log_message "ERROR" "Interfaz $LAN_IF no encontrada, inválida o igual a WAN ($WAN_IF)."; fi
         done
+        BRIDGE_INTERFACES=(); BRIDGE_IN_IFS=(); BRIDGE_OUT_IFS=()
+        NUM_BRIDGE_IFACES=0; NUM_BRIDGE_PAIRS=0; BRIDGE_PAIRS_CSV=""
     fi
+
     echo "${COLOR_CYAN}┌─────────────────── Integración con Telegram ───────────────┐${COLOR_RESET}"
     echo "${COLOR_CYAN}│ Configura la integración con Telegram (opcional):         │${COLOR_RESET}"
     while true; do
         read -p "${COLOR_INFO}[ENTRADA] ¿Integrar con Telegram Bot para actualizaciones de parámetros? (s/n) [predeterminado n]: ${COLOR_RESET}" INTEGRATE_TELEGRAM
         INTEGRATE_TELEGRAM=${INTEGRATE_TELEGRAM:-n}
-        if [[ "$INTEGRATE_TELEGRAM" =~ ^[sSnN]$ ]]; then
-            INTEGRATE_TELEGRAM=$(echo "$INTEGRATE_TELEGRAM" | tr '[:upper:]' '[:lower:]')
-            break
-        else
-            log_message "ERROR" "Ingresa 's' o 'n'."
-        fi
+        if [[ "$INTEGRATE_TELEGRAM" =~ ^[sSnN]$ ]]; then INTEGRATE_TELEGRAM=$(echo "$INTEGRATE_TELEGRAM" | tr '[:upper:]' '[:lower:]'); break; else log_message "ERROR" "Ingresa 's' o 'n'."; fi
     done
     if [ "$INTEGRATE_TELEGRAM" = "s" ]; then
         read -p "${COLOR_INFO}[ENTRADA] Ingresa el token del Bot de Telegram: ${COLOR_RESET}" TELEGRAM_TOKEN
         read -p "${COLOR_INFO}[ENTRADA] Ingresa el Chat ID (deja vacío para obtenerlo automáticamente): ${COLOR_RESET}" TELEGRAM_CHAT_ID
-        if ! install_telegram_package; then
-            log_message "ADVERTENCIA" "No se pudo instalar python-telegram-bot. Se puede continuar sin Telegram."
-            read -p "${COLOR_WARN}[ENTRADA] ¿Continuar sin Telegram? (s/n) [predeterminado s]: ${COLOR_RESET}" CONTINUE_WITHOUT_TELEGRAM
-            CONTINUE_WITHOUT_TELEGRAM=${CONTINUE_WITHOUT_TELEGRAM:-s}
-            if [[ "$CONTINUE_WITHOUT_TELEGRAM" =~ ^[sS]$ ]]; then
-                INTEGRATE_TELEGRAM="n"
-                TELEGRAM_TOKEN=""
-                TELEGRAM_CHAT_ID=""
-            else
-                echo "${COLOR_ERROR}No se puede habilitar Telegram sin python-telegram-bot. Reintenta cuando PyPI esté disponible.${COLOR_RESET}"
-                exit 1
-            fi
-        fi
-        if [ "$INTEGRATE_TELEGRAM" = "s" ] && [ -z "$TELEGRAM_CHAT_ID" ]; then
-            get_telegram_chat_id "$TELEGRAM_TOKEN"
-        fi
+        if [ -z "$TELEGRAM_CHAT_ID" ]; then get_telegram_chat_id "$TELEGRAM_TOKEN"; fi
     else
         TELEGRAM_TOKEN=""
         TELEGRAM_CHAT_ID=""
@@ -779,42 +556,11 @@ if [ "$INTERACTIVE" -eq 1 ]; then
     echo "${COLOR_CYAN}└───────────────────────────────────────────────────────────┘${COLOR_RESET}"
 fi
 
+
 # SECCIÓN 5: Configuración de Red
 # -------------------------------
-# Configurar VLANs, NAT, DHCP o puente según la topología seleccionada
-if [ "$TOPOLOGY_MODE" = "nat" ]; then
-    log_message "INFO" "Configurando VLANs en $LAN_IF..."
 
-    # Verificar que la interfaz LAN_IF exista y esté activa
-    if ! ip link show "$LAN_IF" >/dev/null 2>&1; then
-        log_message "ERROR" "La interfaz $LAN_IF no existe o no está disponible."
-        echo "${COLOR_ERROR}La interfaz $LAN_IF no está disponible. Revisa con 'ip link'.${COLOR_RESET}"
-        exit 1
-    fi
-    if ! ip link show "$LAN_IF" | grep -q "UP"; then
-        log_message "INFO" "La interfaz $LAN_IF no está activa. Intentando activarla..."
-        sudo ip link set "$LAN_IF" up >/dev/null 2>&1
-        sleep 2
-        if ! ip link show "$LAN_IF" | grep -q "UP"; then
-            log_message "ERROR" "No se pudo activar la interfaz $LAN_IF."
-            echo "${COLOR_ERROR}No se pudo activar la interfaz $LAN_IF. Revisa con 'ip link'.${COLOR_RESET}"
-            exit 1
-        fi
-    fi
-
-    # Cargar el módulo 8021q para soporte de VLANs
-    if ! lsmod | grep -q "8021q"; then
-        log_message "INFO" "Cargando módulo 8021q para soporte de VLANs..."
-        sudo modprobe 8021q >/dev/null 2>&1
-        if ! lsmod | grep -q "8021q"; then
-            log_message "ERROR" "No se pudo cargar el módulo 8021q. Soporte de VLANs no disponible."
-            echo "${COLOR_ERROR}Soporte de VLANs no disponible. Instala el módulo 8021q.${COLOR_RESET}"
-            exit 1
-        fi
-        log_message "OK" "Módulo 8021q cargado."
-    fi
-
-   # Función genérica y robusta para restaurar una interfaz
+# Función genérica y robusta para restaurar una interfaz
 reset_interface() {
     local iface="$1"
     local max_attempts=3
@@ -887,7 +633,7 @@ reset_interface() {
             if [ -n "$nat_rules" ] || [ -n "$filter_rules" ]; then
                 if sudo iptables -t nat -F POSTROUTING >/tmp/iptables_error.log 2>&1 && sudo iptables -F >/tmp/iptables_error.log 2>&1; then
                     log_message "OK" "Reglas de iptables limpiadas correctamente."
-                    changes_made=1  # Solo se activa si había reglas que limpiar
+                    changes_made=1
                     iptables_cleared=1
                 else
                     iptables_error=$(cat /tmp/iptables_error.log)
@@ -967,6 +713,38 @@ reset_interface() {
     exit 1
 }
 
+# Configurar VLANs, NAT, DHCP o puente según la topología seleccionada
+if [ "$TOPOLOGY_MODE" = "nat" ]; then
+    log_message "INFO" "Configurando VLANs en $LAN_IF..."
+
+    # Verificar que la interfaz LAN_IF exista y esté activa
+    if ! ip link show "$LAN_IF" >/dev/null 2>&1; then
+        log_message "ERROR" "La interfaz $LAN_IF no existe o no está disponible."
+        echo "${COLOR_ERROR}La interfaz $LAN_IF no está disponible. Revisa con 'ip link'.${COLOR_RESET}"
+        exit 1
+    fi
+    if ! ip link show "$LAN_IF" | grep -q "UP"; then
+        log_message "INFO" "La interfaz $LAN_IF no está activa. Intentando activarla..."
+        sudo ip link set "$LAN_IF" up >/dev/null 2>&1
+        sleep 2
+        if ! ip link show "$LAN_IF" | grep -q "UP"; then
+            log_message "ERROR" "No se pudo activar la interfaz $LAN_IF."
+            echo "${COLOR_ERROR}No se pudo activar la interfaz $LAN_IF. Revisa con 'ip link'.${COLOR_RESET}"
+            exit 1
+        fi
+    fi
+
+    # Cargar el módulo 8021q para soporte de VLANs
+    if ! lsmod | grep -q "8021q"; then
+        log_message "INFO" "Cargando módulo 8021q para soporte de VLANs..."
+        sudo modprobe 8021q >/dev/null 2>&1
+        if ! lsmod | grep -q "8021q"; then
+            log_message "ERROR" "No se pudo cargar el módulo 8021q. Soporte de VLANs no disponible."
+            echo "${COLOR_ERROR}Soporte de VLANs no disponible. Instala el módulo 8021q.${COLOR_RESET}"
+            exit 1
+        fi
+        log_message "OK" "Módulo 8021q cargado."
+    fi
 
     # Restaurar la interfaz LAN_IF
     reset_interface "$LAN_IF"
@@ -1234,9 +1012,9 @@ EOF
 
         # Guardar reglas en un archivo temporal y moverlo
         temp_rules="/tmp/iptables_rules.v4"
-        sudo timeout 30 iptables-save > "$temp_rules" 2>/tmp/iptables_error.log
+        sudo iptables-save > "$temp_rules" 2>/tmp/iptables_error.log
         if [ $? -eq 0 ]; then
-            sudo timeout 30 mv "$temp_rules" /etc/iptables/rules.v4 >/tmp/iptables_error.log 2>&1
+            sudo mv "$temp_rules" /etc/iptables/rules.v4 >/tmp/iptables_error.log 2>&1
             if [ $? -eq 0 ]; then
                 sudo chmod 644 /etc/iptables/rules.v4 >/dev/null 2>&1
                 log_message "OK" "Reglas de NAT guardadas correctamente en /etc/iptables/rules.v4."
@@ -1262,29 +1040,85 @@ EOF
         exit 1
     fi
 elif [ "$TOPOLOGY_MODE" = "bridge" ]; then
-    log_message "INFO" "Configurando puente entre $LAN_IF y $DEST_IF..."
-    # Restaurar interfaces antes de configurar el puente
-    reset_interface "$LAN_IF"
-    reset_interface "$DEST_IF"
-    sudo ip link add name br0 type bridge >/dev/null 2>&1
-    sudo ip link set "$LAN_IF" master br0 >/dev/null 2>&1
-    sudo ip link set "$DEST_IF" master br0 >/dev/null 2>&1
-    sudo ip link set br0 up >/dev/null 2>&1
-    sudo ip link set "$LAN_IF" up >/dev/null 2>&1
-    sudo ip link set "$DEST_IF" up >/dev/null 2>&1
-    if ip link show br0 >/dev/null 2>&1; then
-        log_message "OK" "Puente br0 creado y configurado."
-        PYTHON_VLAN_LIST="['br0']"
-        if [ "$CONFIG_TC" = "s" ]; then
-            sudo tc qdisc add dev "$LAN_IF" root tbf rate 10mbit burst 32kbit latency 50ms >/dev/null 2>&1
-            log_message "OK" "Control de tráfico aplicado en $LAN_IF (10Mbit/s)."
-        fi
-    else
-        log_message "ERROR" "No se pudo crear el puente br0."
-        echo "${COLOR_ERROR}No se pudo crear el puente br0. Revisa los logs in $LOGFILE.${COLOR_RESET}"
-        exit 1
+    log_message "INFO" "Configurando modo Bridge L2 por pares entrada/salida..."
+    if [ ${#BRIDGE_IN_IFS[@]} -eq 0 ] && [ -n "${BRIDGE_PAIRS_CSV:-}" ]; then
+        BRIDGE_IN_IFS=(); BRIDGE_OUT_IFS=(); BRIDGE_INTERFACES=()
+        IFS=';' read -r -a __pairs <<< "$BRIDGE_PAIRS_CSV"
+        for pair in "${__pairs[@]}"; do
+            [ -z "$pair" ] && continue
+            IFS=':' read -r __br __in __out <<< "$pair"
+            [ -n "$__in" ] && [ -n "$__out" ] || continue
+            BRIDGE_IN_IFS+=("$__in"); BRIDGE_OUT_IFS+=("$__out"); BRIDGE_INTERFACES+=("$__in" "$__out")
+        done
+        NUM_BRIDGE_PAIRS=${#BRIDGE_IN_IFS[@]}
     fi
+    if [ ${#BRIDGE_IN_IFS[@]} -lt 1 ] || [ ${#BRIDGE_IN_IFS[@]} -gt 3 ]; then
+        log_message "ERROR" "Modo Bridge requiere entre 1 y 3 pares entrada/salida."
+        echo "${COLOR_ERROR}Modo Bridge requiere entre 1 y 3 pares entrada/salida válidos.${COLOR_RESET}"; exit 1
+    fi
+    cleanup_bridges
+    VALID_BRIDGE_INTERFACES=(); PYTHON_VLAN_LIST="[]"; PYTHON_INTERFACE_META="{}"; BRIDGE_PAIRS_CSV=""
+    META_TSV="/tmp/wansim_bridge_meta.tsv"
+    : > "$META_TSV"
+    for idx in "${!BRIDGE_IN_IFS[@]}"; do
+        bridge_num=$((idx + 1)); br_name="br_wan${bridge_num}"; in_iface="${BRIDGE_IN_IFS[$idx]}"; out_iface="${BRIDGE_OUT_IFS[$idx]}"
+        for iface in "$in_iface" "$out_iface"; do
+            if ! ip link show "$iface" >/dev/null 2>&1; then log_message "ERROR" "La interfaz $iface no existe."; echo "${COLOR_ERROR}La interfaz $iface no está disponible.${COLOR_RESET}"; exit 1; fi
+            sudo tc qdisc del dev "$iface" root >/dev/null 2>&1 || true
+            sudo ip link set "$iface" nomaster >/dev/null 2>&1 || true
+            sudo ip link set "$iface" up >/dev/null 2>&1 || true
+        done
+        log_message "INFO" "Creando $br_name con entrada=$in_iface y salida=$out_iface..."
+        sudo ip link add name "$br_name" type bridge >/tmp/bridge_error.log 2>&1 || { bridge_error=$(cat /tmp/bridge_error.log); log_message "ERROR" "No se pudo crear $br_name: $bridge_error"; exit 1; }
+        sudo ip link set "$in_iface" master "$br_name" >/dev/null 2>&1
+        sudo ip link set "$out_iface" master "$br_name" >/dev/null 2>&1
+        sudo ip link set "$br_name" up >/dev/null 2>&1; sudo ip link set "$in_iface" up >/dev/null 2>&1; sudo ip link set "$out_iface" up >/dev/null 2>&1
+        for role_idx in 0 1; do
+            if [ "$role_idx" -eq 0 ]; then iface="$in_iface"; role="entrada"; peer="$out_iface"; else iface="$out_iface"; role="salida"; peer="$in_iface"; fi
+            VALID_BRIDGE_INTERFACES+=("$iface")
+            label="Bridge ${bridge_num} - ${role} (${iface})"
+            mac=$(cat "/sys/class/net/$iface/address" 2>/dev/null || echo "N/A")
+            printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$iface" "$label" "$br_name" "$role" "$peer" "$mac" >> "$META_TSV"
+            log_message "OK" "$label / peer=$peer / MAC=$mac"
+        done
+        [ -n "$BRIDGE_PAIRS_CSV" ] && BRIDGE_PAIRS_CSV+=";"; BRIDGE_PAIRS_CSV+="$br_name:$in_iface:$out_iface"
+    done
+    BRIDGE_INTERFACES=("${VALID_BRIDGE_INTERFACES[@]}"); BRIDGE_INTERFACES_CSV=$(IFS=,; echo "${BRIDGE_INTERFACES[*]}")
+    export BRIDGE_INTERFACES_CSV META_TSV
+    PYTHON_VLAN_LIST=$(python3 - <<'PYJSON'
+import json, os
+items=[x for x in os.environ.get('BRIDGE_INTERFACES_CSV','').split(',') if x]
+print(json.dumps(items, ensure_ascii=False))
+PYJSON
+)
+    PYTHON_INTERFACE_META=$(python3 - <<'PYJSON'
+import json, os
+meta={}
+path=os.environ.get('META_TSV','')
+try:
+    with open(path, 'r', encoding='utf-8') as f:
+        for line in f:
+            line=line.rstrip('\n')
+            if not line:
+                continue
+            parts=line.split('\t')
+            if len(parts) != 6:
+                continue
+            iface,label,bridge,role,peer,mac=parts
+            meta[iface]={"label":label,"bridge":bridge,"role":role,"peer":peer,"mac":mac}
+except FileNotFoundError:
+    pass
+print(json.dumps(meta, ensure_ascii=False))
+PYJSON
+)
+    python3 - <<'PYVALID' "$PYTHON_VLAN_LIST" "$PYTHON_INTERFACE_META" || { log_message "ERROR" "No se pudo generar JSON válido para Flask Bridge."; exit 1; }
+import json, sys
+json.loads(sys.argv[1]); json.loads(sys.argv[2])
+PYVALID
+    NUM_BRIDGE_IFACES=${#BRIDGE_INTERFACES[@]}; CONFIG_TC="s"
+    log_message "OK" "Modo Bridge L2 configurado. Pares: $BRIDGE_PAIRS_CSV"
 fi
+PYTHON_INTERFACE_META=${PYTHON_INTERFACE_META:-{}}
 
 # Establecer bandera de Telegram habilitado
 if [ -n "$TELEGRAM_TOKEN" ]; then
@@ -1315,11 +1149,160 @@ LAN_IF=${LAN_IF:-}
 DEST_IF=${DEST_IF:-}
 CONFIG_TC=${CONFIG_TC:-n}
 IS_MGMT=${IS_MGMT:-n}
+NUM_BRIDGE_IFACES=${NUM_BRIDGE_IFACES:-0}
+NUM_BRIDGE_PAIRS=${NUM_BRIDGE_PAIRS:-0}
+BRIDGE_INTERFACES_CSV=${BRIDGE_INTERFACES_CSV:-}
+BRIDGE_PAIRS_CSV=${BRIDGE_PAIRS_CSV:-}
 EOF
     chmod 640 "$CONFIG_FILE"
     chown "$CURRENT_USER:$CURRENT_USER" "$CONFIG_FILE"
     log_message "OK" "Configuración guardada en $CONFIG_FILE."
 fi
+
+
+# SECCIÓN 5.1: Persistencia de Bridges L2 y estado Netem
+# ------------------------------------------------------
+configure_l2_persistence() {
+    if [ "${TOPOLOGY_MODE:-}" != "bridge" ]; then
+        log_message "INFO" "Persistencia L2 no aplica para topología ${TOPOLOGY_MODE:-nat}."
+        return 0
+    fi
+    if [ -z "${BRIDGE_PAIRS_CSV:-}" ]; then
+        log_message "ADVERTENCIA" "No hay BRIDGE_PAIRS_CSV; no se configurará persistencia L2."
+        return 0
+    fi
+
+    log_message "INFO" "Configurando persistencia systemd para bridges L2, enlaces físicos y estado tc/netem..."
+
+    sudo mkdir -p "$(dirname "$PERSIST_SCRIPT")" >/dev/null 2>&1 || true
+    if [ ! -f "$NETEM_STATE_FILE" ]; then
+        echo '{}' | sudo tee "$NETEM_STATE_FILE" >/dev/null
+        sudo chmod 664 "$NETEM_STATE_FILE" >/dev/null 2>&1 || true
+        sudo chown "$CURRENT_USER:$CURRENT_USER" "$NETEM_STATE_FILE" >/dev/null 2>&1 || true
+    fi
+
+    sudo tee "$PERSIST_SCRIPT" >/dev/null <<'PERSIST_EOF'
+#!/bin/bash
+set -euo pipefail
+
+BRIDGE_PAIRS_CSV="__BRIDGE_PAIRS_CSV__"
+NETEM_STATE_FILE="__NETEM_STATE_FILE__"
+LOG_FILE="/tmp/wansim_l2_persist.log"
+
+echo "[$(date '+%F %T')] Iniciando persistencia L2 WAN Simulator" >> "$LOG_FILE"
+
+sleep 8
+
+# Deshacer bridges WAN Simulator previos sin tocar bridges ajenos.
+for br in $(ip -o link show type bridge 2>/dev/null | awk -F': ' '{print $2}' | cut -d'@' -f1 | grep '^br_wan' || true); do
+    echo "[$(date '+%F %T')] Eliminando bridge previo $br" >> "$LOG_FILE"
+    for port in $(bridge link 2>/dev/null | awk -v br="$br" '$0 ~ "master "br {print $2}' | sed 's/://'); do
+        ip link set "$port" nomaster 2>/dev/null || true
+    done
+    ip link set "$br" down 2>/dev/null || true
+    ip link delete "$br" type bridge 2>/dev/null || true
+done
+
+IFS=';' read -r -a PAIRS <<< "$BRIDGE_PAIRS_CSV"
+for pair in "${PAIRS[@]}"; do
+    [ -z "$pair" ] && continue
+    IFS=':' read -r br in_if out_if <<< "$pair"
+    [ -n "${br:-}" ] && [ -n "${in_if:-}" ] && [ -n "${out_if:-}" ] || continue
+
+    echo "[$(date '+%F %T')] Recreando $br entrada=$in_if salida=$out_if" >> "$LOG_FILE"
+
+    for iface in "$in_if" "$out_if"; do
+        if ip link show "$iface" >/dev/null 2>&1; then
+            tc qdisc del dev "$iface" root 2>/dev/null || true
+            ip link set "$iface" nomaster 2>/dev/null || true
+            ip link set "$iface" up 2>/dev/null || true
+        else
+            echo "[$(date '+%F %T')] WARN: interfaz $iface no existe" >> "$LOG_FILE"
+        fi
+    done
+
+    ip link add name "$br" type bridge 2>/dev/null || true
+    ip link set "$in_if" master "$br" 2>/dev/null || true
+    ip link set "$out_if" master "$br" 2>/dev/null || true
+    ip link set "$br" up 2>/dev/null || true
+    ip link set "$in_if" up 2>/dev/null || true
+    ip link set "$out_if" up 2>/dev/null || true
+done
+
+# Reaplicar el último estado tc/netem guardado por Flask o Telegram.
+if [ -s "$NETEM_STATE_FILE" ]; then
+    python3 - "$NETEM_STATE_FILE" <<'PY' | while IFS= read -r cmd; do
+import json, re, sys
+path=sys.argv[1]
+try:
+    data=json.load(open(path, 'r', encoding='utf-8'))
+except Exception:
+    data={}
+
+def num(v):
+    try:
+        f=float(v)
+    except Exception:
+        f=0.0
+    if f.is_integer():
+        return str(int(f))
+    return (f'{f:.3f}').rstrip('0').rstrip('.')
+
+for iface, st in data.items():
+    if not re.match(r'^[A-Za-z0-9_.:@-]+$', iface or ''):
+        continue
+    d=float(st.get('delay',0) or 0)
+    j=float(st.get('jitter',0) or 0)
+    l=float(st.get('loss',0) or 0)
+    if d == 0 and j == 0 and l == 0:
+        print(f'tc qdisc del dev {iface} root 2>/dev/null || true')
+        continue
+    parts=[]
+    if d > 0 or j > 0:
+        parts.append(f'delay {num(d)}ms')
+        if j > 0:
+            parts.append(f'{num(j)}ms')
+    if l > 0:
+        parts.append(f'loss {num(l)}%')
+    print(f'tc qdisc replace dev {iface} root netem ' + ' '.join(parts))
+PY
+        echo "[$(date '+%F %T')] Ejecutando: $cmd" >> "$LOG_FILE"
+        eval "$cmd" >> "$LOG_FILE" 2>&1 || true
+    done
+fi
+
+echo "[$(date '+%F %T')] Persistencia L2 completada" >> "$LOG_FILE"
+exit 0
+PERSIST_EOF
+
+    sudo sed -i "s|__BRIDGE_PAIRS_CSV__|$BRIDGE_PAIRS_CSV|g" "$PERSIST_SCRIPT"
+    sudo sed -i "s|__NETEM_STATE_FILE__|$NETEM_STATE_FILE|g" "$PERSIST_SCRIPT"
+    sudo chmod 755 "$PERSIST_SCRIPT"
+
+    sudo tee "$PERSIST_SERVICE" >/dev/null <<EOF
+[Unit]
+Description=Ryuz WAN Simulator L2 Bridge Persistence
+After=network-online.target
+Wants=network-online.target
+Before=wansim.service
+
+[Service]
+Type=oneshot
+ExecStart=$PERSIST_SCRIPT
+RemainAfterExit=yes
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable wansim-l2-persist.service >/dev/null 2>&1
+    sudo systemctl restart wansim-l2-persist.service
+    log_message "OK" "Persistencia L2 configurada. Servicio: wansim-l2-persist.service. Estado netem: $NETEM_STATE_FILE"
+}
+
+configure_l2_persistence
 
 
 # SECCIÓN 6.1A: Liberación de Puerto y Verificación de Dependencias
@@ -1330,22 +1313,23 @@ log_message "INFO" "Liberando puerto y verificando dependencias..."
 free_port
 
 # Configurar PYTHONPATH antes de la verificación
-USER_SITE=$(python3 -m site --user-site 2>/dev/null || true)
-if [ -n "$USER_SITE" ]; then
-    export PYTHONPATH="$USER_SITE:$PYTHONPATH"
-fi
+export PYTHONPATH="$HOME/.local/lib/python3.8/site-packages:/usr/local/lib/python3.8/dist-packages:$PYTHONPATH"
 
 # Verificar dependencias de Python
 log_message "INFO" "Verificando dependencias de Python..."
-install_required_python_packages || exit 1
-if [ "$INTEGRATE_TELEGRAM" = "s" ]; then
-    if ! install_telegram_package; then
-        echo "${COLOR_ERROR}Fallo al instalar python-telegram-bot. Revisa con 'pip3 list' o ejecuta sin Telegram.${COLOR_RESET}"
-        exit 1
+for module in flask requests OpenSSL telegram; do
+    if ! python3 -c "import $module" 2>/dev/null; then
+        log_message "ERROR" "Módulo Python $module no encontrado. Instalando dependencias compatibles..."
+        if ! pip3 install --user flask requests pyOpenSSL "python-telegram-bot==13.15" --no-warn-script-location; then
+            log_message "ERROR" "No se pudieron instalar dependencias Python."
+            echo "${COLOR_ERROR}Fallo al instalar dependencias Python. Revisa con 'pip3 list'.${COLOR_RESET}"
+            exit 1
+        fi
+        log_message "OK" "$module instalado."
+    else
+        log_message "OK" "$module ya está instalado."
     fi
-else
-    log_message "INFO" "Telegram deshabilitado; se omite python-telegram-bot."
-fi
+done
 
 # Asegurar PATH para Python
 export PATH="$HOME/.local/bin:$PATH"
@@ -1377,6 +1361,7 @@ log_message "OK" "Archivo de log configurado."
 # SECCIÓN 6.1C: Generación del Script Python
 # -----------------------------------------
 log_message "INFO" "Generando script Python para el Dashboard Flask..."
+
 # Generar archivo wansim_dashboard.py
 log_message "DEBUG" "Generando $WANSIM_DASHBOARD..."
 if [ -f "$WANSIM_DASHBOARD" ]; then
@@ -1392,801 +1377,218 @@ fi
 # Crear el archivo Python con el dashboard Flask
 cat > "$WANSIM_DASHBOARD" <<'EOF'
 #!/usr/bin/env python3
-import os
-import re
-import json
-import time
-import logging
-import subprocess
-import threading
-import sys
-from flask import Flask, request, render_template_string
-# Configurar logging básico
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%%(asctime)s - %%(levelname)s - %%(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
-logger = logging.getLogger(__name__)
-logger.debug("Iniciando wansim_dashboard.py")
-
-# Importar módulos de Telegram (compatibilidad con v20+)
+import os, re, json, logging, subprocess, threading, sys
+from flask import Flask, request, render_template_string, redirect, url_for, flash
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
+logger=logging.getLogger(__name__)
 try:
     from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-    from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, ConversationHandler, MessageHandler, filters
-    TELEGRAM_IMPORTED = True
+    from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, ConversationHandler, MessageHandler, Filters
 except ImportError as e:
-    logger.error(f"Error importando módulos de Telegram: {e}")
-    TELEGRAM_IMPORTED = False
-
-app = Flask(__name__)
-app.config['PORT'] = __PYTHON_DASHBOARD_PORT__
-
-def run_command(command):
-    logger.debug(f"Ejecutando comando: {command}")
+    logger.error(f"Telegram no disponible: {e}"); Updater=None
+app=Flask(__name__)
+app.secret_key=os.environ.get('WANSIM_SECRET_KEY','ryuz-wansim-local-secret')
+app.config['PORT']=int(__DASHBOARD_PORT__)
+NETEM_STATE_FILE='__NETEM_STATE_FILE__'
+def load_json_literal(raw, fallback):
     try:
-        result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=10)
-        logger.debug(f"Resultado: returncode={result.returncode}, stdout={result.stdout}, stderr={result.stderr}")
-        return result.returncode == 0, result.stdout or result.stderr
-    except subprocess.TimeoutExpired:
-        logger.error(f"Timeout ejecutando comando: {command}")
-        return False, "Comando excedió el tiempo límite"
+        return json.loads(raw)
     except Exception as e:
-        logger.error(f"Error ejecutando comando {command}: {e}")
-        return False, str(e)
-
-def parse_qdisc(output):
-    logger.debug(f"Parseando qdisc output: {output}")
-    delay = jitter = loss = 0
+        logger.error(f"JSON inválido inyectado en dashboard: {e}. Valor recibido: {raw[:200]}")
+        return fallback
+CONTROL_INTERFACES=load_json_literal(__PYTHON_VLAN_LIST_LITERAL__, [])
+VLAN_INTERFACES=CONTROL_INTERFACES
+INTERFACE_META=load_json_literal(__PYTHON_INTERFACE_META_LITERAL__, {})
+TELEGRAM_TOKEN=__TELEGRAM_TOKEN_LITERAL__
+TELEGRAM_CHAT_ID=__TELEGRAM_CHAT_ID_LITERAL__
+TELEGRAM_ENABLED=bool(int(__TELEGRAM_ENABLED__))
+def iface_ok(i):
+    if not re.match(r'^[A-Za-z0-9_.:@-]+$', i or ''): raise ValueError(f'Interfaz inválida: {i}')
+    return i
+def run(cmd):
     try:
-        delay_jitter_match = re.search(r'delay\s+(\d+\.?\d*)ms\s*(\d+\.?\d*)ms', output, re.IGNORECASE)
-        if delay_jitter_match:
-            delay = float(delay_jitter_match.group(1))
-            jitter = float(delay_jitter_match.group(2))
-        elif re.search(r'delay\s+(\d+\.?\d*)ms', output, re.IGNORECASE):
-            delay = float(re.search(r'delay\s+(\d+\.?\d*)ms', output, re.IGNORECASE).group(1))
-        loss_match = re.search(r'loss\s+(\d+\.?\d*)%', output, re.IGNORECASE)
-        if loss_match:
-            loss = float(loss_match.group(1))
-    except Exception as e:
-        logger.error(f"Error parseando qdisc: {e}")
-    return {"delay": delay, "jitter": jitter, "loss": loss}
-
-def get_traffic_stats(vlan):
-    logger.debug(f"Obteniendo estadísticas de tráfico para VLAN: {vlan}")
+        r=subprocess.run(cmd,shell=True,capture_output=True,text=True,timeout=10)
+        return r.returncode==0,(r.stdout or r.stderr or '')
+    except Exception as e: return False,str(e)
+def parse_qdisc(out):
+    d=j=l=0.0
+    m=re.search(r'delay\s+(\d+\.?\d*)ms\s*(\d+\.?\d*)ms',out,re.I)
+    if m: d=float(m.group(1)); j=float(m.group(2))
+    else:
+        m=re.search(r'delay\s+(\d+\.?\d*)ms',out,re.I)
+        if m: d=float(m.group(1))
+    m=re.search(r'loss\s+(\d+\.?\d*)%',out,re.I)
+    if m: l=float(m.group(1))
+    return {'delay':d,'jitter':j,'loss':l}
+def traffic(i):
     try:
-        result = subprocess.run(f"ifstat -i {vlan} 0.1 1", shell=True, capture_output=True, text=True, timeout=5)
-        lines = result.stdout.splitlines()
-        logger.debug(f"ifstat output: {lines}")
-        if len(lines) >= 2:
-            stats = lines[-1].split()
-            kbps_in = float(stats[0]) if stats[0] and stats[0].replace('.', '').isdigit() else 0.0
-            kbps_out = float(stats[1]) if stats[1] and stats[1].replace('.', '').isdigit() else 0.0
-            return {
-                "kbps_in": kbps_in, "kbps_out": kbps_out,
-                "mbps_in": kbps_in / 1000, "mbps_out": kbps_out / 1000,
-                "kb_in": kbps_in / 8, "kb_out": kbps_out / 8,
-                "mb_in": (kbps_in / 8) / 1000, "mb_out": (kbps_out / 8) / 1000
-            }
+        i=iface_ok(i); r=subprocess.run(f'ifstat -i {i} 0.1 1',shell=True,capture_output=True,text=True,timeout=5)
+        lines=[x for x in r.stdout.splitlines() if x.strip()]
+        vals=lines[-1].split() if len(lines)>=2 else []
+        kin=float(vals[0]) if len(vals)>1 and vals[0].replace('.','',1).isdigit() else 0.0
+        kout=float(vals[1]) if len(vals)>1 and vals[1].replace('.','',1).isdigit() else 0.0
+    except Exception: kin=kout=0.0
+    return {'kbps_in':kin,'kbps_out':kout,'mbps_in':kin/1000,'mbps_out':kout/1000,'kb_in':kin/8,'kb_out':kout/8,'mb_in':kin/8000,'mb_out':kout/8000}
+def collect():
+    s={}
+    for i in CONTROL_INTERFACES:
+        ok,out=run(f'tc qdisc show dev {iface_ok(i)}'); s[i]=parse_qdisc(out) if ok else {'delay':0,'jitter':0,'loss':0}
+        s[i].update(traffic(i)); meta=INTERFACE_META.get(i,{}) if isinstance(INTERFACE_META,dict) else {}
+        s[i].update({'label':meta.get('label',i),'bridge':meta.get('bridge',''),'role':meta.get('role',''),'peer':meta.get('peer',''),'mac':meta.get('mac','')})
+    return s
+def to_number(value, name, min_value=0.0, max_value=None):
+    try:
+        text=str(value).strip().replace(',', '.')
+        number=float(text)
+    except Exception:
+        raise ValueError(f'{name} debe ser numérico')
+    if number < min_value:
+        raise ValueError(f'{name} debe ser mayor o igual a {min_value}')
+    if max_value is not None and number > max_value:
+        raise ValueError(f'{name} debe ser menor o igual a {max_value}')
+    return number
+
+def tc_num(value):
+    value=float(value)
+    if value.is_integer():
+        return str(int(value))
+    return (f'{value:.3f}').rstrip('0').rstrip('.')
+
+def load_netem_state():
+    try:
+        with open(NETEM_STATE_FILE, 'r', encoding='utf-8') as f:
+            data=json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+def save_netem_state(iface, delay, jitter, loss):
+    try:
+        data=load_netem_state()
+        data[iface]={'delay':float(delay),'jitter':float(jitter),'loss':float(loss)}
+        tmp=NETEM_STATE_FILE + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, NETEM_STATE_FILE)
+        return True
     except Exception as e:
-        logger.error(f"Error obteniendo estadísticas de tráfico para {vlan}: {e}")
-    return {"kbps_in": 0, "kbps_out": 0, "mbps_in": 0, "mbps_out": 0, "kb_in": 0, "kb_out": 0, "mb_in": 0, "mb_out": 0}
+        logger.error(f'No se pudo guardar estado netem para {iface}: {e}')
+        return False
 
-VLAN_INTERFACES = __PYTHON_VLAN_LIST__
-TELEGRAM_TOKEN = "__TELEGRAM_TOKEN__"
-TELEGRAM_CHAT_ID = "__TELEGRAM_CHAT_ID__"
-TELEGRAM_ENABLED = __TELEGRAM_ENABLED__ and TELEGRAM_IMPORTED
+def remove_netem_state(iface):
+    try:
+        data=load_netem_state()
+        if iface in data:
+            data.pop(iface, None)
+            tmp=NETEM_STATE_FILE + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, NETEM_STATE_FILE)
+    except Exception as e:
+        logger.error(f'No se pudo limpiar estado netem para {iface}: {e}')
 
-logger.info(f"VLAN_INTERFACES inicializado con: {VLAN_INTERFACES}")
+def clear_netem(i):
+    i=iface_ok(i)
+    ok,out=run(f'sudo tc qdisc del dev {i} root 2>/dev/null || true')
+    remove_netem_state(i)
+    return True,out
 
-for vlan in VLAN_INTERFACES:
-    if not run_command(f"ip link show {vlan}")[0]:
-        logger.warning(f"VLAN {vlan} no encontrada en el sistema.")
+def apply_netem(i,d,j,l):
+    i=iface_ok(i)
+    d=to_number(d,'delay',0.0)
+    j=to_number(j,'jitter',0.0)
+    l=to_number(l,'pérdida',0.0,100.0)
+    if d==0 and j==0 and l==0:
+        return clear_netem(i)
 
-# Configurar bot de Telegram (solo si está habilitado y los módulos se importaron correctamente)
-if TELEGRAM_ENABLED:
-    SELECT_VLAN, ENTER_DELAY, ENTER_JITTER, ENTER_LOSS = range(1, 5)
+    parts=[]
+    if d>0 or j>0:
+        parts.append(f'delay {tc_num(d)}ms')
+        if j>0:
+            parts.append(f'{tc_num(j)}ms')
+    if l>0:
+        parts.append(f'loss {tc_num(l)}%')
 
-    def config_start(update: Update, context):
-        if str(update.effective_chat.id) != TELEGRAM_CHAT_ID:
-            update.message.reply_text("Acceso no autorizado.")
-            return ConversationHandler.END
-        keyboard = [[InlineKeyboardButton(vlan, callback_data=f"select_{vlan}")] for vlan in VLAN_INTERFACES]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        update.message.reply_text("Selecciona la VLAN que deseas configurar:", reply_markup=reply_markup)
-        return SELECT_VLAN
-
-    def select_vlan(update: Update, context):
-        query = update.callback_query
-        query.answer()
-        data = query.data
-        if data.startswith("select_"):
-            vlan = data.split("_", 1)[1]
-            context.user_data["vlan"] = vlan
-            query.edit_message_text(text=f"Has seleccionado {vlan}. Ingresa el valor de Latencia (ms):")
-            return ENTER_DELAY
+    cmd=f'sudo tc qdisc replace dev {i} root netem ' + ' '.join(parts)
+    ok,out=run(cmd)
+    if ok:
+        save_netem_state(i,d,j,l)
+        verify_ok,verify_out=run(f'tc qdisc show dev {i}')
+        return True, verify_out.strip() if verify_ok else 'OK'
+    return False,out
+if TELEGRAM_ENABLED and Updater:
+    SELECT,DELAY,JITTER,LOSS=range(1,5)
+    def start(update,ctx):
+        if str(update.effective_chat.id)!=TELEGRAM_CHAT_ID: update.message.reply_text('Acceso no autorizado.'); return -1
+        kb=[[InlineKeyboardButton((INTERFACE_META.get(i,{}).get('label',i))[:60],callback_data=f'select_{i}')] for i in CONTROL_INTERFACES]
+        update.message.reply_text('Selecciona la interfaz:',reply_markup=InlineKeyboardMarkup(kb)); return SELECT
+    def sel(update,ctx):
+        q=update.callback_query; q.answer(); i=q.data.split('_',1)[1]
+        if i not in CONTROL_INTERFACES: q.edit_message_text('Selección inválida.'); return -1
+        ctx.user_data['iface']=i; q.edit_message_text(f'Interfaz {INTERFACE_META.get(i,{}).get("label",i)}. Delay/latencia ms:'); return DELAY
+    def setd(update,ctx):
+        try: v=to_number(update.message.text,'delay',0.0)
+        except Exception as e: update.message.reply_text(f'Número inválido para delay: {e}'); return DELAY
+        ctx.user_data['delay']=v; update.message.reply_text('Jitter ms:'); return JITTER
+    def setj(update,ctx):
+        try: v=to_number(update.message.text,'jitter',0.0)
+        except Exception as e: update.message.reply_text(f'Número inválido para jitter: {e}'); return JITTER
+        ctx.user_data['jitter']=v; update.message.reply_text('Ruido/pérdida %:'); return LOSS
+    def setl(update,ctx):
+        try: l=to_number(update.message.text,'pérdida',0.0,100.0)
+        except Exception as e: update.message.reply_text(f'Número inválido para pérdida: {e}'); return LOSS
+        i=ctx.user_data['iface']
+        d=ctx.user_data.get('delay',0)
+        j=ctx.user_data.get('jitter',0)
+        ok,out=apply_netem(i,d,j,l)
+        label=INTERFACE_META.get(i,{}).get('label',i)
+        if ok:
+            update.message.reply_text(f'Aplicado en {label}: delay={tc_num(d)}ms, jitter={tc_num(j)}ms, pérdida={tc_num(l)}%. Verificación: {out}')
         else:
-            query.edit_message_text(text="Selección inválida.")
-            return ConversationHandler.END
+            update.message.reply_text(f'Error en {label}: {out}')
+        return -1
+    def cancel(update,ctx): update.message.reply_text('Cancelado.'); return -1
+    def bot():
+        try:
+            u=Updater(TELEGRAM_TOKEN,use_context=True); dp=u.dispatcher
+            dp.add_handler(ConversationHandler(entry_points=[CommandHandler('start',start),CommandHandler('config',start)],states={SELECT:[CallbackQueryHandler(sel,pattern='^select_')],DELAY:[MessageHandler(Filters.text & ~Filters.command,setd)],JITTER:[MessageHandler(Filters.text & ~Filters.command,setj)],LOSS:[MessageHandler(Filters.text & ~Filters.command,setl)]},fallbacks=[CommandHandler('cancel',cancel)]))
+            u.start_polling(); u.idle()
+        except Exception as e: logger.error(f'Telegram error: {e}')
+    threading.Thread(target=bot,daemon=True).start()
+TEMPLATE=r"""
+<!doctype html><html lang='es'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Ryuz WAN Simulator</title><link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css' rel='stylesheet'><script src='https://cdn.jsdelivr.net/npm/chart.js'></script><style>body{background:linear-gradient(135deg,#1e3c72,#2a5298);color:white;min-height:100vh}.card{background:rgba(255,255,255,.12);border:0;border-radius:15px}.form-control,.form-select{background:rgba(255,255,255,.22);color:white;border:0}.output{background:rgba(0,0,0,.3);padding:10px;border-radius:6px;white-space:pre-wrap}.chart-container{height:200px}.badge-soft{background:rgba(255,255,255,.2);color:white}</style></head><body><div class='container py-4'><h1 class='text-center'>Ryuz WAN Simulator</h1><p class='text-center'>L3/NAT y L2 Bridge por pares entrada/salida</p>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class='alert alert-{{c}}'>{{m}}</div>{% endfor %}{% endwith %}<div class='d-flex justify-content-center gap-2 mb-4'><form method='post' action='{{url_for("configure")}}'><input type='hidden' name='action' value='reset_all'><button class='btn btn-primary'>Restablecer todas</button></form><select id='unit' class='form-select w-auto' onchange='updateCharts()'><option value='mbps'>Mbps</option><option value='kbps'>Kbps</option><option value='mb'>MB/s</option><option value='kb'>KB/s</option></select></div><div class='row'>{% for i in interfaces %}<div class='col-md-6 col-lg-4 mb-4'><div class='card p-4 h-100'><h4>{{stats[i].label}}</h4><div>{% if stats[i].bridge %}<span class='badge badge-soft'>{{stats[i].bridge}}</span>{% endif %} {% if stats[i].role %}<span class='badge badge-soft'>{{stats[i].role}}</span>{% endif %}</div><small>Interfaz: {{i}}{% if stats[i].peer %}<br>Peer: {{stats[i].peer}}{% endif %}{% if stats[i].mac %}<br>MAC: {{stats[i].mac}}{% endif %}</small><form method='post' action='{{url_for("configure")}}' class='mt-3'><input type='hidden' name='iface' value='{{i}}'><input type='hidden' name='action' value='apply'><label>Delay/latencia ms</label><input class='form-control' type='number' name='delay' step='.1' min='0' value='{{stats[i].delay}}'><label>Jitter ms</label><input class='form-control' type='number' name='jitter' step='.1' min='0' value='{{stats[i].jitter}}'><label>Ruido/Pérdida %</label><input class='form-control' type='number' name='loss' step='.1' min='0' max='100' value='{{stats[i].loss}}'><div class='mt-3 d-flex gap-2'><button class='btn btn-primary'>Aplicar</button><button class='btn btn-warning' onclick='this.form.elements["action"].value="reset"'>Restablecer</button></div></form><div class='mt-3 d-flex flex-wrap gap-1'>{% for label,d,j,l in quicks %}<form method='post' action='{{url_for("configure")}}'><input type='hidden' name='iface' value='{{i}}'><input type='hidden' name='action' value='apply'><input type='hidden' name='delay' value='{{d}}'><input type='hidden' name='jitter' value='{{j}}'><input type='hidden' name='loss' value='{{l}}'><button class='btn btn-outline-light btn-sm'>{{label}}</button></form>{% endfor %}</div><div class='chart-container mt-3'><canvas id='c{{loop.index}}'></canvas></div><pre class='output mt-2' id='o{{loop.index}}'></pre></div></div>{% endfor %}</div><div class='text-center'>Ryuz WAN Simulator - Versión 1.107</div></div><script>const data={{chart|safe}};let charts={};function updateCharts(){let u=document.getElementById('unit').value;data.forEach((x,n)=>{let s=x.stats,vals=[s[u+'_in'],s[u+'_out'],s.delay,s.jitter,s.loss],id='c'+(n+1),ctx=document.getElementById(id);if(!ctx)return;if(charts[id]){charts[id].data.datasets[0].data=vals;charts[id].update()}else{charts[id]=new Chart(ctx.getContext('2d'),{type:'bar',data:{labels:['Entrada','Salida','Delay','Jitter','Ruido/Pérdida'],datasets:[{label:x.label,data:vals,borderWidth:1}]},options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true}}}})}document.getElementById('o'+(n+1)).innerText='Delay: '+Number(s.delay).toFixed(1)+' ms\nJitter: '+Number(s.jitter).toFixed(1)+' ms\nRuido/Pérdida: '+Number(s.loss).toFixed(1)+' %\nEntrada: '+Number(s[u+'_in']).toFixed(2)+' '+u+'\nSalida: '+Number(s[u+'_out']).toFixed(2)+' '+u})}window.onload=updateCharts;</script></body></html>
+"""
 
-    def enter_delay(update: Update, context):
-        text = update.message.text
-        if not text.replace('.', '').isdigit():
-            update.message.reply_text("Ingresa un número válido para latencia.")
-            return ENTER_DELAY
-        context.user_data["delay"] = float(text)
-        update.message.reply_text("Ingresa el valor de Jitter (ms):")
-        return ENTER_JITTER
-
-    def enter_jitter(update: Update, context):
-        text = update.message.text
-        if not text.replace('.', '').isdigit():
-            update.message.reply_text("Ingresa un número válido para jitter.")
-            return ENTER_JITTER
-        context.user_data["jitter"] = float(text)
-        update.message.reply_text("Ingresa el valor de Pérdida (%):")
-        return ENTER_LOSS
-
-    def enter_loss(update: Update, context):
-        text = update.message.text
-        if not text.replace('.', '').isdigit():
-            update.message.reply_text("Ingresa un número válido para pérdida.")
-            return ENTER_LOSS
-        context.user_data["loss"] = float(text)
-        vlan = context.user_data["vlan"]
-        delay = context.user_data["delay"]
-        jitter = context.user_data["jitter"]
-        loss = context.user_data["loss"]
-        run_command(f"sudo tc qdisc del dev {vlan} root netem")
-        success, output = run_command(f"sudo tc qdisc add dev {vlan} root netem delay {delay}ms {jitter}ms loss {loss}%")
-        if success:
-            message = f"Configuración aplicada en {vlan}: {delay}ms, {jitter}ms, {loss}%."
-        else:
-            message = f"Error en {vlan}: {output}"
-        update.message.reply_text(message)
-        return ConversationHandler.END
-
-    def cancel(update: Update, context):
-        update.message.reply_text("Operación cancelada.")
-        return ConversationHandler.END
-
-    def start_telegram_bot():
-        updater = Updater(TELEGRAM_TOKEN, use_context=True)
-        dp = updater.dispatcher
-        conv_handler = ConversationHandler(
-            entry_points=[CommandHandler('start', config_start), CommandHandler('config', config_start)],
-            states={
-                SELECT_VLAN: [CallbackQueryHandler(select_vlan, pattern="^select_")],
-                ENTER_DELAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_delay)],
-                ENTER_JITTER: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_jitter)],
-                ENTER_LOSS: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_loss)],
-            },
-            fallbacks=[CommandHandler('cancel', cancel)]
-        )
-        dp.add_handler(conv_handler)
-        updater.start_polling()
-        updater.idle()
-
-    threading.Thread(target=start_telegram_bot, daemon=True).start()
-
-@app.route('/', methods=['GET'])
+@app.route('/')
 def dashboard():
-    logger.debug(f"Renderizando dashboard, VLANs: {VLAN_INTERFACES}")
-    if not VLAN_INTERFACES:
-        logger.error("No hay VLANs configuradas para mostrar en el dashboard")
-        return render_template_string("""
-            <div class='alert alert-warning text-center'>
-                No hay VLANs configuradas. Por favor, verifica la configuración en ${USER_HOME}/emix_abundix.conf.
-            </div>
-        """), 400
-    stats = {}
-    for vlan in VLAN_INTERFACES:
-        qdisc_success, qdisc_output = run_command(f"tc qdisc show dev {vlan}")
-        stats[vlan] = parse_qdisc(qdisc_output) if qdisc_success else {"delay": 0, "jitter": 0, "loss": 0}
-        stats[vlan].update(get_traffic_stats(vlan))
-    return render_template_string("""
-        <!DOCTYPE html>
-        <html lang='es'>
-        <head>
-            <meta charset='UTF-8'>
-            <meta name='viewport' content='width=device-width, initial-scale=1.0'>
-            <title>WAN Simulator</title>
-            <link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css' rel='stylesheet'>
-            <script src='https://cdn.jsdelivr.net/npm/chart.js'></script>
-            <style>
-                body { background: linear-gradient(135deg, #1e3c72, #2a5298); color: white; min-height: 100vh; font-family: 'Arial', sans-serif; }
-                .container { max-width: 1200px; padding: 20px; }
-                .card { background: rgba(255, 255, 255, 0.1); border: none; border-radius: 15px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2); backdrop-filter: blur(10px); transition: transform 0.3s ease; }
-                .card:hover { transform: translateY(-5px); }
-                .btn { transition: all 0.3s ease; }
-                .btn:hover { transform: translateY(-2px); }
-                .form-control, .form-select { background: rgba(255, 255, 255, 0.2); color: white; border: none; }
-                .form-control:focus, .form-select:focus { background: rgba(255, 255, 255, 0.3); color: white; box-shadow: none; }
-                .chart-container { position: relative; height: 200px; }
-                .output { background: rgba(0, 0, 0, 0.3); padding: 10px; border-radius: 5px; }
-                .error { color: #ff4d4d; font-weight: bold; }
-                .success { color: #28a745; font-weight: bold; }
-                .footer { text-align: center; padding: 20px; font-size: 0.9rem; }
-                @media (max-width: 576px) {
-                    .container { padding: 10px; }
-                    .card { margin-bottom: 15px; }
-                    .btn { font-size: 0.9rem; }
-                    .form-control, .form-select { font-size: 0.9rem; }
-                }
-            </style>
-        </head>
-        <body>
-            <div class='container'>
-                <h1 class='text-center mb-4'>WAN Simulator</h1>
-                <div class='d-flex justify-content-center mb-4'>
-                    <form action='/configure' method='post' class='mx-2'>
-                        <input type='hidden' name='action' value='reset_all'>
-                        <button type='submit' class='btn btn-primary'>Restablecer Todas las Interfaces</button>
-                    </form>
-                    <select id='unit-select' class='form-select w-auto mx-2' onchange='updateCharts()'>
-                        <option value='mbps'>Mbps</option>
-                        <option value='kbps'>Kbps</option>
-                        <option value='mb'>MB</option>
-                        <option value='kb'>KB</option>
-                    </select>
-                </div>
-                <div class='row'>
-                    {% for vlan in vlans %}
-                    <div class='col-md-6 col-lg-4 mb-4'>
-                        <div class='card p-4'>
-                            <h3 class='text-center'>Interfaz: {{ vlan }}</h3>
-                            <form action='/configure' method='post' id='config-form-{{ vlan }}'>
-                                <input type='hidden' name='vlan' value='{{ vlan }}'>
-                                <input type='hidden' name='action' value='apply'>
-                                <div class='mb-3'>
-                                    <label class='form-label'>Latencia (ms):</label>
-                                    <input type='number' class='form-control' name='delay' value='{{ stats[vlan].delay }}' min='0' step='0.1'>
-                                </div>
-                                <div class='mb-3'>
-                                    <label class='form-label'>Jitter (ms):</label>
-                                    <input type='number' class='form-control' name='jitter' value='{{ stats[vlan].jitter }}' min='0' step='0.1'>
-                                </div>
-                                <div class='mb-3'>
-                                    <label class='form-label'>Pérdida (%):</label>
-                                    <input type='number' class='form-control' name='loss' value='{{ stats[vlan].loss }}' min='0' max='100' step='0.1'>
-                                </div>
-                                <div class='d-flex justify-content-center mb-3'>
-                                    <button type='submit' class='btn btn-primary mx-1'>Aplicar</button>
-                                    <button type='submit' class='btn btn-warning mx-1' formaction='/configure' onclick='this.form.elements["action"].value="reset"'>Restablecer</button>
-                                </div>
-                            </form>
-                            <div class='mb-3'>
-                                <label class='form-label'>Latencia Rápida:</label>
-                                <div class='d-flex'>
-                                    <form action='/configure' method='post' class='mx-1'>
-                                        <input type='hidden' name='vlan' value='{{ vlan }}'>
-                                        <input type='hidden' name='action' value='apply'>
-                                        <input type='hidden' name='delay' value='100'>
-                                        <input type='hidden' name='jitter' value='0'>
-                                        <input type='hidden' name='loss' value='0'>
-                                        <button type='submit' class='btn btn-outline-light btn-sm'>100ms</button>
-                                    </form>
-                                    <form action='/configure' method='post' class='mx-1'>
-                                        <input type='hidden' name='vlan' value='{{ vlan }}'>
-                                        <input type='hidden' name='action' value='apply'>
-                                        <input type='hidden' name='delay' value='300'>
-                                        <input type='hidden' name='jitter' value='0'>
-                                        <input type='hidden' name='loss' value='0'>
-                                        <button type='submit' class='btn btn-outline-light btn-sm'>300ms</button>
-                                    </form>
-                                    <form action='/configure' method='post' class='mx-1'>
-                                        <input type='hidden' name='vlan' value='{{ vlan }}'>
-                                        <input type='hidden' name='action' value='apply'>
-                                        <input type='hidden' name='delay' value='500'>
-                                        <input type='hidden' name='jitter' value='0'>
-                                        <input type='hidden' name='loss' value='0'>
-                                        <button type='submit' class='btn btn-outline-light btn-sm'>500ms</button>
-                                    </form>
-                                </div>
-                            </div>
-                            <div class='mb-3'>
-                                <label class='form-label'>Jitter Rápido:</label>
-                                <div class='d-flex'>
-                                    <form action='/configure' method='post' class='mx-1'>
-                                        <input type='hidden' name='vlan' value='{{ vlan }}'>
-                                        <input type='hidden' name='action' value='apply'>
-                                        <input type='hidden' name='delay' value='0'>
-                                        <input type='hidden' name='jitter' value='50'>
-                                        <input type='hidden' name='loss' value='0'>
-                                        <button type='submit' class='btn btn-outline-light btn-sm'>50ms</button>
-                                    </form>
-                                    <form action='/configure' method='post' class='mx-1'>
-                                        <input type='hidden' name='vlan' value='{{ vlan }}'>
-                                        <input type='hidden' name='action' value='apply'>
-                                        <input type='hidden' name='delay' value='0'>
-                                        <input type='hidden' name='jitter' value='100'>
-                                        <input type='hidden' name='loss' value='0'>
-                                        <button type='submit' class='btn btn-outline-light btn-sm'>100ms</button>
-                                    </form>
-                                    <form action='/configure' method='post' class='mx-1'>
-                                        <input type='hidden' name='vlan' value='{{ vlan }}'>
-                                        <input type='hidden' name='action' value='apply'>
-                                        <input type='hidden' name='delay' value='0'>
-                                        <input type='hidden' name='jitter' value='200'>
-                                        <input type='hidden' name='loss' value='0'>
-                                        <button type='submit' class='btn btn-outline-light btn-sm'>200ms</button>
-                                    </form>
-                                </div>
-                            </div>
-                            <div class='mb-3'>
-                                <label class='form-label'>Pérdida Rápida:</label>
-                                <div class='d-flex'>
-                                    <form action='/configure' method='post' class='mx-1'>
-                                        <input type='hidden' name='vlan' value='{{ vlan }}'>
-                                        <input type='hidden' name='action' value='apply'>
-                                        <input type='hidden' name='delay' value='0'>
-                                        <input type='hidden' name='jitter' value='0'>
-                                        <input type='hidden' name='loss' value='1'>
-                                        <button type='submit' class='btn btn-outline-light btn-sm'>1%</button>
-                                    </form>
-                                    <form action='/configure' method='post' class='mx-1'>
-                                        <input type='hidden' name='vlan' value='{{ vlan }}'>
-                                        <input type='hidden' name='action' value='apply'>
-                                        <input type='hidden' name='delay' value='0'>
-                                        <input type='hidden' name='jitter' value='0'>
-                                        <input type='hidden' name='loss' value='5'>
-                                        <button type='submit' class='btn btn-outline-light btn-sm'>5%</button>
-                                    </form>
-                                    <form action='/configure' method='post' class='mx-1'>
-                                        <input type='hidden' name='vlan' value='{{ vlan }}'>
-                                        <input type='hidden' name='action' value='apply'>
-                                        <input type='hidden' name='delay' value='0'>
-                                        <input type='hidden' name='jitter' value='0'>
-                                        <input type='hidden' name='loss' value='10'>
-                                        <button type='submit' class='btn btn-outline-light btn-sm'>10%</button>
-                                    </form>
-                                </div>
-                            </div>
-                            <div class='chart-container'>
-                                <canvas id='traffic-chart-{{ vlan }}'></canvas>
-                            </div>
-                            <pre class='output mt-3' id='output-{{ vlan }}'>Latencia: {{ stats[vlan].delay }} ms
-Jitter: {{ stats[vlan].jitter }} ms
-Pérdida: {{ stats[vlan].loss }} %
-Ancho de Banda Entrada: {{ stats[vlan][current_unit + "_in"]|round(2) }} {{ current_unit }}
-Ancho de Banda Salida: {{ stats[vlan][current_unit + "_out"]|round(2) }} {{ current_unit }}</pre>
-                            <div class='error mt-2' id='error-{{ vlan }}'></div>
-                        </div>
-                    </div>
-                    {% endfor %}
-                </div>
-                <div class='footer'>
-                    <p>Ryuz WAN Simulator - Versión 1.100, Créditos: decameru@outlook.com</p>
-                    <a href='mailto:decameru@outlook.com' class='btn btn-secondary'>Contacto</a>
-                </div>
-            </div>
-            <script>
-                const charts = {};
-                let currentUnit = 'mbps';
-                function updateCharts() {
-                    currentUnit = document.getElementById('unit-select').value;
-                    {% for vlan in vlans %}
-                    const stats = {
-                        mbps_in: {{ stats[vlan].mbps_in }},
-                        mbps_out: {{ stats[vlan].mbps_out }},
-                        kbps_in: {{ stats[vlan].kbps_in }},
-                        kbps_out: {{ stats[vlan].kbps_out }},
-                        mb_in: {{ stats[vlan].mb_in }},
-                        mb_out: {{ stats[vlan].mb_out }},
-                        kb_in: {{ stats[vlan].kb_in }},
-                        kb_out: {{ stats[vlan].kb_out }},
-                        delay: {{ stats[vlan].delay }},
-                        jitter: {{ stats[vlan].jitter }},
-                        loss: {{ stats[vlan].loss }}
-                    };
-                    const ctx = document.getElementById('traffic-chart-{{ vlan }}').getContext('2d');
-                    const labels = ['Entrada', 'Salida', 'Latencia', 'Jitter', 'Pérdida'];
-                    const data = [
-                        stats[currentUnit + '_in'],
-                        stats[currentUnit + '_out'],
-                        stats.delay,
-                        stats.jitter,
-                        stats.loss
-                    ];
-                    const units = currentUnit === 'mbps' || currentUnit === 'kbps' ? ' (' + currentUnit.toUpperCase() + ')' : ' (' + currentUnit.toUpperCase() + '/s)';
-                    if (charts['{{ vlan }}']) {
-                        charts['{{ vlan }}'].data.datasets[0].data = data;
-                        charts['{{ vlan }}'].data.labels = labels.map(label => label + (label.includes('Entrada') || label.includes('Salida') ? units : label.includes('Latencia') || label.includes('Jitter') ? ' (ms)' : ' (%)'));
-                        charts['{{ vlan }}'].update();
-                    } else {
-                        charts['{{ vlan }}'] = new Chart(ctx, {
-                            type: 'bar',
-                            data: {
-                                labels: labels.map(label => label + (label.includes('Entrada') || label.includes('Salida') ? units : label.includes('Latencia') || label.includes('Jitter') ? ' (ms)' : ' (%)')),
-                                datasets: [{
-                                    label: '{{ vlan }}',
-                                    data: data,
-                                    backgroundColor: [
-                                        'rgba(255, 99, 132, 0.4)',
-                                        'rgba(54, 162, 235, 0.4)',
-                                        'rgba(255, 206, 86, 0.4)',
-                                        'rgba(75, 192, 192, 0.4)',
-                                        'rgba(153, 102, 255, 0.4)'
-                                    ],
-                                    borderColor: [
-                                        'rgba(255,99,132,1)',
-                                        'rgba(54,162,235,1)',
-                                        'rgba(255,206,86,1)',
-                                        'rgba(75,192,192,1)',
-                                        'rgba(153,102,255,1)'
-                                    ],
-                                    borderWidth: 1
-                                }]
-                            },
-                            options: {
-                                scales: {
-                                    y: { beginAtZero: true }
-                                },
-                                animation: {
-                                    duration: 1000,
-                                    easing: 'easeInOutQuad'
-                                }
-                            }
-                        });
-                    }
-                    document.getElementById('output-{{ vlan }}').innerText =
-                        'Latencia: ' + stats.delay.toFixed(1) + ' ms\n' +
-                        'Jitter: ' + stats.jitter.toFixed(1) + ' ms\n' +
-                        'Pérdida: ' + stats.loss.toFixed(1) + ' %\n' +
-                        'Ancho de Banda Entrada: ' + stats[currentUnit + '_in'].toFixed(2) + ' ' + currentUnit + '\n' +
-                        'Ancho de Banda Salida: ' + stats[currentUnit + '_out'].toFixed(2) + ' ' + currentUnit;
-                    document.querySelector('#config-form-{{ vlan }} input[name="delay"]').value = stats.delay.toFixed(1);
-                    document.querySelector('#config-form-{{ vlan }} input[name="jitter"]').value = stats.jitter.toFixed(1);
-                    document.querySelector('#config-form-{{ vlan }} input[name="loss"]').value = stats.loss.toFixed(1);
-                    {% endfor %}
-                }
-                window.onload = updateCharts;
-            </script>
-        </body>
-        </html>
-    """, vlans=VLAN_INTERFACES, stats=stats, current_unit='mbps')
+    s=collect(); chart=json.dumps([{'iface':i,'label':s[i].get('label',i),'stats':s[i]} for i in CONTROL_INTERFACES])
+    q=[('100ms',100,0,0),('300ms',300,0,0),('500ms',500,0,0),('J50',0,50,0),('J100',0,100,0),('J200',0,200,0),('Loss1%',0,0,1),('Loss5%',0,0,5),('Loss10%',0,0,10)]
+    return render_template_string(TEMPLATE,interfaces=CONTROL_INTERFACES,stats=s,chart=chart,quicks=q)
 
-@app.route('/configure', methods=['POST'])
+@app.route('/configure',methods=['POST'])
 def configure():
-    logger.debug(f"POST /configure recibido con data: {request.form}")
     try:
-        vlan = request.form.get('vlan')
-        action = request.form.get('action')
-        error_message = ""
-        success_message = ""
-        if not VLAN_INTERFACES:
-            logger.error("VLAN_INTERFACES está vacío")
-            error_message = "No hay VLANs configuradas. Verifica ${USER_HOME}/emix_abundix.conf."
-        elif vlan and vlan not in VLAN_INTERFACES:
-            logger.error(f"VLAN inválida: {vlan}")
-            error_message = f"VLAN {vlan} no encontrada."
-        else:
-            if action == "apply":
-                try:
-                    delay = float(request.form.get('delay', 0))
-                    jitter = float(request.form.get('jitter', 0))
-                    loss = float(request.form.get('loss', 0))
-                    if delay < 0 or jitter < 0 or loss < 0 or loss > 100:
-                        logger.error(f"Parámetros inválidos para VLAN {vlan}: delay={delay}, jitter={jitter}, loss={loss}")
-                        error_message = "Los parámetros deben ser no negativos y la pérdida menor o igual a 100%."
-                    else:
-                        run_command(f"sudo tc qdisc del dev {vlan} root netem")
-                        retries = 3
-                        success = False
-                        output = ""
-                        for attempt in range(retries):
-                            success, output = run_command(f"sudo tc qdisc add dev {vlan} root netem delay {delay}ms {jitter}ms loss {loss}%")
-                            if success:
-                                break
-                            time.sleep(1)
-                        if success:
-                            logger.info(f"Qdisc aplicado en {vlan}: Latencia={delay}ms, Jitter={jitter}ms, Pérdida={loss}%")
-                            success_message = f"Configuración aplicada en {vlan}: Latencia={delay}ms, Jitter={jitter}ms, Pérdida={loss}%"
-                        else:
-                            logger.error(f"Error aplicando qdisc en {vlan}: {output}")
-                            error_message = f"Error aplicando configuración: {output}"
-                except ValueError as e:
-                    logger.error(f"Error en parámetros para VLAN {vlan}: {e}")
-                    error_message = "Los parámetros deben ser numéricos válidos."
-            elif action == "reset":
-                success, output = run_command(f"sudo tc qdisc del dev {vlan} root netem")
-                if success:
-                    logger.info(f"Qdisc restablecido en {vlan}")
-                    success_message = f"Configuración restablecida en {vlan}"
-                else:
-                    logger.error(f"Error restableciendo qdisc en {vlan}: {output}")
-                    error_message = f"Error restableciendo configuración: {output}"
-            elif action == "reset_all":
-                for v in VLAN_INTERFACES:
-                    success, output = run_command(f"sudo tc qdisc del dev {v} root netem")
-                    if not success:
-                        logger.error(f"Error restableciendo qdisc en {v}: {output}")
-                        error_message += f"Error en {v}: {output}\n"
-                if not error_message:
-                    logger.info("Restablecimiento de todas las interfaces completado")
-                    success_message = "Todas las interfaces restablecidas"
-        stats = {}
-        for vlan in VLAN_INTERFACES:
-            qdisc_success, qdisc_output = run_command(f"tc qdisc show dev {vlan}")
-            stats[vlan] = parse_qdisc(qdisc_output) if qdisc_success else {"delay": 0, "jitter": 0, "loss": 0}
-            stats[vlan].update(get_traffic_stats(vlan))
-        return render_template_string("""
-            <!DOCTYPE html>
-            <html lang='es'>
-            <head>
-                <meta charset='UTF-8'>
-                <meta name='viewport' content='width=device-width, initial-scale=1.0'>
-                <title>WAN Simulator</title>
-                <link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css' rel='stylesheet'>
-                <script src='https://cdn.jsdelivr.net/npm/chart.js'></script>
-                <style>
-                    body { background: linear-gradient(135deg, #1e3c72, #2a5298); color: white; min-height: 100vh; font-family: 'Arial', sans-serif; }
-                    .container { max-width: 1200px; padding: 20px; }
-                    .card { background: rgba(255, 255, 255, 0.1); border: none; border-radius: 15px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2); backdrop-filter: blur(10px); transition: transform 0.3s ease; }
-                    .card:hover { transform: translateY(-5px); }
-                    .btn { transition: all 0.3s ease; }
-                    .btn:hover { transform: translateY(-2px); }
-                    .form-control, .form-select { background: rgba(255, 255, 255, 0.2); color: white; border: none; }
-                    .form-control:focus, .form-select:focus { background: rgba(255, 255, 255, 0.3); color: white; box-shadow: none; }
-                    .chart-container { position: relative; height: 200px; }
-                    .output { background: rgba(0, 0, 0, 0.3); padding: 10px; border-radius: 5px; }
-                    .error { color: #ff4d4d; font-weight: bold; }
-                    .success { color: #28a745; font-weight: bold; }
-                    .footer { text-align: center; padding: 20px; font-size: 0.9rem; }
-                    @media (max-width: 576px) {
-                        .container { padding: 10px; }
-                        .card { margin-bottom: 15px; }
-                        .btn { font-size: 0.9rem; }
-                        .form-control, .form-select { font-size: 0.9rem; }
-                    }
-                </style>
-            </head>
-            <body>
-                <div class='container'>
-                    <h1 class='text-center mb-4'>WAN Simulator</h1>
-                    <div class='d-flex justify-content-center mb-4'>
-                        <form action='/configure' method='post' class='mx-2'>
-                            <input type='hidden' name='action' value='reset_all'>
-                            <button type='submit' class='btn btn-primary'>Restablecer Todas las Interfaces</button>
-                        </form>
-                        <select id='unit-select' class='form-select w-auto mx-2' onchange='updateCharts()'>
-                            <option value='mbps'>Mbps</option>
-                            <option value='kbps'>Kbps</option>
-                            <option value='mb'>MB</option>
-                            <option value='kb'>KB</option>
-                        </select>
-                    </div>
-                    {% if error_message %}
-                    <div class='alert alert-danger'>{{ error_message }}</div>
-                    {% endif %}
-                    {% if success_message %}
-                    <div class='alert alert-success'>{{ success_message }}</div>
-                    {% endif %}
-                    {% if vlans %}
-                    <div class='row'>
-                        {% for vlan in vlans %}
-                        <div class='col-md-6 col-lg-4 mb-4'>
-                            <div class='card p-4'>
-                                <h3 class='text-center'>Interfaz: {{ vlan }}</h3>
-                                <form action='/configure' method='post' id='config-form-{{ vlan }}'>
-                                    <input type='hidden' name='vlan' value='{{ vlan }}'>
-                                    <input type='hidden' name='action' value='apply'>
-                                    <div class='mb-3'>
-                                        <label class='form-label'>Latencia (ms):</label>
-                                        <input type='number' class='form-control' name='delay' value='{{ stats[vlan].delay }}' min='0' step='0.1'>
-                                    </div>
-                                    <div class='mb-3'>
-                                        <label class='form-label'>Jitter (ms):</label>
-                                        <input type='number' class='form-control' name='jitter' value='{{ stats[vlan].jitter }}' min='0' step='0.1'>
-                                    </div>
-                                    <div class='mb-3'>
-                                        <label class='form-label'>Pérdida (%):</label>
-                                        <input type='number' class='form-control' name='loss' value='{{ stats[vlan].loss }}' min='0' max='100' step='0.1'>
-                                    </div>
-                                    <div class='d-flex justify-content-center mb-3'>
-                                        <button type='submit' class='btn btn-primary mx-1'>Aplicar</button>
-                                        <button type='submit' class='btn btn-warning mx-1' formaction='/configure' onclick='this.form.elements["action"].value="reset"'>Restablecer</button>
-                                    </div>
-                                </form>
-                                <div class='mb-3'>
-                                    <label class='form-label'>Latencia Rápida:</label>
-                                    <div class='d-flex'>
-                                        <form action='/configure' method='post' class='mx-1'>
-                                            <input type='hidden' name='vlan' value='{{ vlan }}'>
-                                            <input type='hidden' name='action' value='apply'>
-                                            <input type='hidden' name='delay' value='100'>
-                                            <input type='hidden' name='jitter' value='0'>
-                                            <input type='hidden' name='loss' value='0'>
-                                            <button type='submit' class='btn btn-outline-light btn-sm'>100ms</button>
-                                        </form>
-                                        <form action='/configure' method='post' class='mx-1'>
-                                            <input type='hidden' name='vlan' value='{{ vlan }}'>
-                                            <input type='hidden' name='action' value='apply'>
-                                            <input type='hidden' name='delay' value='300'>
-                                            <input type='hidden' name='jitter' value='0'>
-                                            <input type='hidden' name='loss' value='0'>
-                                            <button type='submit' class='btn btn-outline-light btn-sm'>300ms</button>
-                                        </form>
-                                        <form action='/configure' method='post' class='mx-1'>
-                                            <input type='hidden' name='vlan' value='{{ vlan }}'>
-                                            <input type='hidden' name='action' value='apply'>
-                                            <input type='hidden' name='delay' value='500'>
-                                            <input type='hidden' name='jitter' value='0'>
-                                            <input type='hidden' name='loss' value='0'>
-                                            <button type='submit' class='btn btn-outline-light btn-sm'>500ms</button>
-                                        </form>
-                                    </div>
-                                </div>
-                                <div class='mb-3'>
-                                    <label class='form-label'>Jitter Rápido:</label>
-                                    <div class='d-flex'>
-                                        <form action='/configure' method='post' class='mx-1'>
-                                            <input type='hidden' name='vlan' value='{{ vlan }}'>
-                                            <input type='hidden' name='action' value='apply'>
-                                            <input type='hidden' name='delay' value='0'>
-                                            <input type='hidden' name='jitter' value='50'>
-                                            <input type='hidden' name='loss' value='0'>
-                                            <button type='submit' class='btn btn-outline-light btn-sm'>50ms</button>
-                                        </form>
-                                        <form action='/configure' method='post' class='mx-1'>
-                                            <input type='hidden' name='vlan' value='{{ vlan }}'>
-                                            <input type='hidden' name='action' value='apply'>
-                                            <input type='hidden' name='delay' value='0'>
-                                            <input type='hidden' name='jitter' value='100'>
-                                            <input type='hidden' name='loss' value='0'>
-                                            <button type='submit' class='btn btn-outline-light btn-sm'>100ms</button>
-                                        </form>
-                                        <form action='/configure' method='post' class='mx-1'>
-                                            <input type='hidden' name='vlan' value='{{ vlan }}'>
-                                            <input type='hidden' name='action' value='apply'>
-                                            <input type='hidden' name='delay' value='0'>
-                                            <input type='hidden' name='jitter' value='200'>
-                                            <input type='hidden' name='loss' value='0'>
-                                            <button type='submit' class='btn btn-outline-light btn-sm'>200ms</button>
-                                        </form>
-                                    </div>
-                                </div>
-                                <div class='mb-3'>
-                                    <label class='form-label'>Pérdida Rápida:</label>
-                                    <div class='d-flex'>
-                                        <form action='/configure' method='post' class='mx-1'>
-                                            <input type='hidden' name='vlan' value='{{ vlan }}'>
-                                            <input type='hidden' name='action' value='apply'>
-                                            <input type='hidden' name='delay' value='0'>
-                                            <input type='hidden' name='jitter' value='0'>
-                                            <input type='hidden' name='loss' value='1'>
-                                            <button type='submit' class='btn btn-outline-light btn-sm'>1%</button>
-                                        </form>
-                                        <form action='/configure' method='post' class='mx-1'>
-                                            <input type='hidden' name='vlan' value='{{ vlan }}'>
-                                            <input type='hidden' name='action' value='apply'>
-                                            <input type='hidden' name='delay' value='0'>
-                                            <input type='hidden' name='jitter' value='0'>
-                                            <input type='hidden' name='loss' value='5'>
-                                            <button type='submit' class='btn btn-outline-light btn-sm'>5%</button>
-                                        </form>
-                                        <form action='/configure' method='post' class='mx-1'>
-                                            <input type='hidden' name='vlan' value='{{ vlan }}'>
-                                            <input type='hidden' name='action' value='apply'>
-                                            <input type='hidden' name='delay' value='0'>
-                                            <input type='hidden' name='jitter' value='0'>
-                                            <input type='hidden' name='loss' value='10'>
-                                            <button type='submit' class='btn btn-outline-light btn-sm'>10%</button>
-                                        </form>
-                                    </div>
-                                </div>
-                                <div class='chart-container'>
-                                    <canvas id='traffic-chart-{{ vlan }}'></canvas>
-                                </div>
-                                <pre class='output mt-3' id='output-{{ vlan }}'>Latencia: {{ stats[vlan].delay }} ms
-Jitter: {{ stats[vlan].jitter }} ms
-Pérdida: {{ stats[vlan].loss }} %
-Ancho de Banda Entrada: {{ stats[vlan][current_unit + "_in"]|round(2) }} {{ current_unit }}
-Ancho de Banda Salida: {{ stats[vlan][current_unit + "_out"]|round(2) }} {{ current_unit }}</pre>
-                                <div class='error mt-2' id='error-{{ vlan }}'></div>
-                            </div>
-                        </div>
-                        {% endfor %}
-                    </div>
-                    <div class='footer'>
-                        <p>Ryuz WAN Simulator - Versión 1.100, Créditos: decameru@outlook.com</p>
-                        <a href='mailto:decameru@outlook.com' class='btn btn-secondary'>Contacto</a>
-                    </div>
-                </div>
-                <script>
-                    const charts = {};
-                    let currentUnit = 'mbps';
-                    function updateCharts() {
-                        currentUnit = document.getElementById('unit-select').value;
-                        {% for vlan in vlans %}
-                        const stats = {
-                            mbps_in: {{ stats[vlan].mbps_in }},
-                            mbps_out: {{ stats[vlan].mbps_out }},
-                            kbps_in: {{ stats[vlan].kbps_in }},
-                            kbps_out: {{ stats[vlan].kbps_out }},
-                            mb_in: {{ stats[vlan].mb_in }},
-                            mb_out: {{ stats[vlan].mb_out }},
-                            kb_in: {{ stats[vlan].kb_in }},
-                            kb_out: {{ stats[vlan].kb_out }},
-                            delay: {{ stats[vlan].delay }},
-                            jitter: {{ stats[vlan].jitter }},
-                            loss: {{ stats[vlan].loss }}
-                        };
-                        const ctx = document.getElementById('traffic-chart-{{ vlan }}').getContext('2d');
-                        const labels = ['Entrada', 'Salida', 'Latencia', 'Jitter', 'Pérdida'];
-                        const data = [
-                            stats[currentUnit + '_in'],
-                            stats[currentUnit + '_out'],
-                            stats.delay,
-                            stats.jitter,
-                            stats.loss
-                        ];
-                        const units = currentUnit === 'mbps' || currentUnit === 'kbps' ? ' (' + currentUnit.toUpperCase() + ')' : ' (' + currentUnit.toUpperCase() + '/s)';
-                        if (charts['{{ vlan }}']) {
-                            charts['{{ vlan }}'].data.datasets[0].data = data;
-                            charts['{{ vlan }}'].data.labels = labels.map(label => label + (label.includes('Entrada') || label.includes('Salida') ? units : label.includes('Latencia') || label.includes('Jitter') ? ' (ms)' : ' (%)'));
-                            charts['{{ vlan }}'].update();
-                        } else {
-                            charts['{{ vlan }}'] = new Chart(ctx, {
-                                type: 'bar',
-                                data: {
-                                    labels: labels.map(label => label + (label.includes('Entrada') || label.includes('Salida') ? units : label.includes('Latencia') || label.includes('Jitter') ? ' (ms)' : ' (%)')),
-                                    datasets: [{
-                                        label: '{{ vlan }}',
-                                        data: data,
-                                        backgroundColor: [
-                                            'rgba(255, 99, 132, 0.4)',
-                                            'rgba(54, 162, 235, 0.4)',
-                                            'rgba(255, 206, 86, 0.4)',
-                                            'rgba(75, 192, 192, 0.4)',
-                                            'rgba(153, 102, 255, 0.4)'
-                                        ],
-                                        borderColor: [
-                                            'rgba(255,99,132,1)',
-                                            'rgba(54,162,235,1)',
-                                            'rgba(255,206,86,1)',
-                                            'rgba(75,192,192,1)',
-                                            'rgba(153,102,255,1)'
-                                        ],
-                                        borderWidth: 1
-                                    }]
-                                },
-                                options: {
-                                    scales: {
-                                        y: { beginAtZero: true }
-                                    },
-                                    animation: {
-                                        duration: 1000,
-                                        easing: 'easeInOutQuad'
-                                    }
-                                }
-                            });
-                        }
-                        document.getElementById('output-{{ vlan }}').innerText =
-                            'Latencia: ' + stats.delay.toFixed(1) + ' ms\n' +
-                            'Jitter: ' + stats.jitter.toFixed(1) + ' ms\n' +
-                            'Pérdida: ' + stats.loss.toFixed(1) + ' %\n' +
-                            'Ancho de Banda Entrada: ' + stats[currentUnit + '_in'].toFixed(2) + ' ' + currentUnit + '\n' +
-                            'Ancho de Banda Salida: ' + stats[currentUnit + '_out'].toFixed(2) + ' ' + currentUnit;
-                        document.querySelector('#config-form-{{ vlan }} input[name="delay"]').value = stats.delay.toFixed(1);
-                        document.querySelector('#config-form-{{ vlan }} input[name="jitter"]').value = stats.jitter.toFixed(1);
-                        document.querySelector('#config-form-{{ vlan }} input[name="loss"]').value = stats.loss.toFixed(1);
-                        {% endfor %}
-                    }
-                    window.onload = updateCharts;
-                </script>
-            </body>
-            </html>
-        """, vlans=VLAN_INTERFACES, stats=stats, current_unit='mbps')
-
-if __name__ == "__main__":
-    port = app.config['PORT']
-    logger.info(f"Iniciando servidor Flask en 0.0.0.0:{port}...")
-    try:
-        app.run(host="0.0.0.0", port=port)
+        i=request.form.get('iface') or request.form.get('vlan'); a=request.form.get('action')
+        if a=='reset_all':
+            errs=[]
+            for t in CONTROL_INTERFACES:
+                ok,out=run(f'sudo tc qdisc del dev {iface_ok(t)} root 2>/dev/null || true')
+                if not ok and 'No such file' not in out and 'Invalid argument' not in out: errs.append(f'{t}:{out}')
+            flash('Restablecido todo.' if not errs else 'Errores: '+' | '.join(errs),'success' if not errs else 'danger'); return redirect(url_for('dashboard'))
+        if i not in CONTROL_INTERFACES: flash(f'Interfaz inválida: {i}','danger'); return redirect(url_for('dashboard'))
+        label=INTERFACE_META.get(i,{}).get('label',i) if isinstance(INTERFACE_META,dict) else i
+        if a=='reset':
+            ok,out=run(f'sudo tc qdisc del dev {iface_ok(i)} root 2>/dev/null || true'); flash(f'Restablecido {label}.' if ok or 'No such file' in out or 'Invalid argument' in out else f'Error {label}: {out}','success' if ok or 'No such file' in out or 'Invalid argument' in out else 'danger'); return redirect(url_for('dashboard'))
+        if a=='apply':
+            d=to_number(request.form.get('delay',0) or 0,'delay',0.0)
+            j=to_number(request.form.get('jitter',0) or 0,'jitter',0.0)
+            l=to_number(request.form.get('loss',0) or 0,'pérdida',0.0,100.0)
+            ok,out=apply_netem(i,d,j,l); flash(f'Aplicado en {label}: delay={tc_num(d)}ms jitter={tc_num(j)}ms pérdida={tc_num(l)}%. Verificación: {out}' if ok else f'Error en {label}: {out}','success' if ok else 'danger'); return redirect(url_for('dashboard'))
+        flash(f'Acción no soportada: {a}','warning'); return redirect(url_for('dashboard'))
     except Exception as e:
-        logger.error(f"Error iniciando Flask: {e}")
-        sys.exit(1)
+        logger.exception('Error en /configure'); flash(f'Error interno controlado: {e}','danger'); return redirect(url_for('dashboard'))
+
+if __name__=='__main__': app.run(host='0.0.0.0',port=app.config['PORT'])
 EOF
 
 # Configurar permisos del archivo del dashboard
@@ -2202,6 +1604,7 @@ if ! chown "$CURRENT_USER:$CURRENT_USER" "$WANSIM_DASHBOARD"; then
     exit 1
 fi
 log_message "OK" "wansim_dashboard.py generado."
+
 # Verificar sintaxis del script Python
 log_message "DEBUG" "Verificando sintaxis de $WANSIM_DASHBOARD..."
 if ! python3 -m py_compile "$WANSIM_DASHBOARD"; then
@@ -2210,6 +1613,153 @@ if ! python3 -m py_compile "$WANSIM_DASHBOARD"; then
     exit 1
 fi
 log_message "OK" "Sintaxis de $WANSIM_DASHBOARD verificada."
+
+# Reemplazar placeholders en el archivo Python de forma segura
+log_message "DEBUG" "Reemplazando placeholders en $WANSIM_DASHBOARD con reemplazo seguro..."
+export TELEGRAM_TOKEN TELEGRAM_CHAT_ID TELEGRAM_ENABLED PYTHON_VLAN_LIST PYTHON_INTERFACE_META DASHBOARD_PORT
+if ! python3 - "$WANSIM_DASHBOARD" <<'PYREPLACE'
+import json
+import os
+import sys
+from pathlib import Path
+
+def normalize_json_env(name, fallback):
+    value = os.environ.get(name, fallback)
+    try:
+        json.loads(value)
+        return value
+    except json.JSONDecodeError:
+        # Defensa específica: corrige llaves de cierre extra al final del JSON.
+        candidate = value
+        while candidate.endswith('}'):
+            candidate = candidate[:-1]
+            try:
+                json.loads(candidate)
+                return candidate
+            except json.JSONDecodeError:
+                continue
+        raise
+
+path = Path(sys.argv[1])
+text = path.read_text()
+py_vlan_list = normalize_json_env("PYTHON_VLAN_LIST", "[]")
+py_interface_meta = normalize_json_env("PYTHON_INTERFACE_META", "{}")
+replacements = {
+    "__DASHBOARD_PORT__": os.environ.get("DASHBOARD_PORT", "5000"),
+    "__PYTHON_VLAN_LIST_LITERAL__": json.dumps(py_vlan_list),
+    "__PYTHON_INTERFACE_META_LITERAL__": json.dumps(py_interface_meta),
+    "__TELEGRAM_TOKEN_LITERAL__": json.dumps(os.environ.get("TELEGRAM_TOKEN", "")),
+    "__TELEGRAM_CHAT_ID_LITERAL__": json.dumps(os.environ.get("TELEGRAM_CHAT_ID", "")),
+    "__TELEGRAM_ENABLED__": os.environ.get("TELEGRAM_ENABLED", "0"),
+    "__NETEM_STATE_FILE__": os.environ.get("NETEM_STATE_FILE", "/home/axis/wansim_netem_state.json"),
+}
+for key, value in replacements.items():
+    text = text.replace(key, value)
+path.write_text(text)
+PYREPLACE
+then
+    log_message "ERROR" "No se pudieron reemplazar placeholders en $WANSIM_DASHBOARD."
+    echo "${COLOR_ERROR}No se pudo modificar $WANSIM_DASHBOARD. Revisa permisos con 'ls -l $WANSIM_DASHBOARD'.${COLOR_RESET}"
+    exit 1
+fi
+
+log_message "DEBUG" "Validando sintaxis final de $WANSIM_DASHBOARD después de reemplazos..."
+if ! python3 -m py_compile "$WANSIM_DASHBOARD"; then
+    log_message "ERROR" "Error de sintaxis final en $WANSIM_DASHBOARD después de reemplazar variables."
+    echo "${COLOR_ERROR}Error de sintaxis final en $WANSIM_DASHBOARD. Revisa con 'python3 -m py_compile $WANSIM_DASHBOARD' y 'nl -ba $WANSIM_DASHBOARD | sed -n \"1,40p\"'.${COLOR_RESET}"
+    exit 1
+fi
+log_message "OK" "Placeholders reemplazados y sintaxis final verificada en $WANSIM_DASHBOARD."
+
+# Función para liberar puertos
+free_port_single() {
+    local port="$1"
+    log_message "INFO" "Verificando puerto $port..."
+    local pids=""
+    if command -v fuser >/dev/null 2>&1; then
+        pids=$(sudo fuser "${port}/tcp" 2>/dev/null || true)
+    fi
+    if [ -z "$pids" ] && command -v lsof >/dev/null 2>&1; then
+        pids=$(sudo lsof -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)
+    fi
+    if [ -n "$pids" ]; then
+        log_message "INFO" "Puerto $port en uso por PID(s): $pids. Intentando terminar..."
+        sudo kill -15 $pids 2>/dev/null || true
+        sleep 1
+        for pid in $pids; do
+            if kill -0 "$pid" 2>/dev/null; then sudo kill -9 "$pid" 2>/dev/null || true; fi
+        done
+        sleep 1
+    fi
+    if ss -tuln | grep -q ":$port"; then
+        log_message "ERROR" "No se pudo liberar el puerto $port."
+        exit 1
+    fi
+    log_message "OK" "Puerto $port liberado o disponible."
+}
+
+# Liberar puertos 5000 y 443
+log_message "INFO" "Liberando puertos 5000 y 443..."
+for port in 5000 443; do
+    free_port_single $port
+done
+
+# Configurar servicio systemd
+log_message "DEBUG" "Configurando servicio systemd..."
+if ! sudo bash -c "cat > $SERVICE_FILE" <<SERVICEEOF
+[Unit]
+Description=Ryuz WAN Simulator Dashboard
+After=network-online.target wansim-l2-persist.service
+Wants=network-online.target
+Requires=wansim-l2-persist.service
+
+[Service]
+User=$CURRENT_USER
+WorkingDirectory=$USER_HOME
+Environment=PATH=$PATH
+Environment=PYTHONPATH=$HOME/.local/lib/python3.8/site-packages:/usr/local/lib/python3.8/dist-packages:$PYTHONPATH
+ExecStart=/usr/bin/python3 $WANSIM_DASHBOARD
+Restart=always
+StandardOutput=append:/tmp/wansim_service.log
+StandardError=append:/tmp/wansim_service.log
+
+[Install]
+WantedBy=multi-user.target
+SERVICEEOF
+then
+    log_message "ERROR" "No se pudo crear el archivo de servicio systemd $SERVICE_FILE."
+    echo "${COLOR_ERROR}No se pudo crear $SERVICE_FILE. Revisa permisos con 'ls -ld $(dirname $SERVICE_FILE)'.${COLOR_RESET}"
+    exit 1
+fi
+
+if ! sudo systemctl daemon-reload; then
+    log_message "ERROR" "No se pudo recargar la configuración de systemd."
+    echo "${COLOR_ERROR}Fallo al recargar systemd. Revisa con 'sudo systemctl status'.${COLOR_RESET}"
+    exit 1
+fi
+if ! sudo systemctl enable wansim.service; then
+    log_message "ERROR" "No se pudo habilitar el servicio wansim.service."
+    echo "${COLOR_ERROR}Fallo al habilitar wansim.service. Revisa con 'sudo systemctl status wansim.service'.${COLOR_RESET}"
+    exit 1
+fi
+if ! sudo systemctl restart wansim.service; then
+    log_message "ERROR" "No se pudo iniciar el servicio wansim.service."
+    echo "${COLOR_ERROR}Fallo al iniciar wansim.service. Revisa con 'sudo systemctl status wansim.service'.${COLOR_RESET}"
+    exit 1
+fi
+log_message "OK" "wansim.service configurado y iniciado."
+
+# Verificar despliegue del servidor Flask
+log_message "INFO" "Verificando despliegue de Flask..."
+sleep 5
+if ss -tuln | grep -q ":5000\|:443"; then
+    log_message "OK" "Flask desplegado correctamente."
+    echo "${COLOR_OK}Flask - Desplegado correctamente.${COLOR_RESET}"
+else
+    log_message "ERROR" "Flask no se desplegó. Revisa los logs en /tmp/wansim_dashboard.log y /tmp/wansim_service.log."
+    echo "${COLOR_ERROR}Flask no se desplegó. Revisa con 'cat /tmp/wansim_service.log' y '/tmp/wansim_dashboard.log'.${COLOR_RESET}"
+    exit 1
+fi
 
 
 # SECCIÓN 7: Finalización y Notificaciones
@@ -2229,18 +1779,13 @@ chown "$CURRENT_USER:$CURRENT_USER" "$API_TOKENS"
 log_message "OK" "Tokens de API generados en $API_TOKENS."
 
 # Mostrar resumen de configuración
+if [ ${#BRIDGE_INTERFACES[@]} -eq 0 ] && [ -n "${BRIDGE_INTERFACES_CSV:-}" ]; then IFS="," read -r -a BRIDGE_INTERFACES <<< "$BRIDGE_INTERFACES_CSV"; fi
 HOSTNAME=$(hostname)
 echo "${COLOR_CYAN}┌════════════════════ Resumen de Configuración ═══════════┐${COLOR_RESET}"
 echo "${COLOR_CYAN}│                                                        │${COLOR_RESET}"
 if [ "$TOPOLOGY_MODE" = "bridge" ]; then
-    echo "${COLOR_CYAN}│ ${COLOR_GREEN}LAN:${COLOR_RESET} $LAN_IF${COLOR_CYAN}                                        │${COLOR_RESET}"
-    echo "${COLOR_CYAN}│       |                                                │${COLOR_RESET}"
-    echo "${COLOR_CYAN}│ ${COLOR_CYAN}$HOSTNAME${COLOR_CYAN}                                          │${COLOR_RESET}"
-    echo "${COLOR_CYAN}│       |                                                │${COLOR_RESET}"
-    echo "${COLOR_CYAN}│ ${COLOR_GREEN}Destino:${COLOR_RESET} $DEST_IF${COLOR_CYAN}                                  │${COLOR_RESET}"
-    echo "${COLOR_CYAN}│                                                        │${COLOR_RESET}"
-    echo "${COLOR_CYAN}│ ${COLOR_CYAN}Control de Tráfico:${COLOR_RESET} $( [ "$CONFIG_TC" = "s" ] && echo "Habilitado" || echo "Deshabilitado")${COLOR_CYAN}                    │${COLOR_RESET}"
-    echo "${COLOR_CYAN}│ ${COLOR_CYAN}Gestión con Salida a Internet:${COLOR_RESET} $( [ "$IS_MGMT" = "s" ] && echo "Sí" || echo "No")${COLOR_RESET}"
+    echo "${COLOR_CYAN}│ ${COLOR_CYAN}Interfaces Bridge:${COLOR_RESET} ${BRIDGE_INTERFACES_CSV:-${BRIDGE_INTERFACES[*]}}${COLOR_CYAN}         │${COLOR_RESET}"
+    echo "${COLOR_CYAN}│ ${COLOR_CYAN}Control de Tráfico:${COLOR_RESET} Habilitado${COLOR_CYAN}               │${COLOR_RESET}"
 else
     echo "${COLOR_CYAN}│ ${COLOR_GREEN}WAN:${COLOR_RESET} $WAN_IF${COLOR_CYAN}                                        │${COLOR_RESET}"
     echo "${COLOR_CYAN}│       |                                                │${COLOR_RESET}"
@@ -2291,19 +1836,6 @@ if [ "$INTERACTIVE" -eq 1 ]; then
     fi
 fi
 
-# Notificación a Telegram si está configurado
-if [ "$INTEGRATE_TELEGRAM" = "s" ]; then
-    log_message "INFO" "Enviando notificación a Telegram..."
-    curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
-        -d chat_id="$TELEGRAM_CHAT_ID" \
-        -d text="Ryuz WAN Simulator configurado en $HOST_IP. Dashboard: http://$HOST_IP:$DASHBOARD_PORT" > /dev/null
-    if [ $? -eq 0 ]; then
-        log_message "OK" "Notificación enviada a Telegram."
-    else
-        log_message "ERROR" "Fallo al enviar notificación a Telegram."
-    fi
-fi
-
 # Mostrar URL del dashboard y código QR
 HTTP_URL="http://$HOST_IP:$DASHBOARD_PORT"
 echo "${COLOR_INFO}Dashboard disponible en: $HTTP_URL${COLOR_RESET}"
@@ -2316,22 +1848,3 @@ fi
 
 # Mensaje final
 echo "${COLOR_OK}Script completado. Revisa $LOGFILE para más detalles.${COLOR_RESET}"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

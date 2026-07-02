@@ -1,6 +1,6 @@
 # Ryuz WAN Simulator (WANsim2.sh)
 
-**Versión 1.100** | **Autor**: decameru@outlook.com
+**Versión 1.107** | **Autor**: decameru@outlook.com
 
 ---
 
@@ -9,16 +9,17 @@
 **Ryuz WAN Simulator** es una herramienta empresarial para **simular redes WAN** en entornos Linux. Permite emular **latencia, jitter (variación de latencia) y pérdida de paquetes** en interfaces de red, ideal para probar aplicaciones en condiciones de red controladas.
 
 ### 🎯 Funcionalidades Principales
-- Simulación de **VLANs** en una sola interfaz física.
-- Control de tráfico (**latencia**, **jitter**, **pérdida de paquetes**) en tiempo real.
+- Simulación de **VLANs** en una sola interfaz física (modo NAT)
+- Control de tráfico (**latencia**, **jitter**, **pérdida de paquetes**) en tiempo real
 - Dos modos de operación:
-  - **NAT único**: Simula una salida a Internet con NAT para múltiples VLANs.
-  - **Puente LAN-to-LAN**: Conecta dos interfaces de red en modo puente (bridge).
-- **Servidor DHCP automático** para asignar IPs a las VLANs.
-- **Dashboard web funcional** basado en Flask para monitorear y configurar parámetros.
-- **Base ReactUI/FastAPI** incluida como evolución del dashboard sin retirar la funcionalidad actual.
-- **Integración con Telegram** para controlar el simulador mediante un bot.
-- **Persistencia de configuración** (guarda los parámetros para futuras ejecuciones).
+  - **L3 / NAT único**: Simula una salida a Internet con NAT para múltiples VLANs + DHCP
+  - **Bridge L2**: Crea de 1 a 3 bridges por pares de interfaces físicas (entrada/salida)
+- **Servidor DHCP automático** para asignar IPs a las VLANs
+- **Dashboard web funcional** basado en Flask para monitorear y configurar parámetros
+- **Persistencia de bridges L2** mediante servicio systemd (wansim-l2-persist.service)
+- **Integración con Telegram** para controlar el simulador mediante un bot
+- **Persistencia de configuración** (guarda los parámetros para futuras ejecuciones)
+- **Base ReactUI/FastAPI** incluida como evolución del dashboard
 
 ---
 
@@ -31,186 +32,158 @@
 - Raspberry Pi OS (con soporte para VLANs)
 
 ### 🔧 Requisitos Mínimos
-- **Usuario no root**: El script **no debe ejecutarse como root** (lo verifica automáticamente).
-- **Conexión a Internet**: Necesaria para instalar dependencias.
-- **Permisos de sudo**: El script configura automáticamente los permisos necesarios.
+- **Usuario no root**: El script **no debe ejecutarse como root** (lo verifica automáticamente)
+- **Conexión a Internet**: Necesaria para instalar dependencias
+- **Permisos de sudo**: El script configura automáticamente los permisos necesarios
 
 ---
 
-## 🛠️ Instalación y Ejecución
+## 🚀 Instalación Rápida
 
-El script **incluye un motor de instalación robusto** que se encarga de todo: dependencias del sistema, dependencias de Python, permisos de sudo y configuraciones iniciales.
-
-### 1️⃣ Descargar el repositorio en Ubuntu Server
-En Ubuntu Server usa el repositorio completo. No ejecutes el script sin cambiar permisos primero.
+### Método más simple (recomendado):
 
 ```bash
+# 1. Clonar el repositorio
 git clone https://github.com/Ryuz-crypto/WAN_SIM.git
 cd WAN_SIM
-chmod +x WANsim2.sh
-```
 
-### 2️⃣ Habilitar el Módulo 8021q (VLANs)
-Ejecuta este comando **una sola vez** (el script no lo hace automáticamente):
-```bash
+# 2. Dar permisos de ejecución
+chmod +x WANsim2.sh
+
+# 3. Habilitar módulo 8021q (VLANs) - SOLO UNA VEZ
 sudo modprobe 8021q
 echo "8021q" | sudo tee -a /etc/modules
-```
 
-### 3️⃣ Ejecutar el Script
-```bash
+# 4. Ejecutar el script
 ./WANsim2.sh
 ```
 
-**El script se encargará de:**
-✅ Configurar permisos de sudo automáticamente.
-✅ Actualizar los repositorios de paquetes.
-✅ Instalar todas las dependencias del sistema (python3, iproute2, vlan, etc.).
-✅ Instalar dependencias de Python obligatorias (flask, requests, pyOpenSSL), usando APT primero y pip como respaldo.
-✅ Instalar `python-telegram-bot` solo si eliges activar Telegram.
-✅ Verificar que todo esté listo antes de continuar.
+**¡Eso es todo!** El script se encargará automáticamente de:
+✅ Configurar permisos de sudo
+✅ Actualizar repositorios de paquetes
+✅ Instalar todas las dependencias del sistema
+✅ Instalar dependencias de Python
+✅ Configurar la red según tus preferencias
+✅ Iniciar el dashboard web
 
 ---
 
-## 🎮 Menús y Configuración
+## 📋 Instalación Manual (Alternativa)
 
-El script te guiará paso a paso con menús interactivos. A continuación, se describen las opciones principales:
+Si prefieres más control sobre el proceso:
 
----
+```bash
+# Instalar dependencias manualmente
+sudo apt update
+sudo apt install -y git python3 python3-pip iproute2 ifstat qrencode net-tools vlan sudo lsof isc-dhcp-server iptables-persistent
 
-### 📋 Selección de Topología
+# Instalar dependencias Python
+pip3 install --user flask requests pyOpenSSL "python-telegram-bot==13.15" --no-warn-script-location
+
+# Clonar y ejecutar
+git clone https://github.com/Ryuz-crypto/WAN_SIM.git
+cd WAN_SIM
+chmod +x WANsim2.sh
+sudo modprobe 8021q
+echo "8021q" | sudo tee -a /etc/modules
+./WANsim2.sh
 ```
-┌─────────────────────────────────────────────────────────────┐
-│ Selecciona la topología de red:                             │
-│  1) NAT único (salida a Internet)                           │
-│  2) Puente LAN-to-LAN (peer-to-peer)                        │
-└─────────────────────────────────────────────────────────────┘
+
+---
+
+## 🎮 Configuración Interactiva
+
+El script te guiará paso a paso con menús interactivos.
+
+### Selección de Topología
+
+```
+┌─────────────────── Topología de Red ───────────────────────┐
+│ Selecciona la topología de red:                           │
+│  1) L3 / NAT único (VLANs + DHCP + salida a Internet)     │
+│  2) Bridge (intervenir interfaces físicas, 1 a 3)         │
+└───────────────────────────────────────────────────────────┘
 ```
 
 | Opción | Descripción |
 |--------|-------------|
-| **1**  | Modo **NAT único**: Simula una salida a Internet con NAT para múltiples VLANs. |
-| **2**  | Modo **Bridge**: Crea un puente entre dos interfaces de red (LAN-to-LAN). |
+| **1**  | Modo **L3/NAT**: Crea múltiples VLANs en una interfaz LAN con NAT hacia WAN. Ideal para simular múltiples enlaces WAN con salida a Internet |
+| **2**  | Modo **Bridge L2**: Crea de 1 a 3 bridges entre pares de interfaces físicas (entrada/salida). Ideal para conectar redes locales |
 
----
+### Modo L3/NAT
 
-### 🔧 Parámetros para Modo NAT
+Configura:
+- **Número de VLANs**: Cuántos enlaces simular (predeterminado: 10)
+- **ID inicial de VLANs**: ID base para las VLANs (1-4094, predeterminado: 100)
+- **DHCP**: Activar/desactivar servidor DHCP
+- **Segmento de red**: 10.254.X.0/24, 172.16.X.0/24 o 192.168.X.0/24
+- **Tercer octeto**: Octeto inicial para las subredes (1-254, predeterminado: 10)
+- **Interfaz WAN**: Interfaz con salida a Internet
+- **Interfaz LAN**: Interfaz donde se crearán las VLANs
 
-#### 1️⃣ Configuración de VLANs
-- **Número de VLANs**: ¿Cuántos enlaces simular? (Predeterminado: `10`).
-- **IDs de VLANs**: ¿Definir manualmente? (s/n). Si seleccionas `s`, ingresa el ID inicial (1-4094).
+### Modo Bridge L2
 
-#### 2️⃣ Configuración de DHCP
-- **¿Configurar DHCP?** (s/n, predeterminado: `s`).
-- **Segmento de red**: Selecciona entre:
-  - 1) `10.254.X.0/24`
-  - 2) `172.16.X.0/24`
-  - 3) `192.168.X.0/24` (predeterminado)
-  - 4) Personalizado (ingresa manualmente, ej: `192.168`).
-- **Tercer octeto**: Ingresa el tercer octeto inicial para las VLANs (1-254, predeterminado: `10`).
+Configura:
+- **Número de bridges**: De 1 a 3 (predeterminado: 1)
+- Para cada bridge:
+  - **Interfaz de ENTRADA**: Interfaz física de entrada
+  - **Interfaz de SALIDA**: Interfaz física de salida
+- **Control de tráfico**: Aplicar tc/netem en las interfaces (predeterminado: sí)
 
-#### 3️⃣ Interfaces de Red
-- **Interfaz WAN**: Ingresa la interfaz con salida a Internet (ej: `eth0`).
-- **Interfaz LAN**: Ingresa la interfaz donde se crearán las VLANs (ej: `eth1`).
+### Integración con Telegram (Opcional)
 
-#### 4️⃣ Integración con Telegram (Opcional)
-- **¿Integrar con Telegram?** (s/n, predeterminado: `n`).
-- **Token del bot**: Ingresa el token de tu bot de Telegram.
-- **Chat ID**: Ingresa el ID del chat (o déjalo vacío para obtenerlo automáticamente).
-
----
-
-### 🌉 Parámetros para Modo Bridge
-
-#### 1️⃣ Configuración de Interfaces
-- **Interfaz LAN**: Ingresa la interfaz local (ej: `eth0`).
-- **Interfaz de destino**: Ingresa la interfaz de salida (ej: `eth1`).
-- **¿Es interfaz de gestión?** (s/n, predeterminado: `n`): Indica si la interfaz de destino tiene salida a Internet.
-- **¿Aplicar control de tráfico?** (s/n, predeterminado: `n`): Aplica un límite de 10Mbit/s en el puente.
-
-#### 2️⃣ Integración con Telegram (Opcional)
-Igual que en el modo NAT.
-
----
-
-### 🔄 Configuración Previa
-Si el script detecta una configuración guardada, mostrará:
-```
-┌─────────────────────────────────────────────────────────────┐
-│  r) Reutilizar configuración existente                         │
-│  c) Configurar nuevo modo de operación                         │
-│  s) Salir                                                     │
-└─────────────────────────────────────────────────────────────┘
-[ENTRADA] Selecciona una opción [r/c/s, predeterminado r]: 
-```
+- **Token del Bot**: Token de tu bot de Telegram
+- **Chat ID**: ID del chat (puede obtenerse automáticamente)
 
 ---
 
 ## 📊 Dashboard Web
 
-Una vez configurado, el script iniciará automáticamente un **dashboard web** en el puerto `5000`. Accede desde tu navegador:
+Una vez configurado, el dashboard estará disponible en:
 ```
 http://<IP_DEL_SERVIDOR>:5000
 ```
 
-### 🎨 Interfaz del Dashboard
-- **Tarjetas para cada VLAN/interfaz**:
-  - Campos para configurar **latencia (ms)**, **jitter (ms)** y **pérdida (%)**.
-  - Botones para **Aplicar** o **Restablecer** la configuración.
-  - Botones rápidos para valores predefinidos (latencia: 100ms, 300ms, 500ms; jitter: 50ms, 100ms, 200ms; pérdida: 1%, 5%, 10%).
-  - Gráficos de barras con estadísticas de tráfico.
-  - Estadísticas en tiempo real de ancho de banda (Mbps, Kbps, MB, KB).
-- **Selector de unidades**: Cambia entre Mbps, Kbps, MB o KB.
-- **Botón global**: Restablecer todas las interfaces.
+### Características del Dashboard:
+- **Tarjetas para cada interfaz/VLAN** con:
+  - Campos para configurar latencia (ms), jitter (ms) y pérdida (%)
+  - Botones para Aplicar o Restablecer
+  - Botones rápidos para valores predefinidos
+  - Gráficos de barras con estadísticas
+  - Estadísticas en tiempo real de ancho de banda
+- **Selector de unidades**: Mbps, Kbps, MB/s, KB/s
+- **Botón global**: Restablecer todas las interfaces
+- **Información detallada**: MAC, peer, bridge, rol
 
 ---
 
-## 🧭 ReactUI/FastAPI
+## 🔄 Persistencia
 
-La base de la interfaz React solicitada vive en [`DashboardAPI-EC/`](DashboardAPI-EC/README.md). Incluye frontend React + TypeScript + Material UI, backend FastAPI, PostgreSQL/TimescaleDB, Redis, Celery y Nginx para una evolución modular del dashboard.
+### Persistencia de Bridges L2
+La versión 1.107 incluye un servicio systemd (`wansim-l2-persist.service`) que:
+- Recrea automáticamente los bridges L2 al reiniciar el sistema
+- Restaura el estado de tc/netem (latencia, jitter, pérdida)
+- Se ejecuta antes del servicio principal de WAN Simulator
 
-Importante: `WANsim2.sh` conserva el dashboard Flask como interfaz operativa completa porque ahí viven hoy las acciones de control de latencia, jitter, pérdida, VLANs, métricas y Telegram. ReactUI debe usarse como evolución paralela hasta que consuma los mismos endpoints y alcance paridad funcional. No reemplaces Flask por ReactUI si necesitas mantener todas las funciones actuales.
-
-Arranque local:
-```bash
-cd DashboardAPI-EC
-cp .env.example .env
-docker compose up --build
-```
-
-URLs principales:
-- UI React: `http://localhost:8080`
-- API: `http://localhost:8080/api/v1`
-- Swagger: `http://localhost:8080/api/v1/docs`
-
----
-
-## 🤖 Integración con Telegram
-
-Si configuraste Telegram, podrás controlar el simulador mediante un bot:
-
-1. **Inicia el bot** en Telegram (ej: `@MiWANSimBot`).
-2. **Envía `/start` o `/config`** para comenzar.
-3. **Selecciona una VLAN** del menú.
-4. **Ingresa los parámetros** en orden:
-   - Latencia (ms)
-   - Jitter (ms)
-   - Pérdida (%)
+### Persistencia de Configuración
+Todos los parámetros se guardan en:
+- `~/emix_abundix.conf` - Configuración principal
+- `~/wansim_netem_state.json` - Estado de tc/netem
 
 ---
 
 ## 📁 Archivos Generados
 
-El script genera los siguientes archivos:
-
 | Archivo | Descripción |
 |--------|-------------|
-| `~/emix_abundix.conf` | Configuración guardada. |
-| `~/wansim_dashboard.py` | Script del dashboard web. |
-| `~/api_tokens.json` | Tokens de API (si usas Telegram). |
-| `~/emix_abundix.log` | Log principal. |
-| `/etc/iptables/rules.v4` | Reglas de iptables (para NAT). |
-| `/etc/dhcp/dhcpd.conf` | Configuración del servidor DHCP. |
+| `~/emix_abundix.conf` | Configuración guardada |
+| `~/wansim_dashboard.py` | Script del dashboard web |
+| `~/api_tokens.json` | Tokens de API |
+| `~/emix_abundix.log` | Log principal |
+| `/etc/iptables/rules.v4` | Reglas de iptables (para NAT) |
+| `/etc/dhcp/dhcpd.conf` | Configuración del servidor DHCP |
+| `/usr/local/sbin/wansim_l2_persist.sh` | Script de persistencia L2 |
+| `/etc/systemd/system/wansim-l2-persist.service` | Servicio de persistencia L2 |
 
 ---
 
@@ -218,7 +191,43 @@ El script genera los siguientes archivos:
 
 | Puerto | Descripción |
 |--------|-------------|
-| **5000** | Dashboard web (Flask). |
+| **5000** | Dashboard web (Flask) |
+
+---
+
+## 📜 Release Notes
+
+### Versión 1.107 (Actual)
+**Fecha**: 2024
+
+✨ **Nuevas funcionalidades:**
+- **Soporte para múltiples bridges L2**: Ahora puedes crear de 1 a 3 bridges, cada uno con su par de interfaces entrada/salida
+- **Persistencia de bridges L2**: Servicio systemd que recrea bridges y restaura estado tc/netem al reiniciar
+- **Mejor manejo de interfaces**: Detección y validación mejorada de interfaces de red
+- **Dashboard mejorado**: Muestra información de bridge, rol y peer para cada interfaz
+- **Versión específica de python-telegram-bot**: 13.15 para mayor compatibilidad
+
+🔧 **Mejoras:**
+- Función `reset_interface()` más robusta con manejo de AppArmor y bloqueos de iptables
+- Manejo mejorado de VLANs con IDs alternativos (1000, 2000, 3000) si hay conflictos
+- Validación de longitud de nombres de VLANs (< 15 caracteres)
+- Liberación robusta de puertos (5000, 5001, 5002)
+- Manejo mejorado de bloqueos de apt/dpkg
+- Configuración automática de iptables-persistent
+
+🐛 **Correcciones:**
+- Problemas con archivo de bloqueo `/run/xtables.lock`
+- Errores al eliminar VLANs existentes
+- Problemas de permisos en archivos de log
+- Manejo de errores en configuración DHCP
+
+### Versión 1.100
+**Fecha**: 2024
+
+- Versión inicial con soporte básico para NAT y Bridge
+- Dashboard Flask funcional
+- Integración con Telegram
+- Configuración de VLANs y DHCP
 
 ---
 
@@ -229,6 +238,7 @@ El script genera los siguientes archivos:
 ```bash
 sudo modprobe 8021q
 sudo apt install -y vlan
+echo "8021q" | sudo tee -a /etc/modules
 ```
 
 ### ❌ Error: "No se pudo activar la interfaz"
@@ -242,6 +252,9 @@ sudo ip link set <interfaz> up
 **Solución:**
 ```bash
 sudo fuser -k 5000/tcp
+# o
+sudo lsof -i :5000
+sudo kill -9 <PID>
 ```
 
 ### ❌ Error: "No se pudo instalar <paquete>"
@@ -251,49 +264,21 @@ sudo apt update
 sudo apt install -y <paquete>
 ```
 
-### ❌ Error: timeout al instalar Flask desde PyPI
-El instalador de `WANsim2.sh` intenta instalar Flask, requests y pyOpenSSL desde APT primero (`python3-flask`, `python3-requests`, `python3-openssl`). Si APT no puede resolverlos, usa pip con reintentos, `--prefer-binary`, timeout de 300 segundos y `--break-system-packages` solo cuando tu versión de pip lo soporta.
-
-Si ves `Connection reset by peer` o tu red sigue cortando la descarga de PyPI, normalmente el script continuará usando APT para Flask. Para forzar más margen en pip:
-```bash
-PIP_TIMEOUT=600 PIP_RETRIES=15 ./WANsim2.sh
-```
-
-Si no usas Telegram, puedes continuar sin `python-telegram-bot`; el dashboard base no depende de ese paquete.
-
 ### ❌ Error: "No se pudo obtener el Chat ID de Telegram"
 **Solución:**
-1. Asegúrate de que el token del bot sea correcto.
-2. Envía un mensaje al bot desde el chat donde deseas recibir notificaciones.
-3. Reintenta la configuración.
+1. Asegúrate de que el token del bot sea correcto
+2. Envía un mensaje al bot desde el chat donde deseas recibir notificaciones
+3. Reintenta la configuración
 
----
+### ❌ Error: "Sintaxis de wansim_dashboard.py"
+**Solución:**
+```bash
+# Verifica la sintaxis
+python3 -m py_compile ~/wansim_dashboard.py
 
-## 📜 Ejemplo de Configuración
-
-### Ejemplo 1: Modo NAT con 5 VLANs
-1. **Topología**: NAT único.
-2. **Número de VLANs**: `5`.
-3. **Segmento de red**: `192.168.X.0/24`.
-4. **Tercer octeto**: `10`.
-5. **DHCP**: Sí.
-6. **Interfaz WAN**: `eth0`.
-7. **Interfaz LAN**: `eth1`.
-
-**Resultado:**
-- Se crearán 5 VLANs (`v_100` a `v_104`) en `eth1` con IPs desde `192.168.10.1/24` hasta `192.168.14.1/24`.
-- Cada VLAN tendrá un servidor DHCP configurado.
-- Las VLANs tendrán acceso a Internet a través de NAT en `eth0`.
-
-### Ejemplo 2: Modo Bridge con Control de Tráfico
-1. **Topología**: Puente LAN-to-LAN.
-2. **Interfaz LAN**: `eth0`.
-3. **Interfaz de destino**: `eth1`.
-4. **Control de tráfico**: Sí.
-
-**Resultado:**
-- Se creará un puente (`br0`) entre `eth0` y `eth1`.
-- Se aplicará un control de tráfico de **10Mbit/s** en `eth0`.
+# Si hay errores, revisa los logs
+cat /tmp/wansim_debug.log
+```
 
 ---
 
@@ -304,40 +289,43 @@ Si no usas Telegram, puedes continuar sin `python-telegram-bot`; el dashboard ba
 nohup ./WANsim2.sh > /dev/null 2>&1 &
 ```
 
-### Crear un Servicio Systemd
-1. Crea el archivo de servicio:
-   ```bash
-   sudo nano /etc/systemd/system/wansim.service
-   ```
-2. Agrega el siguiente contenido (ajusta las rutas):
-   ```ini
-   [Unit]
-   Description=Ryuz WAN Simulator
-   After=network.target
+### Crear un Servicio Systemd Personalizado
+```bash
+sudo nano /etc/systemd/system/wansim-custom.service
+```
 
-   [Service]
-   User=tu_usuario
-   WorkingDirectory=/ruta/al/script
-   ExecStart=/ruta/al/script/WANsim2.sh
-   Restart=always
-   RestartSec=10
+Contenido:
+```ini
+[Unit]
+Description=Ryuz WAN Simulator Custom
+After=network-online.target
+Wants=network-online.target
 
-   [Install]
-   WantedBy=multi-user.target
-   ```
-3. Habilita e inicia el servicio:
-   ```bash
-   sudo systemctl daemon-reload
-   sudo systemctl enable wansim.service
-   sudo systemctl start wansim.service
-   ```
+[Service]
+User=tu_usuario
+WorkingDirectory=/home/tu_usuario/WAN_SIM
+ExecStart=/home/tu_usuario/WAN_SIM/WANsim2.sh
+Restart=always
+RestartSec=10
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/tu_usuario/.local/bin
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Luego:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable wansim-custom.service
+sudo systemctl start wansim-custom.service
+```
 
 ---
 
 ## 📞 Soporte y Contacto
 - **Autor**: [decameru@outlook.com](mailto:decameru@outlook.com)
 - **Repositorio**: [Ryuz-crypto/WAN_SIM](https://github.com/Ryuz-crypto/WAN_SIM)
-- **Versión**: 1.100
+- **Versión**: 1.107
 
 ---
 
