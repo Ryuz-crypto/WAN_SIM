@@ -363,7 +363,7 @@ PYTHON_DEPS=("flask" "requests" "python-telegram-bot" "pyOpenSSL")
 for dep in "${PYTHON_DEPS[@]}"; do
     if ! pip3 show "$dep" >/dev/null 2>&1; then
         log_message "INFO" "Instalando $dep..."
-        if ! pip3 install --user "$dep" --no-warn-script-location; then
+        if ! pip3 install --user --break-system-packages "$dep" --no-warn-script-location; then
             log_message "ERROR" "Falló la instalación de $dep."
             echo "${COLOR_ERROR}No se pudo instalar $dep. Revisa con 'pip3 install $dep'.${COLOR_RESET}"
             exit 1
@@ -1304,7 +1304,7 @@ log_message "INFO" "Verificando dependencias de Python..."
 for module in flask requests python-telegram-bot pyOpenSSL; do
     if ! python3 -c "import $module" 2>/dev/null; then
         log_message "ERROR" "Módulo Python $module no encontrado. Instalando..."
-        if ! pip3 install --user "$module" --no-warn-script-location; then
+        if ! pip3 install --user --break-system-packages "$module" --no-warn-script-location; then
             log_message "ERROR" "No se pudo instalar $module."
             echo "${COLOR_ERROR}Fallo al instalar $module. Revisa con 'pip3 list'.${COLOR_RESET}"
             exit 1
