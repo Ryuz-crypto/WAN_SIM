@@ -319,7 +319,7 @@ for dep in "${DEPENDENCIES[@]}"; do
             fi
             log_message "OK" "Sistema preparado tras liberar bloqueos."
         fi
-        if ! sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "$dep"; then
+        if ! sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y "$dep"; then
             log_message "ERROR" "No se pudo instalar $dep."
             echo "${COLOR_ERROR}No se pudo instalar $dep. Verifica tu conexión a internet o intenta de nuevo.${COLOR_RESET}"
             exit 1
@@ -414,7 +414,7 @@ for dep in "${DEPENDENCIES[@]}"; do
     echo -n "${COLOR_INFO}Instalando $dep...${COLOR_RESET}"
     if ! command -v "$dep" >/dev/null 2>&1 && ! dpkg -l | grep -q "$dep"; then
         log_message "INFO" "$dep no está instalado. Instalando automáticamente..."
-        if ! sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "$dep" >/tmp/install_$dep.log 2>&1; then
+        if ! sudo apt-get update && sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y "$dep" >/tmp/install_$dep.log 2>&1; then
             log_message "ERROR" "Falló la instalación de $dep. Detalles en /tmp/install_$dep.log."
             echo "${COLOR_ERROR} [✗]${COLOR_RESET}"
             exit 1
