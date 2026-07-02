@@ -271,6 +271,16 @@ fi
 log_message "OK" "Lista de paquetes actualizada."
 
 # Verificar e instalar dependencias del sistema
+# Pre-configurar respuestas para iptables-persistent para evitar ventanas de confirmación
+log_message "INFO" "Pre-configurando respuestas para iptables-persistent..."
+if command -v debconf-set-selections >/dev/null 2>&1; then
+    echo "iptables-persistent iptables-persistent/autosave_v4 boolean true" | sudo debconf-set-selections 2>/dev/null
+    echo "iptables-persistent iptables-persistent/autosave_v6 boolean true" | sudo debconf-set-selections 2>/dev/null
+    log_message "OK" "Respuestas para iptables-persistent pre-configuradas."
+else
+    log_message "ADVERTENCIA" "debconf-set-selections no disponible. Se intentará configurar manualmente."
+fi
+
 log_message "DEBUG" "Verificando e instalando dependencias..."
 DEPENDENCIES=("python3" "python3-pip" "iproute2" "ifstat" "qrencode" "net-tools" "vlan" "sudo" "lsof" "isc-dhcp-server" "iptables-persistent")
 LOCK_FILES=("/var/lib/dpkg/lock-frontend" "/var/lib/apt/lists/lock" "/var/cache/apt/archives/lock")
@@ -309,12 +319,28 @@ for dep in "${DEPENDENCIES[@]}"; do
             fi
             log_message "OK" "Sistema preparado tras liberar bloqueos."
         fi
-        if ! sudo apt-get install -y "$dep"; then
+        if ! sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "$dep"; then
             log_message "ERROR" "No se pudo instalar $dep."
             echo "${COLOR_ERROR}No se pudo instalar $dep. Verifica tu conexión a internet o intenta de nuevo.${COLOR_RESET}"
             exit 1
         fi
         log_message "OK" "$dep instalado."
+        # Configurar iptables-persistent automáticamente si es el paquete instalado
+        if [ "$dep" = "iptables-persistent" ]; then
+            log_message "INFO" "Configurando iptables-persistent automáticamente..."
+            sudo mkdir -p /etc/iptables
+            if [ ! -f /etc/iptables/rules.v4 ]; then
+                sudo touch /etc/iptables/rules.v4
+                sudo chmod 644 /etc/iptables/rules.v4
+            fi
+            if [ ! -f /etc/iptables/rules.v6 ]; then
+                sudo touch /etc/iptables/rules.v6
+                sudo chmod 644 /etc/iptables/rules.v6
+            fi
+            sudo iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+            sudo ip6tables-save > /etc/iptables/rules.v6 2>/dev/null || true
+            log_message "OK" "iptables-persistent configurado automáticamente."
+        fi
     else
         log_message "OK" "$dep ya está instalado."
     fi
@@ -388,7 +414,7 @@ for dep in "${DEPENDENCIES[@]}"; do
     echo -n "${COLOR_INFO}Instalando $dep...${COLOR_RESET}"
     if ! command -v "$dep" >/dev/null 2>&1 && ! dpkg -l | grep -q "$dep"; then
         log_message "INFO" "$dep no está instalado. Instalando automáticamente..."
-        if ! sudo apt-get update && sudo apt-get install -y "$dep" >/tmp/install_$dep.log 2>&1; then
+        if ! sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "$dep" >/tmp/install_$dep.log 2>&1; then
             log_message "ERROR" "Falló la instalación de $dep. Detalles en /tmp/install_$dep.log."
             echo "${COLOR_ERROR} [✗]${COLOR_RESET}"
             exit 1
@@ -1175,9 +1201,9 @@ EOF
 
         # Guardar reglas en un archivo temporal y moverlo
         temp_rules="/tmp/iptables_rules.v4"
-        sudo iptables-save > "$temp_rules" 2>/tmp/iptables_error.log
+        sudo timeout 30 iptables-save > "$temp_rules" 2>/tmp/iptables_error.log
         if [ $? -eq 0 ]; then
-            sudo mv "$temp_rules" /etc/iptables/rules.v4 >/tmp/iptables_error.log 2>&1
+            sudo timeout 30 mv "$temp_rules" /etc/iptables/rules.v4 >/tmp/iptables_error.log 2>&1
             if [ $? -eq 0 ]; then
                 sudo chmod 644 /etc/iptables/rules.v4 >/dev/null 2>&1
                 log_message "OK" "Reglas de NAT guardadas correctamente en /etc/iptables/rules.v4."
