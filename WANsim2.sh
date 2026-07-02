@@ -330,15 +330,15 @@ for dep in "${DEPENDENCIES[@]}"; do
             log_message "INFO" "Configurando iptables-persistent automáticamente..."
             sudo mkdir -p /etc/iptables
             if [ ! -f /etc/iptables/rules.v4 ]; then
-                sudo touch /etc/iptables/rules.v4
+                sudo bash -c "touch /etc/iptables/rules.v4"
                 sudo chmod 644 /etc/iptables/rules.v4
             fi
             if [ ! -f /etc/iptables/rules.v6 ]; then
-                sudo touch /etc/iptables/rules.v6
+                sudo bash -c "touch /etc/iptables/rules.v6"
                 sudo chmod 644 /etc/iptables/rules.v6
             fi
-            sudo iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
-            sudo ip6tables-save > /etc/iptables/rules.v6 2>/dev/null || true
+            sudo bash -c "iptables-save > /etc/iptables/rules.v4" 2>/dev/null || true
+            sudo bash -c "ip6tables-save > /etc/iptables/rules.v6" 2>/dev/null || true
             log_message "OK" "iptables-persistent configurado automáticamente."
         fi
     else
@@ -363,7 +363,7 @@ PYTHON_DEPS=("flask" "requests" "python-telegram-bot" "pyOpenSSL")
 for dep in "${PYTHON_DEPS[@]}"; do
     if ! pip3 show "$dep" >/dev/null 2>&1; then
         log_message "INFO" "Instalando $dep..."
-        if ! pip3 install --user --break-system-packages "$dep" --no-warn-script-location; then
+        if ! pip3 install --user --break-system-packages --default-timeout=100 "$dep" --no-warn-script-location; then
             log_message "ERROR" "Falló la instalación de $dep."
             echo "${COLOR_ERROR}No se pudo instalar $dep. Revisa con 'pip3 install $dep'.${COLOR_RESET}"
             exit 1
@@ -430,7 +430,7 @@ done
 # Instalación de dependencias de Python
 log_message "DEBUG" "Instalando dependencias de Python..."
 echo "${COLOR_INFO}Instalando dependencias de Python...${COLOR_RESET}"
-pip3 install --user --break-system-packages flask requests python-telegram-bot==20.7 pyOpenSSL --no-warn-script-location || {
+pip3 install --user --break-system-packages --default-timeout=100 flask requests python-telegram-bot==20.7 pyOpenSSL --no-warn-script-location || {
     log_message "ERROR" "Falló la instalación de dependencias de Python."
     echo "${COLOR_ERROR} [✗]${COLOR_RESET}"
     exit 1
@@ -1304,7 +1304,7 @@ log_message "INFO" "Verificando dependencias de Python..."
 for module in flask requests python-telegram-bot pyOpenSSL; do
     if ! python3 -c "import $module" 2>/dev/null; then
         log_message "ERROR" "Módulo Python $module no encontrado. Instalando..."
-        if ! pip3 install --user --break-system-packages "$module" --no-warn-script-location; then
+        if ! pip3 install --user --break-system-packages --default-timeout=100 "$module" --no-warn-script-location; then
             log_message "ERROR" "No se pudo instalar $module."
             echo "${COLOR_ERROR}Fallo al instalar $module. Revisa con 'pip3 list'.${COLOR_RESET}"
             exit 1
