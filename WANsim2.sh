@@ -693,55 +693,6 @@ if [ "$INTERACTIVE" -eq 1 ]; then
             echo "${COLOR_CYAN}│ primera VLAN, etc.                                        │${COLOR_RESET}"
             echo "${COLOR_CYAN}└───────────────────────────────────────────────────────────┘${COLOR_RESET}"
             while true; do
-
-# Menú Principal
-if [ "$INTERACTIVE" -eq 1 ]; then
-    echo "${COLOR_CYAN}┌─────────────────── Menú Principal ───────────────────────┐${COLOR_RESET}"
-    echo "${COLOR_CYAN}│ Selecciona una opción:                                  │${COLOR_RESET}"
-    echo "${COLOR_CYAN}│  1) L3                                               │${COLOR_RESET}"
-    echo "${COLOR_CYAN}│  2) Opción 2                                          │${COLOR_RESET}"
-    echo "${COLOR_CYAN}│  3) Opción 3                                          │${COLOR_RESET}"
-    echo "${COLOR_CYAN}│  4) Bridge                                            │${COLOR_RESET}"
-    echo "${COLOR_CYAN}│  5) Salir                                             │${COLOR_RESET}"
-    echo "${COLOR_CYAN}└───────────────────────────────────────────────────────────┘${COLOR_RESET}"
-    read -p "Selecciona una opción: " main_option
-    case $main_option in
-        1) l3_menu ;;
-        4) bridge_menu ;;
-        5) exit 0 ;;
-        *) echo "${COLOR_ERROR}Opción inválida${COLOR_RESET}" ;;
-    esac
-fi
-
-
-# Función para el menú Bridge
-function bridge_menu() {
-    echo "${COLOR_CYAN}┌─────────────────── Interfaces de Bridge ─────────────────────┐${COLOR_RESET}"
-    echo "${COLOR_CYAN}│ Interfaces disponibles:                                │${COLOR_RESET}"
-
-    # Mostrar interfaces con MAC address
-    ip -o link show | awk -F': ' '{print \$2, \$NF}' | grep -v lo | while read -r iface mac; do
-        echo "${COLOR_GREEN}  - $iface (MAC: $mac)${COLOR_RESET}"
-    done
-
-    read -p "${COLOR_INFO}[ENTRADA] Selecciona la interfaz a intervenir: ${COLOR_RESET}" selected_iface
-
-    if ! ip link show "\$selected_iface" &>/dev/null; then
-        log_message "ERROR" "Interfaz $selected_iface no existe."
-        return 1
-    fi
-
-    read -p "${COLOR_INFO}[ENTRADA] ¿Cuántas interfaces deseas configurar (1-3)? ${COLOR_RESET}" num_ifaces
-    if [[ ! "\$num_ifaces" =~ ^[1-3]$ ]]; then
-        log_message "ERROR" "Debes seleccionar entre 1 y 3 interfaces."
-        return 1
-    fi
-
-    echo "$selected_iface" > /tmp/bridge_interfaces.txt
-    log_message "OK" "Interfaces seleccionadas para Bridge: $(cat /tmp/bridge_interfaces.txt)"
-    echo "${COLOR_OK}Espera los parámetros desde Flask o Telegram...${COLOR_RESET}"
-}
-
                 read -p "${COLOR_INFO}[ENTRADA] Ingresa el tercer octeto inicial para las VLANs (1-254) [predeterminado 10]: ${COLOR_RESET}" BASE_OCTET
                 BASE_OCTET=${BASE_OCTET:-10}
                 if [[ "$BASE_OCTET" =~ ^[0-9]+$ && "$BASE_OCTET" -ge 1 && "$BASE_OCTET" -le 254 ]]; then

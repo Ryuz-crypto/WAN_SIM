@@ -78,42 +78,19 @@ El script te guiará paso a paso con menús interactivos. A continuación, se de
 
 ---
 
-### 📋 Menú Principal
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     Menú Principal                            │
-│ Selecciona una opción:                                      │
-│  1) L3                                                     │
-│  2) Opción 2                                                │
-│  3) Opción 3                                                │
-│  4) Bridge                                                  │
-│  5) Salir                                                   │
-└─────────────────────────────────────────────────────────────┘
-```
-
-| Opción | Descripción |
-|--------|-------------|
-| **1**  | Modo **L3 (NAT)**: Simula una salida a Internet con NAT para múltiples VLANs. |
-| **4**  | Modo **Bridge**: Crea un puente entre dos interfaces de red (LAN-to-LAN). |
-| **5**  | **Salir**: Termina la ejecución del script. |
-
----
-
-### 🌐 Menú de Topología de Red
-Si seleccionas el modo **NAT (Opción 1)**, el script preguntará:
+### 📋 Selección de Topología
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │ Selecciona la topología de red:                             │
-│  1) NAT único (salida a Internet)                            │
-│  2) Puente LAN-to-LAN (peer-to-peer)                         │
+│  1) NAT único (salida a Internet)                           │
+│  2) Puente LAN-to-LAN (peer-to-peer)                        │
 └─────────────────────────────────────────────────────────────┘
-[ENTRADA] Opción [1-2, predeterminado 1]: 
 ```
 
 | Opción | Descripción |
 |--------|-------------|
-| **1**  | **NAT único**: Ideal para simular una conexión a Internet. |
-| **2**  | **Puente LAN-to-LAN**: Conecta dos interfaces de red directamente. |
+| **1**  | Modo **NAT único**: Simula una salida a Internet con NAT para múltiples VLANs. |
+| **2**  | Modo **Bridge**: Crea un puente entre dos interfaces de red (LAN-to-LAN). |
 
 ---
 
