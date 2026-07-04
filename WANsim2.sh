@@ -27,6 +27,7 @@ NETEM_STATE_FILE="$USER_HOME/wansim_netem_state.json"
 TLS_DIR="$WANSIM_HOME/tls"
 TLS_CERT_FILE="$TLS_DIR/wansim.crt"
 TLS_KEY_FILE="$TLS_DIR/wansim.key"
+TLS_ENABLE_FILE="$TLS_DIR/enabled"
 CURRENT_USER=$(whoami)
 DASHBOARD_PORT=5000
 HOST_IP=$(ip addr show | grep 'inet ' | grep -v '127.0.0.1' | awk '{print $2}' | cut -d'/' -f1 | head -n 1)
@@ -617,67 +618,6 @@ install_der_tls_pair() {
     validate_tls_chain "$TLS_CERT_FILE" "$TLS_KEY_FILE"
 }
 
-configure_https_interactive() {
-    ENABLE_HTTPS=${ENABLE_HTTPS:-n}
-    TLS_MODE=${TLS_MODE:-none}
-    if [ "$INTERACTIVE" -ne 1 ]; then
-        return 0
-    fi
-
-    echo "${COLOR_CYAN}HTTPS / TLS del dashboard${COLOR_RESET}"
-    while true; do
-        read -p "${COLOR_INFO}[ENTRADA] ¿Habilitar HTTPS para el dashboard? (s/n) [predeterminado n]: ${COLOR_RESET}" ENABLE_HTTPS
-        ENABLE_HTTPS=${ENABLE_HTTPS:-n}
-        if [[ "$ENABLE_HTTPS" =~ ^[sSnN]$ ]]; then ENABLE_HTTPS=$(echo "$ENABLE_HTTPS" | tr '[:upper:]' '[:lower:]'); break; fi
-        log_message "ERROR" "Ingresa 's' o 'n'."
-    done
-    if [ "$ENABLE_HTTPS" != "s" ]; then
-        TLS_MODE="none"
-        TLS_CERT_FILE=""
-        TLS_KEY_FILE=""
-        return 0
-    fi
-
-    echo "${COLOR_INFO}Formatos soportados: 1) PEM cert+key  2) PEM bundle  3) PFX/PKCS12  4) DER cert+key${COLOR_RESET}"
-    while true; do
-        read -p "${COLOR_INFO}[ENTRADA] Tipo de certificado [1-4]: ${COLOR_RESET}" TLS_OPTION
-        case "$TLS_OPTION" in
-            1)
-                TLS_MODE="pem"
-                read -p "${COLOR_INFO}[ENTRADA] Ruta del certificado PEM/CRT: ${COLOR_RESET}" TLS_CERT_SRC
-                read -p "${COLOR_INFO}[ENTRADA] Ruta de la llave privada PEM/KEY: ${COLOR_RESET}" TLS_KEY_SRC
-                if install_pem_tls_pair "$TLS_CERT_SRC" "$TLS_KEY_SRC"; then break; fi
-                log_message "ERROR" "No se pudo validar el par PEM. Detalle: $(cat /tmp/wansim_tls_validate.log /tmp/wansim_tls_convert.log 2>/dev/null)"
-                ;;
-            2)
-                TLS_MODE="pem-bundle"
-                read -p "${COLOR_INFO}[ENTRADA] Ruta del bundle PEM con certificado y llave: ${COLOR_RESET}" TLS_BUNDLE_SRC
-                if install_pem_tls_pair "$TLS_BUNDLE_SRC" "$TLS_BUNDLE_SRC"; then break; fi
-                log_message "ERROR" "No se pudo validar el bundle PEM. Detalle: $(cat /tmp/wansim_tls_validate.log /tmp/wansim_tls_convert.log 2>/dev/null)"
-                ;;
-            3)
-                TLS_MODE="pfx"
-                read -p "${COLOR_INFO}[ENTRADA] Ruta del archivo PFX/P12/PKCS12: ${COLOR_RESET}" TLS_PFX_SRC
-                read -s -p "${COLOR_INFO}[ENTRADA] Password del PFX/P12 (Enter si no tiene): ${COLOR_RESET}" TLS_PFX_PASS
-                echo ""
-                if install_pfx_tls_pair "$TLS_PFX_SRC" "$TLS_PFX_PASS"; then break; fi
-                log_message "ERROR" "No se pudo convertir/validar el PFX/P12. Detalle: $(cat /tmp/wansim_tls_validate.log /tmp/wansim_tls_convert.log 2>/dev/null)"
-                ;;
-            4)
-                TLS_MODE="der"
-                read -p "${COLOR_INFO}[ENTRADA] Ruta del certificado DER/CER: ${COLOR_RESET}" TLS_DER_CERT_SRC
-                read -p "${COLOR_INFO}[ENTRADA] Ruta de la llave privada DER: ${COLOR_RESET}" TLS_DER_KEY_SRC
-                if install_der_tls_pair "$TLS_DER_CERT_SRC" "$TLS_DER_KEY_SRC"; then break; fi
-                log_message "ERROR" "No se pudo convertir/validar DER. Detalle: $(cat /tmp/wansim_tls_validate.log /tmp/wansim_tls_convert.log 2>/dev/null)"
-                ;;
-            *)
-                log_message "ERROR" "Selecciona una opcion entre 1 y 4."
-                ;;
-        esac
-    done
-    log_message "OK" "HTTPS habilitado con certificado validado en $TLS_CERT_FILE."
-}
-
 iface_public_ip() {
     local iface="$1"
     local public_ip=""
@@ -939,15 +879,7 @@ if [ "$INTERACTIVE" -eq 1 ]; then
     echo "${COLOR_CYAN}└───────────────────────────────────────────────────────────┘${COLOR_RESET}"
 fi
 
-configure_https_interactive
 ensure_telegram_runtime
-if [ "${ENABLE_HTTPS:-n}" = "s" ]; then
-    if [ -z "${TLS_CERT_FILE:-}" ] || [ -z "${TLS_KEY_FILE:-}" ] || ! validate_tls_chain "$TLS_CERT_FILE" "$TLS_KEY_FILE"; then
-        log_message "ERROR" "HTTPS esta habilitado pero el certificado/llave no son validos. Detalle: $(cat /tmp/wansim_tls_validate.log 2>/dev/null)"
-        echo "${COLOR_ERROR}HTTPS esta habilitado pero el certificado o la llave no son validos. Reconfigura HTTPS o corrige $TLS_CERT_FILE / $TLS_KEY_FILE.${COLOR_RESET}"
-        exit 1
-    fi
-fi
 
 
 # SECCIÓN 5: Configuración de Red
@@ -1362,8 +1294,9 @@ TELEGRAM_TOKEN=$TELEGRAM_TOKEN
 TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID
 ENABLE_HTTPS=${ENABLE_HTTPS:-n}
 TLS_MODE=${TLS_MODE:-none}
-TLS_CERT_FILE=$(printf '%q' "${TLS_CERT_FILE:-}")
-TLS_KEY_FILE=$(printf '%q' "${TLS_KEY_FILE:-}")
+TLS_CERT_FILE=$(printf '%q' "${TLS_CERT_FILE:-$TLS_DIR/wansim.crt}")
+TLS_KEY_FILE=$(printf '%q' "${TLS_KEY_FILE:-$TLS_DIR/wansim.key}")
+TLS_ENABLE_FILE=$(printf '%q' "${TLS_ENABLE_FILE:-$TLS_DIR/enabled}")
 WAN_IF=${WAN_IF:-}
 LAN_IF=${LAN_IF:-}
 DEST_IF=${DEST_IF:-}
@@ -1618,6 +1551,23 @@ TELEGRAM_ENABLED=bool(int(__TELEGRAM_ENABLED__))
 HTTPS_ENABLED=bool(int(__HTTPS_ENABLED__))
 TLS_CERT_FILE=__TLS_CERT_FILE_LITERAL__
 TLS_KEY_FILE=__TLS_KEY_FILE_LITERAL__
+TLS_DIR=__TLS_DIR_LITERAL__
+TLS_ENABLE_FILE=__TLS_ENABLE_FILE_LITERAL__
+CONFIG_FILE=__CONFIG_FILE_LITERAL__
+def tls_is_ready():
+    if not (TLS_CERT_FILE and TLS_KEY_FILE and TLS_ENABLE_FILE):
+        return False
+    if not (os.path.exists(TLS_ENABLE_FILE) and os.path.exists(TLS_CERT_FILE) and os.path.exists(TLS_KEY_FILE)):
+        return False
+    try:
+        import ssl
+        ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(TLS_CERT_FILE,TLS_KEY_FILE)
+        return True
+    except Exception as e:
+        logger.error(f'TLS no valido: {e}')
+        return False
+HTTPS_ENABLED=HTTPS_ENABLED or tls_is_ready()
 def iface_ok(i):
     if not re.match(r'^[A-Za-z0-9_.:@-]+$', i or ''): raise ValueError(f'Interfaz inválida: {i}')
     return i
@@ -1901,8 +1851,108 @@ if TELEGRAM_ENABLED and not Updater:
                 time.sleep(5)
     threading.Thread(target=tg_http_bot,daemon=True).start()
 TEMPLATE=r"""
-<!doctype html><html lang='es'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Ryuz WAN Simulator</title><link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css' rel='stylesheet'><script src='https://cdn.jsdelivr.net/npm/chart.js'></script><style>body{background:linear-gradient(135deg,#1e3c72,#2a5298);color:white;min-height:100vh}.card{background:rgba(255,255,255,.12);border:0;border-radius:15px}.form-control,.form-select{background:rgba(255,255,255,.22);color:white;border:0}.output{background:rgba(0,0,0,.3);padding:10px;border-radius:6px;white-space:pre-wrap}.chart-container{height:200px}.badge-soft{background:rgba(255,255,255,.2);color:white}</style></head><body><div class='container py-4'><h1 class='text-center'>Ryuz WAN Simulator</h1><p class='text-center'>L3/NAT y L2 Bridge por pares entrada/salida</p>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class='alert alert-{{c}}'>{{m}}</div>{% endfor %}{% endwith %}<div class='d-flex justify-content-center gap-2 mb-4'><form method='post' action='{{url_for("configure")}}'><input type='hidden' name='action' value='reset_all'><button class='btn btn-primary'>Restablecer todas</button></form><select id='unit' class='form-select w-auto' onchange='updateCharts()'><option value='mbps'>Mbps</option><option value='kbps'>Kbps</option><option value='mb'>MB/s</option><option value='kb'>KB/s</option></select></div><div class='row'>{% for i in interfaces %}<div class='col-md-6 col-lg-4 mb-4'><div class='card p-4 h-100'><h4>{{stats[i].label}}</h4><div>{% if stats[i].bridge %}<span class='badge badge-soft'>{{stats[i].bridge}}</span>{% endif %} {% if stats[i].role %}<span class='badge badge-soft'>{{stats[i].role}}</span>{% endif %}{% if stats[i].wan %}<span class='badge badge-soft'>WAN {{stats[i].wan}}</span>{% endif %}</div><small>Interfaz: {{i}}{% if stats[i].lan %}<br>LAN: {{stats[i].lan}}{% endif %}{% if stats[i].wan %}<br>WAN: {{stats[i].wan}}{% endif %}{% if stats[i].subnet %}<br>Subred: {{stats[i].subnet}}{% endif %}{% if stats[i].wan_private %}<br>IP WAN privada: {{stats[i].wan_private}}{% endif %}{% if stats[i].wan_public %}<br>IP WAN pública: {{stats[i].wan_public}}{% endif %}{% if stats[i].wan_bw %}<br>BW estimado: {{stats[i].wan_bw}}{% endif %}{% if stats[i].peer %}<br>Peer: {{stats[i].peer}}{% endif %}{% if stats[i].mac %}<br>MAC: {{stats[i].mac}}{% endif %}</small><form method='post' action='{{url_for("configure")}}' class='mt-3'><input type='hidden' name='iface' value='{{i}}'><input type='hidden' name='action' value='apply'><label>Delay/latencia ms</label><input class='form-control' type='number' name='delay' step='.1' min='0' value='{{stats[i].delay}}'><label>Jitter ms</label><input class='form-control' type='number' name='jitter' step='.1' min='0' value='{{stats[i].jitter}}'><label>Ruido/Pérdida %</label><input class='form-control' type='number' name='loss' step='.1' min='0' max='100' value='{{stats[i].loss}}'><div class='mt-3 d-flex gap-2'><button class='btn btn-primary'>Aplicar</button><button class='btn btn-warning' onclick='this.form.elements["action"].value="reset"'>Restablecer</button></div></form><div class='mt-3 d-flex flex-wrap gap-1'>{% for label,d,j,l in quicks %}<form method='post' action='{{url_for("configure")}}'><input type='hidden' name='iface' value='{{i}}'><input type='hidden' name='action' value='apply'><input type='hidden' name='delay' value='{{d}}'><input type='hidden' name='jitter' value='{{j}}'><input type='hidden' name='loss' value='{{l}}'><button class='btn btn-outline-light btn-sm'>{{label}}</button></form>{% endfor %}</div><div class='chart-container mt-3'><canvas id='c{{loop.index}}'></canvas></div><pre class='output mt-2' id='o{{loop.index}}'></pre></div></div>{% endfor %}</div><div class='text-center'>Ryuz WAN Simulator - Versión __WANSIM_VERSION__</div></div><script>const data={{chart|safe}};let charts={};function updateCharts(){let u=document.getElementById('unit').value;data.forEach((x,n)=>{let s=x.stats,vals=[s[u+'_in'],s[u+'_out'],s.delay,s.jitter,s.loss],id='c'+(n+1),ctx=document.getElementById(id);if(!ctx)return;if(charts[id]){charts[id].data.datasets[0].data=vals;charts[id].update()}else{charts[id]=new Chart(ctx.getContext('2d'),{type:'bar',data:{labels:['Entrada','Salida','Delay','Jitter','Ruido/Pérdida'],datasets:[{label:x.label,data:vals,borderWidth:1}]},options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true}}}})}document.getElementById('o'+(n+1)).innerText='WAN: '+(s.wan||'')+'\nLAN: '+(s.lan||'')+'\nSubred: '+(s.subnet||'')+'\nDelay: '+Number(s.delay).toFixed(1)+' ms\nJitter: '+Number(s.jitter).toFixed(1)+' ms\nRuido/Pérdida: '+Number(s.loss).toFixed(1)+' %\nEntrada: '+Number(s[u+'_in']).toFixed(2)+' '+u+'\nSalida: '+Number(s[u+'_out']).toFixed(2)+' '+u})}window.onload=updateCharts;</script></body></html>
+<!doctype html><html lang='es'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Ryuz WAN Simulator</title><link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css' rel='stylesheet'><script src='https://cdn.jsdelivr.net/npm/chart.js'></script><style>body{background:linear-gradient(135deg,#1e3c72,#2a5298);color:white;min-height:100vh}.card{background:rgba(255,255,255,.12);border:0;border-radius:15px}.form-control,.form-select{background:rgba(255,255,255,.22);color:white;border:0}.output{background:rgba(0,0,0,.3);padding:10px;border-radius:6px;white-space:pre-wrap}.chart-container{height:200px}.badge-soft{background:rgba(255,255,255,.2);color:white}</style></head><body><div class='container py-4'><h1 class='text-center'>Ryuz WAN Simulator</h1><p class='text-center'>L3/NAT y L2 Bridge por pares entrada/salida</p>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class='alert alert-{{c}}'>{{m}}</div>{% endfor %}{% endwith %}<div class='d-flex justify-content-center gap-2 mb-4'><form method='post' action='{{url_for("configure")}}'><input type='hidden' name='action' value='reset_all'><button class='btn btn-primary'>Restablecer todas</button></form><a class='btn btn-outline-light' href='{{url_for("tls_settings")}}'>HTTPS</a><select id='unit' class='form-select w-auto' onchange='updateCharts()'><option value='mbps'>Mbps</option><option value='kbps'>Kbps</option><option value='mb'>MB/s</option><option value='kb'>KB/s</option></select></div><div class='row'>{% for i in interfaces %}<div class='col-md-6 col-lg-4 mb-4'><div class='card p-4 h-100'><h4>{{stats[i].label}}</h4><div>{% if stats[i].bridge %}<span class='badge badge-soft'>{{stats[i].bridge}}</span>{% endif %} {% if stats[i].role %}<span class='badge badge-soft'>{{stats[i].role}}</span>{% endif %}{% if stats[i].wan %}<span class='badge badge-soft'>WAN {{stats[i].wan}}</span>{% endif %}</div><small>Interfaz: {{i}}{% if stats[i].lan %}<br>LAN: {{stats[i].lan}}{% endif %}{% if stats[i].wan %}<br>WAN: {{stats[i].wan}}{% endif %}{% if stats[i].subnet %}<br>Subred: {{stats[i].subnet}}{% endif %}{% if stats[i].wan_private %}<br>IP WAN privada: {{stats[i].wan_private}}{% endif %}{% if stats[i].wan_public %}<br>IP WAN pública: {{stats[i].wan_public}}{% endif %}{% if stats[i].wan_bw %}<br>BW estimado: {{stats[i].wan_bw}}{% endif %}{% if stats[i].peer %}<br>Peer: {{stats[i].peer}}{% endif %}{% if stats[i].mac %}<br>MAC: {{stats[i].mac}}{% endif %}</small><form method='post' action='{{url_for("configure")}}' class='mt-3'><input type='hidden' name='iface' value='{{i}}'><input type='hidden' name='action' value='apply'><label>Delay/latencia ms</label><input class='form-control' type='number' name='delay' step='.1' min='0' value='{{stats[i].delay}}'><label>Jitter ms</label><input class='form-control' type='number' name='jitter' step='.1' min='0' value='{{stats[i].jitter}}'><label>Ruido/Pérdida %</label><input class='form-control' type='number' name='loss' step='.1' min='0' max='100' value='{{stats[i].loss}}'><div class='mt-3 d-flex gap-2'><button class='btn btn-primary'>Aplicar</button><button class='btn btn-warning' onclick='this.form.elements["action"].value="reset"'>Restablecer</button></div></form><div class='mt-3 d-flex flex-wrap gap-1'>{% for label,d,j,l in quicks %}<form method='post' action='{{url_for("configure")}}'><input type='hidden' name='iface' value='{{i}}'><input type='hidden' name='action' value='apply'><input type='hidden' name='delay' value='{{d}}'><input type='hidden' name='jitter' value='{{j}}'><input type='hidden' name='loss' value='{{l}}'><button class='btn btn-outline-light btn-sm'>{{label}}</button></form>{% endfor %}</div><div class='chart-container mt-3'><canvas id='c{{loop.index}}'></canvas></div><pre class='output mt-2' id='o{{loop.index}}'></pre></div></div>{% endfor %}</div><div class='text-center'>Ryuz WAN Simulator - Versión __WANSIM_VERSION__</div></div><script>const data={{chart|safe}};let charts={};function updateCharts(){let u=document.getElementById('unit').value;data.forEach((x,n)=>{let s=x.stats,vals=[s[u+'_in'],s[u+'_out'],s.delay,s.jitter,s.loss],id='c'+(n+1),ctx=document.getElementById(id);if(!ctx)return;if(charts[id]){charts[id].data.datasets[0].data=vals;charts[id].update()}else{charts[id]=new Chart(ctx.getContext('2d'),{type:'bar',data:{labels:['Entrada','Salida','Delay','Jitter','Ruido/Pérdida'],datasets:[{label:x.label,data:vals,borderWidth:1}]},options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true}}}})}document.getElementById('o'+(n+1)).innerText='WAN: '+(s.wan||'')+'\nLAN: '+(s.lan||'')+'\nSubred: '+(s.subnet||'')+'\nDelay: '+Number(s.delay).toFixed(1)+' ms\nJitter: '+Number(s.jitter).toFixed(1)+' ms\nRuido/Pérdida: '+Number(s.loss).toFixed(1)+' %\nEntrada: '+Number(s[u+'_in']).toFixed(2)+' '+u+'\nSalida: '+Number(s[u+'_out']).toFixed(2)+' '+u})}window.onload=updateCharts;</script></body></html>
 """
+
+TLS_TEMPLATE=r"""
+<!doctype html><html lang='es'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>HTTPS - Ryuz WAN Simulator</title><link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css' rel='stylesheet'><style>body{background:linear-gradient(135deg,#1e3c72,#2a5298);color:white;min-height:100vh}.panel{background:rgba(255,255,255,.12);border-radius:8px;padding:24px}.form-control,.form-select{background:rgba(255,255,255,.22);color:white;border:0}.form-select option{color:#111}</style></head><body><div class='container py-4'><div class='d-flex justify-content-between align-items-center mb-3'><h1>HTTPS</h1><a class='btn btn-outline-light' href='{{url_for("dashboard")}}'>Dashboard</a></div>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class='alert alert-{{c}}'>{{m}}</div>{% endfor %}{% endwith %}<div class='panel'><p>Estado actual: <strong>{{"habilitado" if enabled else "deshabilitado"}}</strong></p><form method='post' action='{{url_for("tls_upload")}}' enctype='multipart/form-data'><label>Formato</label><select class='form-select mb-3' name='mode'><option value='pfx'>PFX / P12 / PKCS12</option><option value='pem'>PEM certificado + llave</option><option value='bundle'>PEM bundle</option><option value='der'>DER certificado + llave DER</option></select><label>Certificado, bundle o PFX</label><input class='form-control mb-3' type='file' name='cert' required><label>Llave privada, solo para PEM/DER separados</label><input class='form-control mb-3' type='file' name='key'><label>Password, solo para PFX/P12 si aplica</label><input class='form-control mb-3' type='password' name='password'><button class='btn btn-primary'>Activar HTTPS</button></form><form method='post' action='{{url_for("tls_disable")}}' class='mt-3'><button class='btn btn-warning'>Desactivar HTTPS</button></form></div></div></body></html>
+"""
+
+def restart_service_later():
+    def _restart():
+        try:
+            subprocess.run('sudo systemctl restart wansim.service',shell=True,timeout=20)
+        except Exception as e:
+            logger.error(f'No se pudo reiniciar wansim.service: {e}')
+    threading.Timer(1.0,_restart).start()
+
+def write_tls_config(enabled):
+    try:
+        lines=[]
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE,'r',encoding='utf-8',errors='ignore') as f:
+                lines=f.read().splitlines()
+        values={'ENABLE_HTTPS':'s' if enabled else 'n','TLS_MODE':'web','TLS_CERT_FILE':TLS_CERT_FILE,'TLS_KEY_FILE':TLS_KEY_FILE,'TLS_ENABLE_FILE':TLS_ENABLE_FILE}
+        seen=set(); out=[]
+        for line in lines:
+            key=line.split('=',1)[0] if '=' in line else ''
+            if key in values:
+                out.append(f'{key}={values[key]}'); seen.add(key)
+            else:
+                out.append(line)
+        for key,val in values.items():
+            if key not in seen: out.append(f'{key}={val}')
+        with open(CONFIG_FILE,'w',encoding='utf-8') as f:
+            f.write('\n'.join(out)+'\n')
+    except Exception as e:
+        logger.error(f'No se pudo actualizar config TLS: {e}')
+
+def save_upload(field, target):
+    item=request.files.get(field)
+    if not item or not item.filename:
+        raise ValueError(f'Archivo requerido: {field}')
+    item.save(target)
+
+def validate_tls_pair():
+    import ssl
+    ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(TLS_CERT_FILE,TLS_KEY_FILE)
+
+def install_tls_from_request():
+    os.makedirs(TLS_DIR,exist_ok=True)
+    os.chmod(TLS_DIR,0o700)
+    mode=(request.form.get('mode') or '').strip()
+    cert_tmp=os.path.join(TLS_DIR,'upload_cert.tmp')
+    key_tmp=os.path.join(TLS_DIR,'upload_key.tmp')
+    save_upload('cert',cert_tmp)
+    password=request.form.get('password') or ''
+    if mode=='pfx':
+        c=subprocess.run(['openssl','pkcs12','-in',cert_tmp,'-clcerts','-nokeys','-out',TLS_CERT_FILE,'-passin',f'pass:{password}'],capture_output=True,text=True,timeout=30)
+        k=subprocess.run(['openssl','pkcs12','-in',cert_tmp,'-nocerts','-nodes','-out',TLS_KEY_FILE,'-passin',f'pass:{password}'],capture_output=True,text=True,timeout=30)
+        if c.returncode or k.returncode: raise ValueError((c.stderr or '')+(k.stderr or ''))
+    elif mode=='pem':
+        save_upload('key',key_tmp)
+        os.replace(cert_tmp,TLS_CERT_FILE); os.replace(key_tmp,TLS_KEY_FILE)
+    elif mode=='bundle':
+        os.replace(cert_tmp,TLS_CERT_FILE)
+        with open(TLS_CERT_FILE,'rb') as src, open(TLS_KEY_FILE,'wb') as dst: dst.write(src.read())
+    elif mode=='der':
+        save_upload('key',key_tmp)
+        c=subprocess.run(['openssl','x509','-inform','DER','-in',cert_tmp,'-out',TLS_CERT_FILE],capture_output=True,text=True,timeout=30)
+        k=subprocess.run(['openssl','rsa','-inform','DER','-in',key_tmp,'-out',TLS_KEY_FILE],capture_output=True,text=True,timeout=30)
+        if c.returncode or k.returncode: raise ValueError((c.stderr or '')+(k.stderr or ''))
+    else:
+        raise ValueError('Formato TLS no soportado')
+    os.chmod(TLS_CERT_FILE,0o600); os.chmod(TLS_KEY_FILE,0o600)
+    validate_tls_pair()
+    with open(TLS_ENABLE_FILE,'w',encoding='utf-8') as f: f.write('enabled\n')
+    write_tls_config(True)
+
+@app.route('/tls')
+def tls_settings():
+    return render_template_string(TLS_TEMPLATE, enabled=tls_is_ready())
+
+@app.route('/tls/upload',methods=['POST'])
+def tls_upload():
+    try:
+        install_tls_from_request()
+        flash('Certificado instalado. El servicio se reiniciara en HTTPS. Vuelve a abrir el dashboard con https://','success')
+        restart_service_later()
+    except Exception as e:
+        logger.exception('Error configurando TLS')
+        flash(f'No se pudo activar HTTPS: {e}','danger')
+    return redirect(url_for('tls_settings'))
+
+@app.route('/tls/disable',methods=['POST'])
+def tls_disable():
+    try:
+        if TLS_ENABLE_FILE and os.path.exists(TLS_ENABLE_FILE): os.remove(TLS_ENABLE_FILE)
+        write_tls_config(False)
+        flash('HTTPS desactivado. El servicio se reiniciara en HTTP.','success')
+        restart_service_later()
+    except Exception as e:
+        flash(f'No se pudo desactivar HTTPS: {e}','danger')
+    return redirect(url_for('tls_settings'))
 
 @app.route('/')
 def dashboard():
@@ -1967,7 +2017,7 @@ HTTPS_ENABLED=0
 if [ "${ENABLE_HTTPS:-n}" = "s" ] && [ -n "${TLS_CERT_FILE:-}" ] && [ -n "${TLS_KEY_FILE:-}" ]; then
     HTTPS_ENABLED=1
 fi
-export TELEGRAM_TOKEN TELEGRAM_CHAT_ID TELEGRAM_ENABLED PYTHON_VLAN_LIST PYTHON_INTERFACE_META DASHBOARD_PORT WANSIM_VERSION NETEM_STATE_FILE HTTPS_ENABLED TLS_CERT_FILE TLS_KEY_FILE
+export TELEGRAM_TOKEN TELEGRAM_CHAT_ID TELEGRAM_ENABLED PYTHON_VLAN_LIST PYTHON_INTERFACE_META DASHBOARD_PORT WANSIM_VERSION NETEM_STATE_FILE HTTPS_ENABLED TLS_CERT_FILE TLS_KEY_FILE TLS_DIR TLS_ENABLE_FILE CONFIG_FILE
 if ! "$PYTHON_BIN" - "$WANSIM_DASHBOARD" <<'PYREPLACE'
 import json
 import os
@@ -2005,6 +2055,9 @@ replacements = {
     "__HTTPS_ENABLED__": os.environ.get("HTTPS_ENABLED", "0"),
     "__TLS_CERT_FILE_LITERAL__": json.dumps(os.environ.get("TLS_CERT_FILE", "")),
     "__TLS_KEY_FILE_LITERAL__": json.dumps(os.environ.get("TLS_KEY_FILE", "")),
+    "__TLS_DIR_LITERAL__": json.dumps(os.environ.get("TLS_DIR", "")),
+    "__TLS_ENABLE_FILE_LITERAL__": json.dumps(os.environ.get("TLS_ENABLE_FILE", "")),
+    "__CONFIG_FILE_LITERAL__": json.dumps(os.environ.get("CONFIG_FILE", "")),
     "__NETEM_STATE_FILE__": os.environ.get("NETEM_STATE_FILE", os.path.expanduser("~/wansim_netem_state.json")),
     "__WANSIM_VERSION__": os.environ.get("WANSIM_VERSION", "1.113"),
 }
