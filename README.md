@@ -1,6 +1,6 @@
 # Ryuz WAN Simulator
 
-**Version 1.113** | **Autor**: decameru@outlook.com
+**Version 1.114** | **Autor**: decameru@outlook.com
 
 Ryuz WAN Simulator es una herramienta para simular condiciones WAN en Linux. Permite aplicar latencia, jitter y perdida de paquetes sobre interfaces fisicas, VLANs o bridges L2, con un dashboard Flask para control operativo.
 
@@ -12,7 +12,7 @@ Esta rama se mantiene como la base principal del simulador. La evolucion FastAPI
 - Deteccion por WAN de IP privada, IP publica y estimacion de ancho de banda disponible.
 - Modo Bridge L2 con 1 a 3 pares de interfaces entrada/salida.
 - Control de latencia, jitter y perdida por interfaz usando `tc/netem`.
-- Dashboard web Flask en el puerto `5000`, con soporte opcional HTTPS.
+- Dashboard web Flask en el puerto `5000`, con administracion HTTPS desde la interfaz web.
 - DHCP automatico para VLANs.
 - Persistencia L2 mediante `wansim-l2-persist.service`.
 - Integracion opcional con Telegram, botones de presets y fallback HTTP API si falla la libreria legacy.
@@ -20,7 +20,7 @@ Esta rama se mantiene como la base principal del simulador. La evolucion FastAPI
 
 ## Sistemas Soportados
 
-La version 1.113 detecta el gestor de paquetes y ajusta dependencias para:
+La version 1.114 detecta el gestor de paquetes y ajusta dependencias para:
 
 - Ubuntu Server 20.04 o superior.
 - Ubuntu Workstation 20.04 o superior.
@@ -94,7 +94,7 @@ Durante el asistente interactivo podras elegir:
 - `L3 / NAT`: uno o dos pares WAN/LAN, cada LAN con VLANs + DHCP + NAT hacia su WAN.
 - `Bridge L2`: bridges entre pares de interfaces fisicas.
 - Integracion opcional con Telegram.
-- HTTPS opcional usando PEM, PEM bundle, PFX/PKCS12 o DER.
+- HTTPS opcional desde el dashboard usando PEM, PEM bundle, PFX/PKCS12 o DER.
 
 Al finalizar, el dashboard queda disponible en:
 
@@ -102,7 +102,7 @@ Al finalizar, el dashboard queda disponible en:
 http://<IP_DEL_SERVIDOR>:5000
 ```
 
-Si habilitas HTTPS, el dashboard se publica con:
+Desde el boton `HTTPS` del dashboard puedes cargar un certificado PEM, PEM bundle, PFX/PKCS12 o DER. Al activarlo, el servicio se reinicia y queda publicado con:
 
 ```text
 https://<IP_DEL_SERVIDOR>:5000
@@ -162,6 +162,14 @@ Antes de ejecutar en un servidor compartido, revisa:
 Si una ejecucion falla, el script ejecuta rollback automatico de servicios, dashboard generado, virtualenv parcial, bridges/VLANs generadas y archivos temporales. El log principal se conserva en `~/emix_abundix.log`.
 
 ## Release Notes
+
+### Version 1.114
+
+- La carga y activacion de HTTPS pasa del asistente de consola a la interfaz web del dashboard.
+- El flujo L3/NAT ya no repregunta el octeto base global; cada par WAN/LAN define su rango y valida que no se repita.
+- El resumen final de instalacion muestra todos los pares WAN/LAN configurados, no solo el primero.
+- Los titulos de enlaces L3 ahora usan `VLAN <id> (LAN -> WAN)` sin el prefijo `L3#`.
+- La informacion tecnica de cada enlace en el dashboard queda plegada en `Detalles del enlace`.
 
 ### Version 1.113
 
