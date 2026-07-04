@@ -1,6 +1,6 @@
 # Ryuz WAN Simulator
 
-**Version 1.110** | **Autor**: decameru@outlook.com
+**Version 1.111** | **Autor**: decameru@outlook.com
 
 Ryuz WAN Simulator es una herramienta para simular condiciones WAN en Linux. Permite aplicar latencia, jitter y perdida de paquetes sobre interfaces fisicas, VLANs o bridges L2, con un dashboard Flask para control operativo.
 
@@ -19,7 +19,7 @@ Esta rama se mantiene como la base principal del simulador. La evolucion FastAPI
 
 ## Sistemas Soportados
 
-La version 1.110 detecta el gestor de paquetes y ajusta dependencias para:
+La version 1.111 detecta el gestor de paquetes y ajusta dependencias para:
 
 - Ubuntu Server 20.04 o superior.
 - Ubuntu Workstation 20.04 o superior.
@@ -33,6 +33,7 @@ Notas por familia:
 - Ubuntu/Debian usan `apt-get`, `isc-dhcp-server` e `/etc/iptables/rules.v4`.
 - Fedora/CentOS/Rocky usan `dnf` o `yum`, `dhcp-server`/`dhcpd` e `/etc/sysconfig/iptables`.
 - En todos los casos se requiere `systemd`, `iproute`, `tc`, `iptables`, `python3` y permisos `sudo`.
+- Las dependencias Python se instalan en `~/.wansim/venv`; no se modifica el Python del sistema.
 
 ## Instalacion Rapida
 
@@ -110,6 +111,7 @@ Los archivos operativos se crean en el home del usuario que ejecuta el script:
 | `~/api_tokens.json` | Tokens locales de API |
 | `~/emix_abundix.log` | Log principal |
 | `~/wansim_netem_state.json` | Estado tc/netem |
+| `~/.wansim/venv` | Entorno Python aislado del dashboard |
 
 Archivos del sistema:
 
@@ -148,7 +150,16 @@ Antes de ejecutar en un servidor compartido, revisa:
 - Servicios DHCP activos.
 - Politicas de SELinux/firewalld en Fedora, CentOS o Rocky.
 
+Si una ejecucion falla, el script ejecuta rollback automatico de servicios, dashboard generado, virtualenv parcial, bridges/VLANs generadas y archivos temporales. El log principal se conserva en `~/emix_abundix.log`.
+
 ## Release Notes
+
+### Version 1.111
+
+- Se reemplaza `pip3 install --user` por un virtualenv aislado en `~/.wansim/venv` para evitar PEP 668 (`externally-managed-environment`).
+- El servicio systemd ejecuta el dashboard con el Python del virtualenv.
+- Telegram se instala solo si el usuario habilita la integracion.
+- Se agrega rollback automatico en errores para limpiar recursos generados y evitar redeploys de VM durante pruebas.
 
 ### Version 1.110
 

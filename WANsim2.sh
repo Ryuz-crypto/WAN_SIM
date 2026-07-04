@@ -10,8 +10,12 @@ exec > >(tee -a /tmp/wansim_debug.log) 2>&1
 # -----------------------------------------------
 # Variables de configuración
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WANSIM_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "1.110")"
+WANSIM_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "1.111")"
 USER_HOME="${HOME:-$(getent passwd "$(whoami)" | cut -d: -f6)}"
+WANSIM_HOME="$USER_HOME/.wansim"
+PYTHON_VENV="$WANSIM_HOME/venv"
+PYTHON_BIN="$PYTHON_VENV/bin/python"
+PIP_BIN="$PYTHON_VENV/bin/pip"
 LOGFILE="$USER_HOME/emix_abundix.log"
 CONFIG_FILE="$USER_HOME/emix_abundix.conf"
 WANSIM_DASHBOARD="$USER_HOME/wansim_dashboard.py"
@@ -184,13 +188,55 @@ pkg_install() {
 
 set_dependency_list() {
     if [ "$PKG_MANAGER" = "apt" ]; then
-        DEPENDENCIES=("python3" "python3-pip" "iproute2" "ifstat" "qrencode" "net-tools" "vlan" "sudo" "lsof" "isc-dhcp-server" "iptables-persistent")
+        DEPENDENCIES=("python3" "python3-venv" "python3-pip" "iproute2" "ifstat" "qrencode" "net-tools" "vlan" "sudo" "lsof" "isc-dhcp-server" "iptables-persistent")
         LOCK_FILES=("/var/lib/dpkg/lock-frontend" "/var/lib/apt/lists/lock" "/var/cache/apt/archives/lock")
     else
         DEPENDENCIES=("python3" "python3-pip" "iproute" "ifstat" "qrencode" "net-tools" "sudo" "lsof" "dhcp-server" "iptables-services")
         LOCK_FILES=()
     fi
 }
+
+cleanup_vlan_links() {
+    if [ -z "${LAN_IF:-}" ]; then
+        return 0
+    fi
+    local vlan_links=""
+    vlan_links=$(ip -o link show 2>/dev/null | awk -F': ' -v parent="$LAN_IF" '$2 ~ ("@" parent "$") {print $2}' | cut -d'@' -f1 || true)
+    while IFS= read -r vlan; do
+        [ -z "$vlan" ] && continue
+        case "$vlan" in
+            vlan*|"$LAN_IF".*)
+                log_message "INFO" "Eliminando VLAN generada $vlan..."
+                sudo tc qdisc del dev "$vlan" root >/dev/null 2>&1 || true
+                sudo ip link delete "$vlan" >/dev/null 2>&1 || true
+                ;;
+        esac
+    done <<< "$vlan_links"
+}
+
+cleanup_failed_run() {
+    local line="${1:-unknown}"
+    local cmd="${2:-unknown}"
+    trap - ERR
+    set +e
+    log_message "ERROR" "Fallo controlado en linea $line durante: $cmd"
+    log_message "INFO" "Ejecutando rollback automatico de recursos generados por WAN Simulator..."
+    sudo systemctl disable --now wansim.service >/dev/null 2>&1 || true
+    sudo systemctl disable --now wansim-l2-persist.service >/dev/null 2>&1 || true
+    cleanup_bridges
+    cleanup_vlan_links
+    sudo rm -f "$SERVICE_FILE" "$PERSIST_SERVICE" "$PERSIST_SCRIPT" >/dev/null 2>&1 || true
+    rm -f "$CONFIG_FILE" "$WANSIM_DASHBOARD" "$API_TOKENS" "$NETEM_STATE_FILE" >/dev/null 2>&1 || true
+    rm -rf "$PYTHON_VENV" >/dev/null 2>&1 || true
+    rm -f /tmp/wansim_dashboard.log /tmp/wansim_service.log /tmp/server.crt /tmp/server.key \
+        /tmp/vlan_error.log /tmp/ip_error.log /tmp/iptables_error.log /tmp/tc_error.log \
+        /tmp/bridge_error.log >/dev/null 2>&1 || true
+    sudo systemctl daemon-reload >/dev/null 2>&1 || true
+    log_message "OK" "Rollback completado. Log conservado en $LOGFILE"
+    echo "${COLOR_ERROR}La ejecucion fallo y se limpiaron los recursos generados. Revisa $LOGFILE.${COLOR_RESET}"
+}
+
+trap 'cleanup_failed_run "$LINENO" "$BASH_COMMAND"' ERR
 
 # Rutina robusta para deshacer bridges L2 generados por WAN Simulator
 cleanup_bridges() {
@@ -440,40 +486,38 @@ for dep in "${DEPENDENCIES[@]}"; do
     fi
 done
 
-# Asegurar que pip3 esté en el PATH
-export PATH="$HOME/.local/bin:$PATH"
-
-# Verificar que pip3 esté disponible
-if ! command -v pip3 >/dev/null 2>&1; then
-    log_message "ERROR" "No se encontró pip3 tras instalar python3-pip."
-    echo "${COLOR_ERROR}No se pudo configurar el instalador de paquetes de Python. Intenta reinstalar python3-pip con tu gestor de paquetes.${COLOR_RESET}"
+# Crear runtime Python aislado para evitar PEP 668 / externally-managed-environment.
+log_message "DEBUG" "Preparando entorno Python aislado en $PYTHON_VENV..."
+mkdir -p "$WANSIM_HOME"
+if [ ! -x "$PYTHON_BIN" ]; then
+    rm -rf "$PYTHON_VENV"
+    if ! python3 -m venv "$PYTHON_VENV"; then
+        log_message "ERROR" "No se pudo crear el virtualenv en $PYTHON_VENV."
+        echo "${COLOR_ERROR}No se pudo crear el entorno Python. En Debian/Ubuntu instala python3-venv.${COLOR_RESET}"
+        exit 1
+    fi
+fi
+if [ ! -x "$PIP_BIN" ]; then
+    log_message "ERROR" "pip no está disponible dentro del virtualenv $PYTHON_VENV."
+    echo "${COLOR_ERROR}El virtualenv no tiene pip. Revisa python3-venv/python3-pip.${COLOR_RESET}"
     exit 1
 fi
-log_message "OK" "pip3 encontrado en $(which pip3)."
+log_message "OK" "Python aislado listo: $PYTHON_BIN"
 
-# Instalando dependencias de Python
-log_message "DEBUG" "Instalando dependencias de Python..."
+log_message "DEBUG" "Instalando dependencias Python dentro del virtualenv..."
+"$PIP_BIN" install --upgrade pip setuptools wheel >/tmp/wansim_pip_bootstrap.log 2>&1 || {
+    log_message "ERROR" "No se pudo actualizar pip/setuptools/wheel. Detalle: $(cat /tmp/wansim_pip_bootstrap.log)"
+    exit 1
+}
 PYTHON_DEPS=("flask" "requests" "pyOpenSSL")
 for dep in "${PYTHON_DEPS[@]}"; do
-    if ! pip3 show "$dep" >/dev/null 2>&1; then
-        log_message "INFO" "Instalando $dep..."
-        if ! pip3 install --user "$dep" --no-warn-script-location; then
-            log_message "ERROR" "Falló la instalación de $dep."
-            echo "${COLOR_ERROR}No se pudo instalar $dep. Revisa con 'pip3 install $dep'.${COLOR_RESET}"
-            exit 1
-        fi
-        log_message "OK" "$dep instalado."
-    else
-        log_message "OK" "$dep ya está instalado."
-    fi
+    log_message "INFO" "Asegurando dependencia Python $dep en virtualenv..."
+    "$PIP_BIN" install "$dep" --no-warn-script-location >/tmp/wansim_pip_install.log 2>&1 || {
+        log_message "ERROR" "Falló la instalación de $dep en virtualenv. Detalle: $(cat /tmp/wansim_pip_install.log)"
+        exit 1
+    }
 done
-log_message "INFO" "Instalando versión compatible de python-telegram-bot (13.15)..."
-if ! pip3 install --user --force-reinstall "python-telegram-bot==13.15" --no-warn-script-location; then
-    log_message "ERROR" "Falló la instalación de python-telegram-bot==13.15."
-    echo "${COLOR_ERROR}No se pudo instalar python-telegram-bot==13.15.${COLOR_RESET}"
-    exit 1
-fi
-log_message "OK" "Dependencias de Python instaladas."
+log_message "OK" "Dependencias Python base instaladas en $PYTHON_VENV."
 
 # Mostrar banner
 log_message "DEBUG" "Iniciando configuración interactiva de Ryuz WAN Simulator..."
@@ -654,6 +698,12 @@ if [ "$INTERACTIVE" -eq 1 ]; then
         if [[ "$INTEGRATE_TELEGRAM" =~ ^[sSnN]$ ]]; then INTEGRATE_TELEGRAM=$(echo "$INTEGRATE_TELEGRAM" | tr '[:upper:]' '[:lower:]'); break; else log_message "ERROR" "Ingresa 's' o 'n'."; fi
     done
     if [ "$INTEGRATE_TELEGRAM" = "s" ]; then
+        log_message "INFO" "Instalando dependencia opcional de Telegram en virtualenv..."
+        "$PIP_BIN" install "python-telegram-bot==13.15" --no-warn-script-location >/tmp/wansim_pip_telegram.log 2>&1 || {
+            log_message "ERROR" "No se pudo instalar python-telegram-bot==13.15. Detalle: $(cat /tmp/wansim_pip_telegram.log)"
+            echo "${COLOR_ERROR}No se pudo preparar Telegram. Ejecuta sin Telegram o revisa conectividad/Python.${COLOR_RESET}"
+            exit 1
+        }
         read -p "${COLOR_INFO}[ENTRADA] Ingresa el token del Bot de Telegram: ${COLOR_RESET}" TELEGRAM_TOKEN
         read -p "${COLOR_INFO}[ENTRADA] Ingresa el Chat ID (deja vacío para obtenerlo automáticamente): ${COLOR_RESET}" TELEGRAM_CHAT_ID
         if [ -z "$TELEGRAM_CHAT_ID" ]; then get_telegram_chat_id "$TELEGRAM_TOKEN"; fi
@@ -1425,28 +1475,23 @@ log_message "INFO" "Liberando puerto y verificando dependencias..."
 # Liberar puerto para Flask
 free_port
 
-# Configurar PYTHONPATH antes de la verificación
-export PYTHONPATH="$HOME/.local/lib/python3.8/site-packages:/usr/local/lib/python3.8/dist-packages:$PYTHONPATH"
-
-# Verificar dependencias de Python
-log_message "INFO" "Verificando dependencias de Python..."
-for module in flask requests OpenSSL telegram; do
-    if ! python3 -c "import $module" 2>/dev/null; then
-        log_message "ERROR" "Módulo Python $module no encontrado. Instalando dependencias compatibles..."
-        if ! pip3 install --user flask requests pyOpenSSL "python-telegram-bot==13.15" --no-warn-script-location; then
-            log_message "ERROR" "No se pudieron instalar dependencias Python."
-            echo "${COLOR_ERROR}Fallo al instalar dependencias Python. Revisa con 'pip3 list'.${COLOR_RESET}"
-            exit 1
-        fi
-        log_message "OK" "$module instalado."
-    else
-        log_message "OK" "$module ya está instalado."
-    fi
+# Verificar dependencias de Python dentro del virtualenv.
+log_message "INFO" "Verificando dependencias de Python en $PYTHON_VENV..."
+for module in flask requests OpenSSL; do
+    "$PYTHON_BIN" -c "import $module" >/dev/null 2>&1 || {
+        log_message "ERROR" "Módulo Python $module no encontrado en $PYTHON_VENV."
+        echo "${COLOR_ERROR}El runtime Python aislado no contiene $module. Se limpiará el despliegue parcial.${COLOR_RESET}"
+        exit 1
+    }
+    log_message "OK" "$module disponible en virtualenv."
 done
-
-# Asegurar PATH para Python
-export PATH="$HOME/.local/bin:$PATH"
-log_message "OK" "Dependencias de Python verificadas."
+if [ "${INTEGRATE_TELEGRAM:-n}" = "s" ]; then
+    "$PYTHON_BIN" -c "import telegram" >/dev/null 2>&1 || {
+        log_message "ERROR" "Telegram fue habilitado pero el módulo telegram no está disponible en $PYTHON_VENV."
+        exit 1
+    }
+fi
+log_message "OK" "Dependencias de Python verificadas en virtualenv."
 
 # SECCIÓN 6.1B: Configuración de Archivos de Log
 # ---------------------------------------------
@@ -1720,9 +1765,9 @@ log_message "OK" "wansim_dashboard.py generado."
 
 # Verificar sintaxis del script Python
 log_message "DEBUG" "Verificando sintaxis de $WANSIM_DASHBOARD..."
-if ! python3 -m py_compile "$WANSIM_DASHBOARD"; then
+if ! "$PYTHON_BIN" -m py_compile "$WANSIM_DASHBOARD"; then
     log_message "ERROR" "Error de sintaxis en $WANSIM_DASHBOARD."
-    echo "${COLOR_ERROR}Error de sintaxis en $WANSIM_DASHBOARD. Revisa con 'python3 -m py_compile $WANSIM_DASHBOARD'.${COLOR_RESET}"
+    echo "${COLOR_ERROR}Error de sintaxis en $WANSIM_DASHBOARD. Revisa con '$PYTHON_BIN -m py_compile $WANSIM_DASHBOARD'.${COLOR_RESET}"
     exit 1
 fi
 log_message "OK" "Sintaxis de $WANSIM_DASHBOARD verificada."
@@ -1730,7 +1775,7 @@ log_message "OK" "Sintaxis de $WANSIM_DASHBOARD verificada."
 # Reemplazar placeholders en el archivo Python de forma segura
 log_message "DEBUG" "Reemplazando placeholders en $WANSIM_DASHBOARD con reemplazo seguro..."
 export TELEGRAM_TOKEN TELEGRAM_CHAT_ID TELEGRAM_ENABLED PYTHON_VLAN_LIST PYTHON_INTERFACE_META DASHBOARD_PORT WANSIM_VERSION NETEM_STATE_FILE
-if ! python3 - "$WANSIM_DASHBOARD" <<'PYREPLACE'
+if ! "$PYTHON_BIN" - "$WANSIM_DASHBOARD" <<'PYREPLACE'
 import json
 import os
 import sys
@@ -1765,7 +1810,7 @@ replacements = {
     "__TELEGRAM_CHAT_ID_LITERAL__": json.dumps(os.environ.get("TELEGRAM_CHAT_ID", "")),
     "__TELEGRAM_ENABLED__": os.environ.get("TELEGRAM_ENABLED", "0"),
     "__NETEM_STATE_FILE__": os.environ.get("NETEM_STATE_FILE", os.path.expanduser("~/wansim_netem_state.json")),
-    "__WANSIM_VERSION__": os.environ.get("WANSIM_VERSION", "1.110"),
+    "__WANSIM_VERSION__": os.environ.get("WANSIM_VERSION", "1.111"),
 }
 for key, value in replacements.items():
     text = text.replace(key, value)
@@ -1778,9 +1823,9 @@ then
 fi
 
 log_message "DEBUG" "Validando sintaxis final de $WANSIM_DASHBOARD después de reemplazos..."
-if ! python3 -m py_compile "$WANSIM_DASHBOARD"; then
+if ! "$PYTHON_BIN" -m py_compile "$WANSIM_DASHBOARD"; then
     log_message "ERROR" "Error de sintaxis final en $WANSIM_DASHBOARD después de reemplazar variables."
-    echo "${COLOR_ERROR}Error de sintaxis final en $WANSIM_DASHBOARD. Revisa con 'python3 -m py_compile $WANSIM_DASHBOARD' y 'nl -ba $WANSIM_DASHBOARD | sed -n \"1,40p\"'.${COLOR_RESET}"
+    echo "${COLOR_ERROR}Error de sintaxis final en $WANSIM_DASHBOARD. Revisa con '$PYTHON_BIN -m py_compile $WANSIM_DASHBOARD' y 'nl -ba $WANSIM_DASHBOARD | sed -n \"1,40p\"'.${COLOR_RESET}"
     exit 1
 fi
 log_message "OK" "Placeholders reemplazados y sintaxis final verificada en $WANSIM_DASHBOARD."
@@ -1838,8 +1883,7 @@ $L2_UNIT_LINES
 User=$CURRENT_USER
 WorkingDirectory=$USER_HOME
 Environment=PATH=$PATH
-Environment=PYTHONPATH=$HOME/.local/lib/python3.8/site-packages:/usr/local/lib/python3.8/dist-packages:$PYTHONPATH
-ExecStart=/usr/bin/python3 $WANSIM_DASHBOARD
+ExecStart=$PYTHON_BIN $WANSIM_DASHBOARD
 Restart=always
 StandardOutput=append:/tmp/wansim_service.log
 StandardError=append:/tmp/wansim_service.log
