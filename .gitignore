@@ -15,8 +15,6 @@ dist/
 .vite/
 *.tsbuildinfo
 npm-debug.log*
-DashboardAPI-EC/frontend/vite.config.d.ts
-DashboardAPI-EC/frontend/vite.config.js
 
 # Local config and secrets
 .env

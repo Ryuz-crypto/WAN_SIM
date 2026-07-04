@@ -9,19 +9,26 @@ exec > >(tee -a /tmp/wansim_debug.log) 2>&1
 # SECCIÓN 1: Configuración Inicial y Funciones Auxiliares
 # -----------------------------------------------
 # Variables de configuración
-LOGFILE="/home/axis/emix_abundix.log"
-CONFIG_FILE="/home/axis/emix_abundix.conf"
-WANSIM_DASHBOARD="/home/axis/wansim_dashboard.py"
-API_TOKENS="/home/axis/api_tokens.json"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WANSIM_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "1.108")"
+USER_HOME="${HOME:-$(getent passwd "$(whoami)" | cut -d: -f6)}"
+LOGFILE="$USER_HOME/emix_abundix.log"
+CONFIG_FILE="$USER_HOME/emix_abundix.conf"
+WANSIM_DASHBOARD="$USER_HOME/wansim_dashboard.py"
+API_TOKENS="$USER_HOME/api_tokens.json"
 SERVICE_FILE="/etc/systemd/system/wansim.service"
 PERSIST_SCRIPT="/usr/local/sbin/wansim_l2_persist.sh"
 PERSIST_SERVICE="/etc/systemd/system/wansim-l2-persist.service"
-NETEM_STATE_FILE="/home/axis/wansim_netem_state.json"
-USER_HOME="/home/axis"
+NETEM_STATE_FILE="$USER_HOME/wansim_netem_state.json"
 CURRENT_USER=$(whoami)
 DASHBOARD_PORT=5000
 HOST_IP=$(ip addr show | grep 'inet ' | grep -v '127.0.0.1' | awk '{print $2}' | cut -d'/' -f1 | head -n 1)
-IS_RASPBERRY=$(grep -qi "Raspberry Pi" /proc/cpuinfo && echo "sí" || echo "no")
+IS_RASPBERRY=$(grep -qi "Raspberry Pi" /proc/cpuinfo && echo "si" || echo "no")
+OS_FAMILY=""
+PKG_MANAGER=""
+DHCP_SERVICE=""
+DHCP_DEFAULT_FILE=""
+IPTABLES_SAVE_FILE="/etc/iptables/rules.v4"
 
 # Colores para la salida en consola
 COLOR_INFO=$(tput setaf 6)
@@ -59,7 +66,7 @@ if [ -f "$LOGFILE" ]; then
 fi
 touch "$LOGFILE" || {
     log_message "ERROR" "No se pudo crear el archivo de log $LOGFILE."
-    echo "${COLOR_ERROR}No se pudo crear $LOGFILE. Revisa permisos con 'ls -ld /home/axis'.${COLOR_RESET}"
+    echo "${COLOR_ERROR}No se pudo crear $LOGFILE. Revisa permisos con 'ls -ld $USER_HOME'.${COLOR_RESET}"
     exit 1
 }
 chmod 640 "$LOGFILE"
@@ -82,6 +89,86 @@ log_message() {
         ADVERTENCIA) echo "${COLOR_WARN}[ADVERTENCIA] $contenido_msg${COLOR_RESET}" ;;
         DEBUG) echo "${COLOR_DEBUG}[DEBUG] $contenido_msg${COLOR_RESET}" ;;
     esac
+}
+
+detect_platform() {
+    if [ -f /etc/os-release ]; then
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        case "${ID_LIKE:-$ID}" in
+            *debian*|*ubuntu*)
+                OS_FAMILY="debian"
+                ;;
+            *rhel*|*fedora*|*centos*|*rocky*)
+                OS_FAMILY="rhel"
+                ;;
+            *)
+                OS_FAMILY="${ID:-unknown}"
+                ;;
+        esac
+    fi
+
+    if command -v apt-get >/dev/null 2>&1; then
+        PKG_MANAGER="apt"
+        OS_FAMILY="debian"
+        DHCP_SERVICE="isc-dhcp-server"
+        DHCP_DEFAULT_FILE="/etc/default/isc-dhcp-server"
+        IPTABLES_SAVE_FILE="/etc/iptables/rules.v4"
+    elif command -v dnf >/dev/null 2>&1; then
+        PKG_MANAGER="dnf"
+        [ -z "$OS_FAMILY" ] && OS_FAMILY="rhel"
+        DHCP_SERVICE="dhcpd"
+        DHCP_DEFAULT_FILE="/etc/sysconfig/dhcpd"
+        IPTABLES_SAVE_FILE="/etc/sysconfig/iptables"
+    elif command -v yum >/dev/null 2>&1; then
+        PKG_MANAGER="yum"
+        [ -z "$OS_FAMILY" ] && OS_FAMILY="rhel"
+        DHCP_SERVICE="dhcpd"
+        DHCP_DEFAULT_FILE="/etc/sysconfig/dhcpd"
+        IPTABLES_SAVE_FILE="/etc/sysconfig/iptables"
+    else
+        log_message "ERROR" "No se encontró apt-get, dnf ni yum."
+        echo "${COLOR_ERROR}Sistema no soportado: se requiere apt-get, dnf o yum.${COLOR_RESET}"
+        exit 1
+    fi
+
+    log_message "OK" "Plataforma detectada: familia=$OS_FAMILY gestor=$PKG_MANAGER dhcp=$DHCP_SERVICE"
+}
+
+pkg_installed() {
+    local dep="$1"
+    case "$PKG_MANAGER" in
+        apt) dpkg -l | grep -qw "$dep" ;;
+        dnf|yum) rpm -q "$dep" >/dev/null 2>&1 ;;
+        *) return 1 ;;
+    esac
+}
+
+pkg_update() {
+    case "$PKG_MANAGER" in
+        apt) sudo apt-get update ;;
+        dnf) sudo dnf makecache -y ;;
+        yum) sudo yum makecache -y ;;
+    esac
+}
+
+pkg_install() {
+    local dep="$1"
+    case "$PKG_MANAGER" in
+        apt) sudo apt-get install -y "$dep" ;;
+        dnf) sudo dnf install -y "$dep" ;;
+        yum) sudo yum install -y "$dep" ;;
+    esac
+}
+
+set_dependency_list() {
+    if [ "$PKG_MANAGER" = "apt" ]; then
+        DEPENDENCIES=("python3" "python3-pip" "iproute2" "ifstat" "qrencode" "net-tools" "vlan" "sudo" "lsof" "isc-dhcp-server" "iptables-persistent")
+        LOCK_FILES=("/var/lib/dpkg/lock-frontend" "/var/lib/apt/lists/lock" "/var/cache/apt/archives/lock")
+    else
+        DEPENDENCIES=("python3" "python3-pip" "iproute" "ifstat" "qrencode" "net-tools" "sudo" "lsof" "dhcp-server" "iptables-services")
+        LOCK_FILES=()
+    fi
 }
 
 # Rutina robusta para deshacer bridges L2 generados por WAN Simulator
@@ -241,11 +328,13 @@ if [ "$(id -u)" -eq 0 ]; then
     exit 1
 fi
 log_message "OK" "Ejecutando como usuario $CURRENT_USER."
+detect_platform
+set_dependency_list
 
 # Configurar permisos de sudo para el usuario actual
 log_message "DEBUG" "Configurando permisos de sudo para $CURRENT_USER..."
 SUDOERS_FILE="/etc/sudoers.d/wansim"
-SUDOERS_CONTENT="$CURRENT_USER ALL=(ALL) NOPASSWD: /usr/bin/apt-get, /usr/sbin/tc, /usr/bin/tc, /usr/sbin/ip, /usr/bin/ip, /usr/sbin/iptables, /usr/sbin/iptables-save, /usr/sbin/sysctl, /usr/sbin/dhcpd, /usr/bin/systemctl, /usr/bin/systemctl stop unattended-upgrades, /usr/bin/systemctl restart wansim.service, /usr/bin/fuser, /usr/bin/kill, /usr/bin/rm, /usr/sbin/dpkg, /usr/bin/tee, /usr/bin/mv, /usr/bin/chmod, /usr/bin/chown"
+SUDOERS_CONTENT="$CURRENT_USER ALL=(ALL) NOPASSWD: /usr/bin/apt-get, /usr/bin/dnf, /usr/bin/yum, /usr/sbin/tc, /usr/bin/tc, /usr/sbin/ip, /usr/bin/ip, /usr/sbin/iptables, /usr/sbin/iptables-save, /usr/sbin/sysctl, /usr/sbin/dhcpd, /usr/bin/systemctl, /usr/bin/systemctl stop unattended-upgrades, /usr/bin/systemctl restart wansim.service, /usr/bin/fuser, /usr/bin/kill, /usr/bin/rm, /usr/sbin/dpkg, /usr/bin/tee, /usr/bin/mv, /usr/bin/chmod, /usr/bin/chown"
 if ! sudo -n true 2>/dev/null; then
     log_message "INFO" "Configurando permisos de sudo automáticamente..."
     # Intentar configurar sudoers usando una contraseña temporal o existente
@@ -275,7 +364,7 @@ fi
 
 # Actualizar repositorios
 log_message "INFO" "Actualizando lista de paquetes del sistema..."
-if ! sudo apt-get update; then
+if ! pkg_update; then
     log_message "ERROR" "No se pudo actualizar la lista de paquetes."
     echo "${COLOR_ERROR}No se pudo conectar con los servidores de paquetes. Verifica tu conexión a internet.${COLOR_RESET}"
     exit 1
@@ -284,10 +373,8 @@ log_message "OK" "Lista de paquetes actualizada."
 
 # Verificar e instalar dependencias del sistema
 log_message "DEBUG" "Verificando e instalando dependencias..."
-DEPENDENCIES=("python3" "python3-pip" "iproute2" "ifstat" "qrencode" "net-tools" "vlan" "sudo" "lsof" "isc-dhcp-server" "iptables-persistent")
-LOCK_FILES=("/var/lib/dpkg/lock-frontend" "/var/lib/apt/lists/lock" "/var/cache/apt/archives/lock")
 for dep in "${DEPENDENCIES[@]}"; do
-    if ! dpkg -l | grep -qw "$dep"; then
+    if ! pkg_installed "$dep"; then
         log_message "INFO" "Instalando $dep..."
         # Intentar liberar bloqueos de apt/dpkg
         MAX_WAIT=300  # Máximo 5 minutos
@@ -302,7 +389,7 @@ for dep in "${DEPENDENCIES[@]}"; do
         done
         if [ "$BLOCKED" = true ]; then
             log_message "INFO" "Se detectó un proceso instalando actualizaciones. Preparando sistema..."
-            sudo systemctl stop unattended-upgrades 2>/dev/null
+            sudo systemctl stop unattended-upgrades 2>/dev/null || true
             for lock in "${LOCK_FILES[@]}"; do
                 if [ -e "$lock" ]; then
                     BLOCKING_PID=$(sudo fuser "$lock" 2>/dev/null | awk '{print $1}')
@@ -314,14 +401,14 @@ for dep in "${DEPENDENCIES[@]}"; do
                 fi
             done
             sudo dpkg --configure -a
-            if ! sudo apt-get update; then
+            if ! pkg_update; then
                 log_message "ERROR" "No se pudo actualizar la lista de paquetes tras liberar bloqueos."
                 echo "${COLOR_ERROR}Fallo al preparar el sistema. Intenta de nuevo más tarde.${COLOR_RESET}"
                 exit 1
             fi
             log_message "OK" "Sistema preparado tras liberar bloqueos."
         fi
-        if ! sudo apt-get install -y "$dep"; then
+        if ! pkg_install "$dep"; then
             log_message "ERROR" "No se pudo instalar $dep."
             echo "${COLOR_ERROR}No se pudo instalar $dep. Verifica tu conexión a internet o intenta de nuevo.${COLOR_RESET}"
             exit 1
@@ -338,7 +425,7 @@ export PATH="$HOME/.local/bin:$PATH"
 # Verificar que pip3 esté disponible
 if ! command -v pip3 >/dev/null 2>&1; then
     log_message "ERROR" "No se encontró pip3 tras instalar python3-pip."
-    echo "${COLOR_ERROR}No se pudo configurar el instalador de paquetes de Python. Intenta reinstalar con 'sudo apt-get install python3-pip'.${COLOR_RESET}"
+    echo "${COLOR_ERROR}No se pudo configurar el instalador de paquetes de Python. Intenta reinstalar python3-pip con tu gestor de paquetes.${COLOR_RESET}"
     exit 1
 fi
 log_message "OK" "pip3 encontrado en $(which pip3)."
@@ -370,10 +457,10 @@ log_message "OK" "Dependencias de Python instaladas."
 # Mostrar banner
 log_message "DEBUG" "Iniciando configuración interactiva de Ryuz WAN Simulator..."
 clear
-cat << 'EOF'
+cat << EOF
 ┌═════════════════════════════════════════════════════════════┐
 │                                                             │
-│  Ryuz WAN Simulator - Versión 1.107                         │
+│  Ryuz WAN Simulator - Versión $WANSIM_VERSION                         │
 │  Solución Empresarial para Simulación de Redes WAN          │
 │  Créditos: decameru@outlook.com                             │
 │  Ejecutando en Linux                                        │
@@ -910,28 +997,29 @@ subnet ${SEGMENT_PREFIX:-192.168}.${subnet_octet}.0 netmask 255.255.255.0 {
 EOF
             done
 
-            sudo tee /etc/default/isc-dhcp-server > /dev/null <<EOF
+            sudo tee "$DHCP_DEFAULT_FILE" > /dev/null <<EOF
 INTERFACESv4="${VALID_VLANS[*]}"
+DHCPDARGS="${VALID_VLANS[*]}"
 EOF
 
             log_message "INFO" "Validando configuración DHCP..."
             if dhcpd -t -cf /etc/dhcp/dhcpd.conf >/dev/null 2>&1; then
                 log_message "OK" "Configuración DHCP válida."
-                sudo systemctl enable isc-dhcp-server >/dev/null 2>&1
-                if sudo systemctl restart isc-dhcp-server >/dev/null 2>&1; then
+                sudo systemctl enable "$DHCP_SERVICE" >/dev/null 2>&1
+                if sudo systemctl restart "$DHCP_SERVICE" >/dev/null 2>&1; then
                     sleep 2
-                    if systemctl is-active isc-dhcp-server >/dev/null; then
+                    if systemctl is-active "$DHCP_SERVICE" >/dev/null; then
                         log_message "OK" "DHCP configurado correctamente."
                         echo "DHCP - Configurado correctamente."
                     else
                         log_message "ERROR" "Error al iniciar el servicio DHCP. Revisando logs..."
-                        dhcp_error=$(journalctl -u isc-dhcp-server -n 50 --no-pager 2>&1)
+                        dhcp_error=$(journalctl -u "$DHCP_SERVICE" -n 50 --no-pager 2>&1)
                         log_message "ERROR" "Error DHCP: $dhcp_error"
                         echo "  [ERROR] DHCP no configurado. Revisa los logs in $LOGFILE."
                     fi
                 else
                     log_message "ERROR" "Error al reiniciar el servicio DHCP. Revisando logs..."
-                    dhcp_error=$(journalctl -u isc-dhcp-server -n 50 --no-pager 2>&1)
+                    dhcp_error=$(journalctl -u "$DHCP_SERVICE" -n 50 --no-pager 2>&1)
                     log_message "ERROR" "Error DHCP: $dhcp_error"
                     echo "  [ERROR] DHCP no configurado. Revisa los logs in $LOGFILE."
                 fi
@@ -988,15 +1076,16 @@ EOF
         exit 1
     fi
 
-    # Verificar permisos del directorio /etc/iptables/
-    if [ ! -d /etc/iptables ]; then
-        log_message "INFO" "Creando directorio /etc/iptables..."
-        sudo mkdir -p /etc/iptables >/dev/null 2>&1
-        sudo chmod 755 /etc/iptables >/dev/null 2>&1
+    # Verificar permisos del directorio de reglas persistentes.
+    IPTABLES_SAVE_DIR="$(dirname "$IPTABLES_SAVE_FILE")"
+    if [ ! -d "$IPTABLES_SAVE_DIR" ]; then
+        log_message "INFO" "Creando directorio $IPTABLES_SAVE_DIR..."
+        sudo mkdir -p "$IPTABLES_SAVE_DIR" >/dev/null 2>&1
+        sudo chmod 755 "$IPTABLES_SAVE_DIR" >/dev/null 2>&1
     fi
-    if [ ! -w /etc/iptables ]; then
-        log_message "INFO" "Ajustando permisos del directorio /etc/iptables..."
-        sudo chmod 755 /etc/iptables >/dev/null 2>&1
+    if [ ! -w "$IPTABLES_SAVE_DIR" ]; then
+        log_message "INFO" "Ajustando permisos del directorio $IPTABLES_SAVE_DIR..."
+        sudo chmod 755 "$IPTABLES_SAVE_DIR" >/dev/null 2>&1
     fi
 
     # Aplicar reglas de iptables y guardarlas
@@ -1014,16 +1103,19 @@ EOF
         temp_rules="/tmp/iptables_rules.v4"
         sudo iptables-save > "$temp_rules" 2>/tmp/iptables_error.log
         if [ $? -eq 0 ]; then
-            sudo mv "$temp_rules" /etc/iptables/rules.v4 >/tmp/iptables_error.log 2>&1
+            sudo mv "$temp_rules" "$IPTABLES_SAVE_FILE" >/tmp/iptables_error.log 2>&1
             if [ $? -eq 0 ]; then
-                sudo chmod 644 /etc/iptables/rules.v4 >/dev/null 2>&1
-                log_message "OK" "Reglas de NAT guardadas correctamente en /etc/iptables/rules.v4."
+                sudo chmod 644 "$IPTABLES_SAVE_FILE" >/dev/null 2>&1
+                if [ "$OS_FAMILY" = "rhel" ]; then
+                    sudo systemctl enable iptables >/dev/null 2>&1 || true
+                fi
+                log_message "OK" "Reglas de NAT guardadas correctamente en $IPTABLES_SAVE_FILE."
                 echo "NAT - Configurado y guardado correctamente."
                 rm -f /tmp/iptables_error.log
                 break
             else
                 iptables_error=$(cat /tmp/iptables_error.log)
-                log_message "ERROR" "Error al mover reglas de NAT a /etc/iptables/rules.v4: $iptables_error"
+                log_message "ERROR" "Error al mover reglas de NAT a $IPTABLES_SAVE_FILE: $iptables_error"
             fi
         else
             iptables_error=$(cat /tmp/iptables_error.log)
@@ -1036,7 +1128,7 @@ EOF
 
     if [ $attempt -gt $max_attempts ]; then
         log_message "ERROR" "No se pudo configurar NAT tras $max_attempts intentos."
-        echo "${COLOR_ERROR}No se pudo configurar NAT. Revisa los logs en $LOGFILE y verifica permisos en /etc/iptables/.${COLOR_RESET}"
+        echo "${COLOR_ERROR}No se pudo configurar NAT. Revisa los logs en $LOGFILE y verifica permisos en $IPTABLES_SAVE_DIR.${COLOR_RESET}"
         exit 1
     fi
 elif [ "$TOPOLOGY_MODE" = "bridge" ]; then
@@ -1556,7 +1648,7 @@ if TELEGRAM_ENABLED and Updater:
         except Exception as e: logger.error(f'Telegram error: {e}')
     threading.Thread(target=bot,daemon=True).start()
 TEMPLATE=r"""
-<!doctype html><html lang='es'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Ryuz WAN Simulator</title><link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css' rel='stylesheet'><script src='https://cdn.jsdelivr.net/npm/chart.js'></script><style>body{background:linear-gradient(135deg,#1e3c72,#2a5298);color:white;min-height:100vh}.card{background:rgba(255,255,255,.12);border:0;border-radius:15px}.form-control,.form-select{background:rgba(255,255,255,.22);color:white;border:0}.output{background:rgba(0,0,0,.3);padding:10px;border-radius:6px;white-space:pre-wrap}.chart-container{height:200px}.badge-soft{background:rgba(255,255,255,.2);color:white}</style></head><body><div class='container py-4'><h1 class='text-center'>Ryuz WAN Simulator</h1><p class='text-center'>L3/NAT y L2 Bridge por pares entrada/salida</p>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class='alert alert-{{c}}'>{{m}}</div>{% endfor %}{% endwith %}<div class='d-flex justify-content-center gap-2 mb-4'><form method='post' action='{{url_for("configure")}}'><input type='hidden' name='action' value='reset_all'><button class='btn btn-primary'>Restablecer todas</button></form><select id='unit' class='form-select w-auto' onchange='updateCharts()'><option value='mbps'>Mbps</option><option value='kbps'>Kbps</option><option value='mb'>MB/s</option><option value='kb'>KB/s</option></select></div><div class='row'>{% for i in interfaces %}<div class='col-md-6 col-lg-4 mb-4'><div class='card p-4 h-100'><h4>{{stats[i].label}}</h4><div>{% if stats[i].bridge %}<span class='badge badge-soft'>{{stats[i].bridge}}</span>{% endif %} {% if stats[i].role %}<span class='badge badge-soft'>{{stats[i].role}}</span>{% endif %}</div><small>Interfaz: {{i}}{% if stats[i].peer %}<br>Peer: {{stats[i].peer}}{% endif %}{% if stats[i].mac %}<br>MAC: {{stats[i].mac}}{% endif %}</small><form method='post' action='{{url_for("configure")}}' class='mt-3'><input type='hidden' name='iface' value='{{i}}'><input type='hidden' name='action' value='apply'><label>Delay/latencia ms</label><input class='form-control' type='number' name='delay' step='.1' min='0' value='{{stats[i].delay}}'><label>Jitter ms</label><input class='form-control' type='number' name='jitter' step='.1' min='0' value='{{stats[i].jitter}}'><label>Ruido/Pérdida %</label><input class='form-control' type='number' name='loss' step='.1' min='0' max='100' value='{{stats[i].loss}}'><div class='mt-3 d-flex gap-2'><button class='btn btn-primary'>Aplicar</button><button class='btn btn-warning' onclick='this.form.elements["action"].value="reset"'>Restablecer</button></div></form><div class='mt-3 d-flex flex-wrap gap-1'>{% for label,d,j,l in quicks %}<form method='post' action='{{url_for("configure")}}'><input type='hidden' name='iface' value='{{i}}'><input type='hidden' name='action' value='apply'><input type='hidden' name='delay' value='{{d}}'><input type='hidden' name='jitter' value='{{j}}'><input type='hidden' name='loss' value='{{l}}'><button class='btn btn-outline-light btn-sm'>{{label}}</button></form>{% endfor %}</div><div class='chart-container mt-3'><canvas id='c{{loop.index}}'></canvas></div><pre class='output mt-2' id='o{{loop.index}}'></pre></div></div>{% endfor %}</div><div class='text-center'>Ryuz WAN Simulator - Versión 1.107</div></div><script>const data={{chart|safe}};let charts={};function updateCharts(){let u=document.getElementById('unit').value;data.forEach((x,n)=>{let s=x.stats,vals=[s[u+'_in'],s[u+'_out'],s.delay,s.jitter,s.loss],id='c'+(n+1),ctx=document.getElementById(id);if(!ctx)return;if(charts[id]){charts[id].data.datasets[0].data=vals;charts[id].update()}else{charts[id]=new Chart(ctx.getContext('2d'),{type:'bar',data:{labels:['Entrada','Salida','Delay','Jitter','Ruido/Pérdida'],datasets:[{label:x.label,data:vals,borderWidth:1}]},options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true}}}})}document.getElementById('o'+(n+1)).innerText='Delay: '+Number(s.delay).toFixed(1)+' ms\nJitter: '+Number(s.jitter).toFixed(1)+' ms\nRuido/Pérdida: '+Number(s.loss).toFixed(1)+' %\nEntrada: '+Number(s[u+'_in']).toFixed(2)+' '+u+'\nSalida: '+Number(s[u+'_out']).toFixed(2)+' '+u})}window.onload=updateCharts;</script></body></html>
+<!doctype html><html lang='es'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Ryuz WAN Simulator</title><link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css' rel='stylesheet'><script src='https://cdn.jsdelivr.net/npm/chart.js'></script><style>body{background:linear-gradient(135deg,#1e3c72,#2a5298);color:white;min-height:100vh}.card{background:rgba(255,255,255,.12);border:0;border-radius:15px}.form-control,.form-select{background:rgba(255,255,255,.22);color:white;border:0}.output{background:rgba(0,0,0,.3);padding:10px;border-radius:6px;white-space:pre-wrap}.chart-container{height:200px}.badge-soft{background:rgba(255,255,255,.2);color:white}</style></head><body><div class='container py-4'><h1 class='text-center'>Ryuz WAN Simulator</h1><p class='text-center'>L3/NAT y L2 Bridge por pares entrada/salida</p>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class='alert alert-{{c}}'>{{m}}</div>{% endfor %}{% endwith %}<div class='d-flex justify-content-center gap-2 mb-4'><form method='post' action='{{url_for("configure")}}'><input type='hidden' name='action' value='reset_all'><button class='btn btn-primary'>Restablecer todas</button></form><select id='unit' class='form-select w-auto' onchange='updateCharts()'><option value='mbps'>Mbps</option><option value='kbps'>Kbps</option><option value='mb'>MB/s</option><option value='kb'>KB/s</option></select></div><div class='row'>{% for i in interfaces %}<div class='col-md-6 col-lg-4 mb-4'><div class='card p-4 h-100'><h4>{{stats[i].label}}</h4><div>{% if stats[i].bridge %}<span class='badge badge-soft'>{{stats[i].bridge}}</span>{% endif %} {% if stats[i].role %}<span class='badge badge-soft'>{{stats[i].role}}</span>{% endif %}</div><small>Interfaz: {{i}}{% if stats[i].peer %}<br>Peer: {{stats[i].peer}}{% endif %}{% if stats[i].mac %}<br>MAC: {{stats[i].mac}}{% endif %}</small><form method='post' action='{{url_for("configure")}}' class='mt-3'><input type='hidden' name='iface' value='{{i}}'><input type='hidden' name='action' value='apply'><label>Delay/latencia ms</label><input class='form-control' type='number' name='delay' step='.1' min='0' value='{{stats[i].delay}}'><label>Jitter ms</label><input class='form-control' type='number' name='jitter' step='.1' min='0' value='{{stats[i].jitter}}'><label>Ruido/Pérdida %</label><input class='form-control' type='number' name='loss' step='.1' min='0' max='100' value='{{stats[i].loss}}'><div class='mt-3 d-flex gap-2'><button class='btn btn-primary'>Aplicar</button><button class='btn btn-warning' onclick='this.form.elements["action"].value="reset"'>Restablecer</button></div></form><div class='mt-3 d-flex flex-wrap gap-1'>{% for label,d,j,l in quicks %}<form method='post' action='{{url_for("configure")}}'><input type='hidden' name='iface' value='{{i}}'><input type='hidden' name='action' value='apply'><input type='hidden' name='delay' value='{{d}}'><input type='hidden' name='jitter' value='{{j}}'><input type='hidden' name='loss' value='{{l}}'><button class='btn btn-outline-light btn-sm'>{{label}}</button></form>{% endfor %}</div><div class='chart-container mt-3'><canvas id='c{{loop.index}}'></canvas></div><pre class='output mt-2' id='o{{loop.index}}'></pre></div></div>{% endfor %}</div><div class='text-center'>Ryuz WAN Simulator - Versión __WANSIM_VERSION__</div></div><script>const data={{chart|safe}};let charts={};function updateCharts(){let u=document.getElementById('unit').value;data.forEach((x,n)=>{let s=x.stats,vals=[s[u+'_in'],s[u+'_out'],s.delay,s.jitter,s.loss],id='c'+(n+1),ctx=document.getElementById(id);if(!ctx)return;if(charts[id]){charts[id].data.datasets[0].data=vals;charts[id].update()}else{charts[id]=new Chart(ctx.getContext('2d'),{type:'bar',data:{labels:['Entrada','Salida','Delay','Jitter','Ruido/Pérdida'],datasets:[{label:x.label,data:vals,borderWidth:1}]},options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true}}}})}document.getElementById('o'+(n+1)).innerText='Delay: '+Number(s.delay).toFixed(1)+' ms\nJitter: '+Number(s.jitter).toFixed(1)+' ms\nRuido/Pérdida: '+Number(s.loss).toFixed(1)+' %\nEntrada: '+Number(s[u+'_in']).toFixed(2)+' '+u+'\nSalida: '+Number(s[u+'_out']).toFixed(2)+' '+u})}window.onload=updateCharts;</script></body></html>
 """
 
 @app.route('/')
@@ -1616,7 +1708,7 @@ log_message "OK" "Sintaxis de $WANSIM_DASHBOARD verificada."
 
 # Reemplazar placeholders en el archivo Python de forma segura
 log_message "DEBUG" "Reemplazando placeholders en $WANSIM_DASHBOARD con reemplazo seguro..."
-export TELEGRAM_TOKEN TELEGRAM_CHAT_ID TELEGRAM_ENABLED PYTHON_VLAN_LIST PYTHON_INTERFACE_META DASHBOARD_PORT
+export TELEGRAM_TOKEN TELEGRAM_CHAT_ID TELEGRAM_ENABLED PYTHON_VLAN_LIST PYTHON_INTERFACE_META DASHBOARD_PORT WANSIM_VERSION NETEM_STATE_FILE
 if ! python3 - "$WANSIM_DASHBOARD" <<'PYREPLACE'
 import json
 import os
@@ -1651,7 +1743,8 @@ replacements = {
     "__TELEGRAM_TOKEN_LITERAL__": json.dumps(os.environ.get("TELEGRAM_TOKEN", "")),
     "__TELEGRAM_CHAT_ID_LITERAL__": json.dumps(os.environ.get("TELEGRAM_CHAT_ID", "")),
     "__TELEGRAM_ENABLED__": os.environ.get("TELEGRAM_ENABLED", "0"),
-    "__NETEM_STATE_FILE__": os.environ.get("NETEM_STATE_FILE", "/home/axis/wansim_netem_state.json"),
+    "__NETEM_STATE_FILE__": os.environ.get("NETEM_STATE_FILE", os.path.expanduser("~/wansim_netem_state.json")),
+    "__WANSIM_VERSION__": os.environ.get("WANSIM_VERSION", "1.108"),
 }
 for key, value in replacements.items():
     text = text.replace(key, value)
@@ -1706,12 +1799,19 @@ done
 
 # Configurar servicio systemd
 log_message "DEBUG" "Configurando servicio systemd..."
+L2_UNIT_LINES=""
+if [ "${TOPOLOGY_MODE:-}" = "bridge" ]; then
+    L2_UNIT_LINES="After=network-online.target wansim-l2-persist.service
+Wants=network-online.target
+Requires=wansim-l2-persist.service"
+else
+    L2_UNIT_LINES="After=network-online.target
+Wants=network-online.target"
+fi
 if ! sudo bash -c "cat > $SERVICE_FILE" <<SERVICEEOF
 [Unit]
 Description=Ryuz WAN Simulator Dashboard
-After=network-online.target wansim-l2-persist.service
-Wants=network-online.target
-Requires=wansim-l2-persist.service
+$L2_UNIT_LINES
 
 [Service]
 User=$CURRENT_USER
