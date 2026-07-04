@@ -10,7 +10,7 @@ exec > >(tee -a /tmp/wansim_debug.log) 2>&1
 # -----------------------------------------------
 # Variables de configuración
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WANSIM_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "1.108")"
+WANSIM_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "1.109")"
 USER_HOME="${HOME:-$(getent passwd "$(whoami)" | cut -d: -f6)}"
 LOGFILE="$USER_HOME/emix_abundix.log"
 CONFIG_FILE="$USER_HOME/emix_abundix.conf"
@@ -146,16 +146,37 @@ pkg_installed() {
 
 pkg_update() {
     case "$PKG_MANAGER" in
-        apt) sudo apt-get update ;;
+        apt) sudo DEBIAN_FRONTEND=noninteractive apt-get update ;;
         dnf) sudo dnf makecache -y ;;
         yum) sudo yum makecache -y ;;
+    esac
+}
+
+preseed_debian_package() {
+    local dep="$1"
+    case "$dep" in
+        iptables-persistent|netfilter-persistent)
+            if command -v debconf-set-selections >/dev/null 2>&1; then
+                log_message "INFO" "Preaprobando dialogos de $dep para instalacion no interactiva..."
+                {
+                    echo "iptables-persistent iptables-persistent/autosave_v4 boolean true"
+                    echo "iptables-persistent iptables-persistent/autosave_v6 boolean true"
+                } | sudo debconf-set-selections || true
+            fi
+            ;;
     esac
 }
 
 pkg_install() {
     local dep="$1"
     case "$PKG_MANAGER" in
-        apt) sudo apt-get install -y "$dep" ;;
+        apt)
+            preseed_debian_package "$dep"
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+                -o Dpkg::Options::="--force-confdef" \
+                -o Dpkg::Options::="--force-confold" \
+                "$dep"
+            ;;
         dnf) sudo dnf install -y "$dep" ;;
         yum) sudo yum install -y "$dep" ;;
     esac
@@ -1744,7 +1765,7 @@ replacements = {
     "__TELEGRAM_CHAT_ID_LITERAL__": json.dumps(os.environ.get("TELEGRAM_CHAT_ID", "")),
     "__TELEGRAM_ENABLED__": os.environ.get("TELEGRAM_ENABLED", "0"),
     "__NETEM_STATE_FILE__": os.environ.get("NETEM_STATE_FILE", os.path.expanduser("~/wansim_netem_state.json")),
-    "__WANSIM_VERSION__": os.environ.get("WANSIM_VERSION", "1.108"),
+    "__WANSIM_VERSION__": os.environ.get("WANSIM_VERSION", "1.109"),
 }
 for key, value in replacements.items():
     text = text.replace(key, value)

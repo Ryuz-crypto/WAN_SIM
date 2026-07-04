@@ -1,6 +1,6 @@
 # Ryuz WAN Simulator
 
-**Version 1.108** | **Autor**: decameru@outlook.com
+**Version 1.109** | **Autor**: decameru@outlook.com
 
 Ryuz WAN Simulator es una herramienta para simular condiciones WAN en Linux. Permite aplicar latencia, jitter y perdida de paquetes sobre interfaces fisicas, VLANs o bridges L2, con un dashboard Flask para control operativo.
 
@@ -19,7 +19,7 @@ Esta rama se mantiene como la base principal del simulador. La evolucion FastAPI
 
 ## Sistemas Soportados
 
-La version 1.108 detecta el gestor de paquetes y ajusta dependencias para:
+La version 1.109 detecta el gestor de paquetes y ajusta dependencias para:
 
 - Ubuntu Server 20.04 o superior.
 - Ubuntu Workstation 20.04 o superior.
@@ -149,6 +149,12 @@ Antes de ejecutar en un servidor compartido, revisa:
 - Politicas de SELinux/firewalld en Fedora, CentOS o Rocky.
 
 ## Release Notes
+
+### Version 1.109
+
+- Se preaprueba la instalacion de `iptables-persistent` en Ubuntu/Debian para evitar la pantalla interactiva YES/NO.
+- Se ejecuta `apt-get` con `DEBIAN_FRONTEND=noninteractive`.
+- Se conservan configuraciones existentes de paquetes con opciones `--force-confdef` y `--force-confold`.
 
 ### Version 1.108
 
