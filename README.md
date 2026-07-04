@@ -1,6 +1,6 @@
 # Ryuz WAN Simulator
 
-**Version 1.111** | **Autor**: decameru@outlook.com
+**Version 1.112** | **Autor**: decameru@outlook.com
 
 Ryuz WAN Simulator es una herramienta para simular condiciones WAN en Linux. Permite aplicar latencia, jitter y perdida de paquetes sobre interfaces fisicas, VLANs o bridges L2, con un dashboard Flask para control operativo.
 
@@ -19,7 +19,7 @@ Esta rama se mantiene como la base principal del simulador. La evolucion FastAPI
 
 ## Sistemas Soportados
 
-La version 1.111 detecta el gestor de paquetes y ajusta dependencias para:
+La version 1.112 detecta el gestor de paquetes y ajusta dependencias para:
 
 - Ubuntu Server 20.04 o superior.
 - Ubuntu Workstation 20.04 o superior.
@@ -153,6 +153,12 @@ Antes de ejecutar en un servidor compartido, revisa:
 Si una ejecucion falla, el script ejecuta rollback automatico de servicios, dashboard generado, virtualenv parcial, bridges/VLANs generadas y archivos temporales. El log principal se conserva en `~/emix_abundix.log`.
 
 ## Release Notes
+
+### Version 1.112
+
+- Se asegura la dependencia `python-telegram-bot==13.15` tambien cuando se reutiliza una configuracion previa con Telegram habilitado.
+- La instalacion opcional de Telegram ahora es idempotente y valida el import `telegram` despues de instalar.
+- Si Telegram no puede instalarse o importarse en el Python disponible, se deshabilita y el despliegue base continua.
 
 ### Version 1.111
 

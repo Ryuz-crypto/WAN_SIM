@@ -10,7 +10,7 @@ exec > >(tee -a /tmp/wansim_debug.log) 2>&1
 # -----------------------------------------------
 # Variables de configuración
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WANSIM_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "1.111")"
+WANSIM_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "1.112")"
 USER_HOME="${HOME:-$(getent passwd "$(whoami)" | cut -d: -f6)}"
 WANSIM_HOME="$USER_HOME/.wansim"
 PYTHON_VENV="$WANSIM_HOME/venv"
@@ -519,6 +519,35 @@ for dep in "${PYTHON_DEPS[@]}"; do
 done
 log_message "OK" "Dependencias Python base instaladas en $PYTHON_VENV."
 
+ensure_telegram_runtime() {
+    if [ "${INTEGRATE_TELEGRAM:-n}" != "s" ]; then
+        return 0
+    fi
+    if "$PYTHON_BIN" -c "import telegram" >/dev/null 2>&1; then
+        log_message "OK" "Dependencia opcional Telegram disponible en virtualenv."
+        return 0
+    fi
+    log_message "INFO" "Instalando dependencia opcional de Telegram en virtualenv..."
+    "$PIP_BIN" install "python-telegram-bot==13.15" "standard-imghdr" --no-warn-script-location >/tmp/wansim_pip_telegram.log 2>&1 || {
+        log_message "ERROR" "No se pudo instalar python-telegram-bot==13.15. Detalle: $(cat /tmp/wansim_pip_telegram.log)"
+        log_message "ADVERTENCIA" "Telegram se deshabilitará para continuar con el despliegue base."
+        echo "${COLOR_WARN}No se pudo preparar Telegram. Continuando sin Telegram.${COLOR_RESET}"
+        INTEGRATE_TELEGRAM="n"
+        TELEGRAM_TOKEN=""
+        TELEGRAM_CHAT_ID=""
+        return 0
+    }
+    "$PYTHON_BIN" -c "import telegram" >/dev/null 2>&1 || {
+        log_message "ERROR" "python-telegram-bot se instaló, pero el módulo telegram no importó correctamente."
+        log_message "ADVERTENCIA" "Telegram se deshabilitará para continuar con el despliegue base."
+        INTEGRATE_TELEGRAM="n"
+        TELEGRAM_TOKEN=""
+        TELEGRAM_CHAT_ID=""
+        return 0
+    }
+    log_message "OK" "Dependencia opcional Telegram instalada en virtualenv."
+}
+
 # Mostrar banner
 log_message "DEBUG" "Iniciando configuración interactiva de Ryuz WAN Simulator..."
 clear
@@ -698,21 +727,20 @@ if [ "$INTERACTIVE" -eq 1 ]; then
         if [[ "$INTEGRATE_TELEGRAM" =~ ^[sSnN]$ ]]; then INTEGRATE_TELEGRAM=$(echo "$INTEGRATE_TELEGRAM" | tr '[:upper:]' '[:lower:]'); break; else log_message "ERROR" "Ingresa 's' o 'n'."; fi
     done
     if [ "$INTEGRATE_TELEGRAM" = "s" ]; then
-        log_message "INFO" "Instalando dependencia opcional de Telegram en virtualenv..."
-        "$PIP_BIN" install "python-telegram-bot==13.15" --no-warn-script-location >/tmp/wansim_pip_telegram.log 2>&1 || {
-            log_message "ERROR" "No se pudo instalar python-telegram-bot==13.15. Detalle: $(cat /tmp/wansim_pip_telegram.log)"
-            echo "${COLOR_ERROR}No se pudo preparar Telegram. Ejecuta sin Telegram o revisa conectividad/Python.${COLOR_RESET}"
-            exit 1
-        }
-        read -p "${COLOR_INFO}[ENTRADA] Ingresa el token del Bot de Telegram: ${COLOR_RESET}" TELEGRAM_TOKEN
-        read -p "${COLOR_INFO}[ENTRADA] Ingresa el Chat ID (deja vacío para obtenerlo automáticamente): ${COLOR_RESET}" TELEGRAM_CHAT_ID
-        if [ -z "$TELEGRAM_CHAT_ID" ]; then get_telegram_chat_id "$TELEGRAM_TOKEN"; fi
+        ensure_telegram_runtime
+        if [ "$INTEGRATE_TELEGRAM" = "s" ]; then
+            read -p "${COLOR_INFO}[ENTRADA] Ingresa el token del Bot de Telegram: ${COLOR_RESET}" TELEGRAM_TOKEN
+            read -p "${COLOR_INFO}[ENTRADA] Ingresa el Chat ID (deja vacío para obtenerlo automáticamente): ${COLOR_RESET}" TELEGRAM_CHAT_ID
+            if [ -z "$TELEGRAM_CHAT_ID" ]; then get_telegram_chat_id "$TELEGRAM_TOKEN"; fi
+        fi
     else
         TELEGRAM_TOKEN=""
         TELEGRAM_CHAT_ID=""
     fi
     echo "${COLOR_CYAN}└───────────────────────────────────────────────────────────┘${COLOR_RESET}"
 fi
+
+ensure_telegram_runtime
 
 
 # SECCIÓN 5: Configuración de Red
@@ -1486,10 +1514,7 @@ for module in flask requests OpenSSL; do
     log_message "OK" "$module disponible en virtualenv."
 done
 if [ "${INTEGRATE_TELEGRAM:-n}" = "s" ]; then
-    "$PYTHON_BIN" -c "import telegram" >/dev/null 2>&1 || {
-        log_message "ERROR" "Telegram fue habilitado pero el módulo telegram no está disponible en $PYTHON_VENV."
-        exit 1
-    }
+    ensure_telegram_runtime
 fi
 log_message "OK" "Dependencias de Python verificadas en virtualenv."
 
@@ -1810,7 +1835,7 @@ replacements = {
     "__TELEGRAM_CHAT_ID_LITERAL__": json.dumps(os.environ.get("TELEGRAM_CHAT_ID", "")),
     "__TELEGRAM_ENABLED__": os.environ.get("TELEGRAM_ENABLED", "0"),
     "__NETEM_STATE_FILE__": os.environ.get("NETEM_STATE_FILE", os.path.expanduser("~/wansim_netem_state.json")),
-    "__WANSIM_VERSION__": os.environ.get("WANSIM_VERSION", "1.111"),
+    "__WANSIM_VERSION__": os.environ.get("WANSIM_VERSION", "1.112"),
 }
 for key, value in replacements.items():
     text = text.replace(key, value)
