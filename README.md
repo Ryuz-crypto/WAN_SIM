@@ -1,6 +1,6 @@
 # Ryuz WAN Simulator
 
-**Version 1.112** | **Autor**: decameru@outlook.com
+**Version 1.113** | **Autor**: decameru@outlook.com
 
 Ryuz WAN Simulator es una herramienta para simular condiciones WAN en Linux. Permite aplicar latencia, jitter y perdida de paquetes sobre interfaces fisicas, VLANs o bridges L2, con un dashboard Flask para control operativo.
 
@@ -8,18 +8,19 @@ Esta rama se mantiene como la base principal del simulador. La evolucion FastAPI
 
 ## Funcionalidades
 
-- Modo L3/NAT con multiples VLANs sobre una interfaz LAN.
+- Modo L3/NAT con hasta dos pares WAN/LAN y multiples VLANs por LAN.
+- Deteccion por WAN de IP privada, IP publica y estimacion de ancho de banda disponible.
 - Modo Bridge L2 con 1 a 3 pares de interfaces entrada/salida.
 - Control de latencia, jitter y perdida por interfaz usando `tc/netem`.
-- Dashboard web Flask en el puerto `5000`.
+- Dashboard web Flask en el puerto `5000`, con soporte opcional HTTPS.
 - DHCP automatico para VLANs.
 - Persistencia L2 mediante `wansim-l2-persist.service`.
-- Integracion opcional con Telegram.
+- Integracion opcional con Telegram, botones de presets y fallback HTTP API si falla la libreria legacy.
 - Configuracion persistente en el home del usuario que ejecuta el script.
 
 ## Sistemas Soportados
 
-La version 1.112 detecta el gestor de paquetes y ajusta dependencias para:
+La version 1.113 detecta el gestor de paquetes y ajusta dependencias para:
 
 - Ubuntu Server 20.04 o superior.
 - Ubuntu Workstation 20.04 o superior.
@@ -90,14 +91,21 @@ No lo ejecutes directamente como `root`. El script usa `sudo` para las operacion
 
 Durante el asistente interactivo podras elegir:
 
-- `L3 / NAT`: VLANs + DHCP + NAT hacia una interfaz WAN.
+- `L3 / NAT`: uno o dos pares WAN/LAN, cada LAN con VLANs + DHCP + NAT hacia su WAN.
 - `Bridge L2`: bridges entre pares de interfaces fisicas.
 - Integracion opcional con Telegram.
+- HTTPS opcional usando PEM, PEM bundle, PFX/PKCS12 o DER.
 
 Al finalizar, el dashboard queda disponible en:
 
 ```text
 http://<IP_DEL_SERVIDOR>:5000
+```
+
+Si habilitas HTTPS, el dashboard se publica con:
+
+```text
+https://<IP_DEL_SERVIDOR>:5000
 ```
 
 ## Archivos Generados
@@ -112,6 +120,7 @@ Los archivos operativos se crean en el home del usuario que ejecuta el script:
 | `~/emix_abundix.log` | Log principal |
 | `~/wansim_netem_state.json` | Estado tc/netem |
 | `~/.wansim/venv` | Entorno Python aislado del dashboard |
+| `~/.wansim/tls/` | Certificado y llave normalizados para HTTPS |
 
 Archivos del sistema:
 
@@ -154,11 +163,19 @@ Si una ejecucion falla, el script ejecuta rollback automatico de servicios, dash
 
 ## Release Notes
 
+### Version 1.113
+
+- Se agrega soporte L3/NAT para hasta dos pares WAN/LAN, con validacion para evitar interfaces, VLAN IDs y octetos repetidos.
+- El dashboard muestra con mayor claridad que WAN/LAN/subred controla cada tarjeta de inyeccion.
+- Cada WAN reporta IP privada, IP publica detectada y una estimacion de BW mediante descarga controlada en segundo plano.
+- Se agrega HTTPS opcional para Flask usando certificados PEM separados, PEM bundle, PFX/PKCS12 o DER; el script convierte y valida el par antes de iniciar el servicio.
+- Telegram ahora intenta varias rutinas de instalacion y, si `python-telegram-bot` no importa, opera mediante fallback HTTP API con botones de presets, reset y modo manual.
+
 ### Version 1.112
 
 - Se asegura la dependencia `python-telegram-bot==13.15` tambien cuando se reutiliza una configuracion previa con Telegram habilitado.
 - La instalacion opcional de Telegram ahora es idempotente y valida el import `telegram` despues de instalar.
-- Si Telegram no puede instalarse o importarse en el Python disponible, se deshabilita y el despliegue base continua.
+- Si Telegram no puede instalarse o importarse en el Python disponible, desde 1.113 el dashboard usa el fallback HTTP API.
 
 ### Version 1.111
 

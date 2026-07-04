@@ -1,6 +1,6 @@
 # Project Structure
 
-Version 1.112 keeps `WANsim2.sh` as the main entrypoint for compatibility with existing installs.
+Version 1.113 keeps `WANsim2.sh` as the main entrypoint for compatibility with existing installs.
 
 Current layout:
 
@@ -22,6 +22,7 @@ lib/
   network.sh              # VLAN, bridge, NAT and tc helpers
   dashboard.sh            # Flask dashboard generation and systemd unit
   telegram.sh             # Telegram bot setup and handlers
+  tls.sh                  # HTTPS certificate normalization and validation
 ```
 
 The safe migration path is to extract one group at a time and keep `WANsim2.sh` sourcing those files. That preserves the existing install command:

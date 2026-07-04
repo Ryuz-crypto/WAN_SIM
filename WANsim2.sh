@@ -10,7 +10,7 @@ exec > >(tee -a /tmp/wansim_debug.log) 2>&1
 # -----------------------------------------------
 # Variables de configuración
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WANSIM_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "1.112")"
+WANSIM_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "1.113")"
 USER_HOME="${HOME:-$(getent passwd "$(whoami)" | cut -d: -f6)}"
 WANSIM_HOME="$USER_HOME/.wansim"
 PYTHON_VENV="$WANSIM_HOME/venv"
@@ -24,6 +24,9 @@ SERVICE_FILE="/etc/systemd/system/wansim.service"
 PERSIST_SCRIPT="/usr/local/sbin/wansim_l2_persist.sh"
 PERSIST_SERVICE="/etc/systemd/system/wansim-l2-persist.service"
 NETEM_STATE_FILE="$USER_HOME/wansim_netem_state.json"
+TLS_DIR="$WANSIM_HOME/tls"
+TLS_CERT_FILE="$TLS_DIR/wansim.crt"
+TLS_KEY_FILE="$TLS_DIR/wansim.key"
 CURRENT_USER=$(whoami)
 DASHBOARD_PORT=5000
 HOST_IP=$(ip addr show | grep 'inet ' | grep -v '127.0.0.1' | awk '{print $2}' | cut -d'/' -f1 | head -n 1)
@@ -527,25 +530,187 @@ ensure_telegram_runtime() {
         log_message "OK" "Dependencia opcional Telegram disponible en virtualenv."
         return 0
     fi
-    log_message "INFO" "Instalando dependencia opcional de Telegram en virtualenv..."
-    "$PIP_BIN" install "python-telegram-bot==13.15" "standard-imghdr" --no-warn-script-location >/tmp/wansim_pip_telegram.log 2>&1 || {
-        log_message "ERROR" "No se pudo instalar python-telegram-bot==13.15. Detalle: $(cat /tmp/wansim_pip_telegram.log)"
-        log_message "ADVERTENCIA" "Telegram se deshabilitará para continuar con el despliegue base."
-        echo "${COLOR_WARN}No se pudo preparar Telegram. Continuando sin Telegram.${COLOR_RESET}"
-        INTEGRATE_TELEGRAM="n"
-        TELEGRAM_TOKEN=""
-        TELEGRAM_CHAT_ID=""
+
+    log_message "INFO" "Preparando Telegram con rutinas alternativas dentro del virtualenv..."
+    "$PIP_BIN" install "standard-imghdr" --no-warn-script-location >/tmp/wansim_pip_telegram.log 2>&1 || true
+
+    log_message "INFO" "Telegram intento 1/4: instalacion legacy completa."
+    if "$PIP_BIN" install "python-telegram-bot==13.15" "standard-imghdr" --no-warn-script-location >>/tmp/wansim_pip_telegram.log 2>&1 \
+        && "$PYTHON_BIN" -c "import telegram" >/dev/null 2>&1; then
+        log_message "OK" "Telegram listo con python-telegram-bot==13.15."
         return 0
-    }
-    "$PYTHON_BIN" -c "import telegram" >/dev/null 2>&1 || {
-        log_message "ERROR" "python-telegram-bot se instaló, pero el módulo telegram no importó correctamente."
-        log_message "ADVERTENCIA" "Telegram se deshabilitará para continuar con el despliegue base."
-        INTEGRATE_TELEGRAM="n"
-        TELEGRAM_TOKEN=""
-        TELEGRAM_CHAT_ID=""
+    fi
+
+    log_message "INFO" "Telegram intento 2/4: dependencias modernas y paquete sin dependencias fijadas."
+    if "$PIP_BIN" install "tornado>=6.4" "APScheduler<4" "cachetools" "pytz" "certifi" "standard-imghdr" --no-warn-script-location >>/tmp/wansim_pip_telegram.log 2>&1 \
+        && "$PIP_BIN" install --force-reinstall --no-deps "python-telegram-bot==13.15" --no-warn-script-location >>/tmp/wansim_pip_telegram.log 2>&1 \
+        && "$PYTHON_BIN" -c "import telegram" >/dev/null 2>&1; then
+        log_message "OK" "Telegram listo con dependencias compatibles."
         return 0
-    }
-    log_message "OK" "Dependencia opcional Telegram instalada en virtualenv."
+    fi
+
+    log_message "INFO" "Telegram intento 3/4: reinstalacion sin cache."
+    if "$PIP_BIN" install --no-cache-dir --force-reinstall "python-telegram-bot==13.15" "standard-imghdr" --no-warn-script-location >>/tmp/wansim_pip_telegram.log 2>&1 \
+        && "$PYTHON_BIN" -c "import telegram" >/dev/null 2>&1; then
+        log_message "OK" "Telegram listo con reinstalacion sin cache."
+        return 0
+    fi
+
+    log_message "INFO" "Telegram intento 4/4: fallback HTTP API con requests."
+    if "$PYTHON_BIN" -c "import requests" >/dev/null 2>&1; then
+        log_message "ADVERTENCIA" "No se pudo importar python-telegram-bot. Se usara fallback HTTP API; detalle: $(tail -n 20 /tmp/wansim_pip_telegram.log 2>/dev/null)"
+        return 0
+    fi
+
+    log_message "ERROR" "Telegram no quedo disponible: fallo python-telegram-bot y tambien requests. Detalle: $(cat /tmp/wansim_pip_telegram.log 2>/dev/null)"
+    return 1
+}
+
+iface_private_ip() {
+    local iface="$1"
+    ip -o -4 addr show "$iface" 2>/dev/null | awk '{print $4}' | cut -d'/' -f1 | head -n 1
+}
+
+validate_tls_chain() {
+    local cert="$1"
+    local key="$2"
+    "$PYTHON_BIN" - "$cert" "$key" <<'PYTLSVALID' >/tmp/wansim_tls_validate.log 2>&1
+import ssl, sys
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+ctx.load_cert_chain(sys.argv[1], sys.argv[2])
+PYTLSVALID
+}
+
+install_pem_tls_pair() {
+    local cert_src="$1"
+    local key_src="$2"
+    mkdir -p "$TLS_DIR"
+    chmod 700 "$TLS_DIR"
+    cp "$cert_src" "$TLS_CERT_FILE"
+    cp "$key_src" "$TLS_KEY_FILE"
+    chmod 600 "$TLS_CERT_FILE" "$TLS_KEY_FILE"
+    chown "$CURRENT_USER:$CURRENT_USER" "$TLS_CERT_FILE" "$TLS_KEY_FILE" 2>/dev/null || true
+    validate_tls_chain "$TLS_CERT_FILE" "$TLS_KEY_FILE"
+}
+
+install_pfx_tls_pair() {
+    local pfx_src="$1"
+    local pfx_pass="$2"
+    mkdir -p "$TLS_DIR"
+    chmod 700 "$TLS_DIR"
+    openssl pkcs12 -in "$pfx_src" -clcerts -nokeys -out "$TLS_CERT_FILE" -passin "pass:$pfx_pass" >/tmp/wansim_tls_convert.log 2>&1
+    openssl pkcs12 -in "$pfx_src" -nocerts -nodes -out "$TLS_KEY_FILE" -passin "pass:$pfx_pass" >>/tmp/wansim_tls_convert.log 2>&1
+    chmod 600 "$TLS_CERT_FILE" "$TLS_KEY_FILE"
+    chown "$CURRENT_USER:$CURRENT_USER" "$TLS_CERT_FILE" "$TLS_KEY_FILE" 2>/dev/null || true
+    validate_tls_chain "$TLS_CERT_FILE" "$TLS_KEY_FILE"
+}
+
+install_der_tls_pair() {
+    local cert_src="$1"
+    local key_src="$2"
+    mkdir -p "$TLS_DIR"
+    chmod 700 "$TLS_DIR"
+    openssl x509 -inform DER -in "$cert_src" -out "$TLS_CERT_FILE" >/tmp/wansim_tls_convert.log 2>&1
+    openssl rsa -inform DER -in "$key_src" -out "$TLS_KEY_FILE" >>/tmp/wansim_tls_convert.log 2>&1
+    chmod 600 "$TLS_CERT_FILE" "$TLS_KEY_FILE"
+    chown "$CURRENT_USER:$CURRENT_USER" "$TLS_CERT_FILE" "$TLS_KEY_FILE" 2>/dev/null || true
+    validate_tls_chain "$TLS_CERT_FILE" "$TLS_KEY_FILE"
+}
+
+configure_https_interactive() {
+    ENABLE_HTTPS=${ENABLE_HTTPS:-n}
+    TLS_MODE=${TLS_MODE:-none}
+    if [ "$INTERACTIVE" -ne 1 ]; then
+        return 0
+    fi
+
+    echo "${COLOR_CYAN}HTTPS / TLS del dashboard${COLOR_RESET}"
+    while true; do
+        read -p "${COLOR_INFO}[ENTRADA] ¿Habilitar HTTPS para el dashboard? (s/n) [predeterminado n]: ${COLOR_RESET}" ENABLE_HTTPS
+        ENABLE_HTTPS=${ENABLE_HTTPS:-n}
+        if [[ "$ENABLE_HTTPS" =~ ^[sSnN]$ ]]; then ENABLE_HTTPS=$(echo "$ENABLE_HTTPS" | tr '[:upper:]' '[:lower:]'); break; fi
+        log_message "ERROR" "Ingresa 's' o 'n'."
+    done
+    if [ "$ENABLE_HTTPS" != "s" ]; then
+        TLS_MODE="none"
+        TLS_CERT_FILE=""
+        TLS_KEY_FILE=""
+        return 0
+    fi
+
+    echo "${COLOR_INFO}Formatos soportados: 1) PEM cert+key  2) PEM bundle  3) PFX/PKCS12  4) DER cert+key${COLOR_RESET}"
+    while true; do
+        read -p "${COLOR_INFO}[ENTRADA] Tipo de certificado [1-4]: ${COLOR_RESET}" TLS_OPTION
+        case "$TLS_OPTION" in
+            1)
+                TLS_MODE="pem"
+                read -p "${COLOR_INFO}[ENTRADA] Ruta del certificado PEM/CRT: ${COLOR_RESET}" TLS_CERT_SRC
+                read -p "${COLOR_INFO}[ENTRADA] Ruta de la llave privada PEM/KEY: ${COLOR_RESET}" TLS_KEY_SRC
+                if install_pem_tls_pair "$TLS_CERT_SRC" "$TLS_KEY_SRC"; then break; fi
+                log_message "ERROR" "No se pudo validar el par PEM. Detalle: $(cat /tmp/wansim_tls_validate.log /tmp/wansim_tls_convert.log 2>/dev/null)"
+                ;;
+            2)
+                TLS_MODE="pem-bundle"
+                read -p "${COLOR_INFO}[ENTRADA] Ruta del bundle PEM con certificado y llave: ${COLOR_RESET}" TLS_BUNDLE_SRC
+                if install_pem_tls_pair "$TLS_BUNDLE_SRC" "$TLS_BUNDLE_SRC"; then break; fi
+                log_message "ERROR" "No se pudo validar el bundle PEM. Detalle: $(cat /tmp/wansim_tls_validate.log /tmp/wansim_tls_convert.log 2>/dev/null)"
+                ;;
+            3)
+                TLS_MODE="pfx"
+                read -p "${COLOR_INFO}[ENTRADA] Ruta del archivo PFX/P12/PKCS12: ${COLOR_RESET}" TLS_PFX_SRC
+                read -s -p "${COLOR_INFO}[ENTRADA] Password del PFX/P12 (Enter si no tiene): ${COLOR_RESET}" TLS_PFX_PASS
+                echo ""
+                if install_pfx_tls_pair "$TLS_PFX_SRC" "$TLS_PFX_PASS"; then break; fi
+                log_message "ERROR" "No se pudo convertir/validar el PFX/P12. Detalle: $(cat /tmp/wansim_tls_validate.log /tmp/wansim_tls_convert.log 2>/dev/null)"
+                ;;
+            4)
+                TLS_MODE="der"
+                read -p "${COLOR_INFO}[ENTRADA] Ruta del certificado DER/CER: ${COLOR_RESET}" TLS_DER_CERT_SRC
+                read -p "${COLOR_INFO}[ENTRADA] Ruta de la llave privada DER: ${COLOR_RESET}" TLS_DER_KEY_SRC
+                if install_der_tls_pair "$TLS_DER_CERT_SRC" "$TLS_DER_KEY_SRC"; then break; fi
+                log_message "ERROR" "No se pudo convertir/validar DER. Detalle: $(cat /tmp/wansim_tls_validate.log /tmp/wansim_tls_convert.log 2>/dev/null)"
+                ;;
+            *)
+                log_message "ERROR" "Selecciona una opcion entre 1 y 4."
+                ;;
+        esac
+    done
+    log_message "OK" "HTTPS habilitado con certificado validado en $TLS_CERT_FILE."
+}
+
+iface_public_ip() {
+    local iface="$1"
+    local public_ip=""
+    for endpoint in "https://api.ipify.org" "https://ifconfig.me/ip" "https://icanhazip.com"; do
+        public_ip=$(curl --interface "$iface" -fsS --max-time 6 "$endpoint" 2>/dev/null | tr -d '\r\n ' || true)
+        if [[ "$public_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "$public_ip"
+            return 0
+        fi
+    done
+    echo "N/D"
+}
+
+iface_bw_probe() {
+    local iface="$1"
+    local bytes_per_sec=""
+    bytes_per_sec=$(curl --interface "$iface" -LfsS --max-time 12 -o /dev/null \
+        -w '%{speed_download}' "https://speed.cloudflare.com/__down?bytes=10000000" 2>/dev/null || true)
+    if [[ "$bytes_per_sec" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        awk -v bps="$bytes_per_sec" 'BEGIN { printf "%.2f Mbps", (bps*8)/1000000 }'
+    else
+        echo "N/D"
+    fi
+}
+
+append_json_item() {
+    local current="$1"
+    local value="$2"
+    if [ "$current" = "[" ]; then
+        printf '%s"%s"' "$current" "$value"
+    else
+        printf '%s, "%s"' "$current" "$value"
+    fi
 }
 
 # Mostrar banner
@@ -674,13 +839,14 @@ if [ "$INTERACTIVE" -eq 1 ]; then
         echo "${COLOR_CYAN}┌─────────────────── Configuración L3 / VLANs ──────────────┐${COLOR_RESET}"
         echo "${COLOR_CYAN}│ En este contexto, cada VLAN representa un enlace simulado │${COLOR_RESET}"
         while true; do
-            read -p "${COLOR_INFO}[ENTRADA] ¿Cuántos enlaces (VLANs) simular? [predeterminado 10]: ${COLOR_RESET}" NUM_VLANS
-            NUM_VLANS=${NUM_VLANS:-10}
-            if [[ "$NUM_VLANS" =~ ^[1-9][0-9]*$ ]]; then break; else log_message "ERROR" "Ingresa un número válido."; fi
+            read -p "${COLOR_INFO}[ENTRADA] ¿Cuántos pares WAN/LAN L3 deseas configurar? [1-2, predeterminado 1]: ${COLOR_RESET}" NUM_L3_LINKS
+            NUM_L3_LINKS=${NUM_L3_LINKS:-1}
+            if [[ "$NUM_L3_LINKS" =~ ^[1-2]$ ]]; then break; else log_message "ERROR" "Ingresa 1 o 2."; fi
         done
         while true; do
-            read -p "${COLOR_INFO}[ENTRADA] Ingresa el ID inicial para las VLANs (1-4094): ${COLOR_RESET}" START_VLAN
-            if [[ "$START_VLAN" =~ ^[0-9]+$ && "$START_VLAN" -ge 1 && "$START_VLAN" -le 4094 ]]; then break; else log_message "ERROR" "ID inválido. Debe estar entre 1 y 4094."; fi
+            read -p "${COLOR_INFO}[ENTRADA] ¿Cuántas VLANs simular por par WAN/LAN? [predeterminado 10]: ${COLOR_RESET}" NUM_VLANS
+            NUM_VLANS=${NUM_VLANS:-10}
+            if [[ "$NUM_VLANS" =~ ^[1-9][0-9]*$ ]]; then break; else log_message "ERROR" "Ingresa un número válido."; fi
         done
         while true; do
             read -p "${COLOR_INFO}[ENTRADA] ¿Configurar DHCP? (s/n) [predeterminado s]: ${COLOR_RESET}" CONFIG_DHCP
@@ -707,14 +873,50 @@ if [ "$INTERACTIVE" -eq 1 ]; then
             SEGMENT_PREFIX="192.168"
             BASE_OCTET=10
         fi
-        while true; do
-            read -p "${COLOR_INFO}[ENTRADA] Ingresa la interfaz WAN: ${COLOR_RESET}" WAN_IF
-            if [[ -n "$WAN_IF" && " ${VALID_INTERFACES[*]} " =~ " $WAN_IF " ]]; then log_message "OK" "Interfaz $WAN_IF válida en el sistema local."; break; else log_message "ERROR" "Interfaz $WAN_IF no encontrada o inválida. Selecciona una interfaz válida."; fi
+        L3_LINKS_CSV=""; USED_INTERFACES=""; USED_VLAN_RANGES=""; USED_OCTET_RANGES=""
+        for (( link_idx=1; link_idx<=NUM_L3_LINKS; link_idx++ )); do
+            echo "${COLOR_CYAN}--- Par L3 #$link_idx ---${COLOR_RESET}"
+            while true; do
+                read -p "${COLOR_INFO}[ENTRADA] Par #$link_idx - interfaz WAN: ${COLOR_RESET}" wan_iface
+                if [[ -n "$wan_iface" && " ${VALID_INTERFACES[*]} " =~ " $wan_iface " && ! " $USED_INTERFACES " =~ " $wan_iface " ]]; then log_message "OK" "WAN $wan_iface válida."; break; else log_message "ERROR" "WAN inválida o ya seleccionada."; fi
+            done
+            while true; do
+                read -p "${COLOR_INFO}[ENTRADA] Par #$link_idx - interfaz LAN/trunk VLAN: ${COLOR_RESET}" lan_iface
+                if [[ -n "$lan_iface" && " ${VALID_INTERFACES[*]} " =~ " $lan_iface " && "$lan_iface" != "$wan_iface" && ! " $USED_INTERFACES " =~ " $lan_iface " ]]; then log_message "OK" "LAN $lan_iface válida."; break; else log_message "ERROR" "LAN inválida, duplicada o igual a WAN."; fi
+            done
+            while true; do
+                read -p "${COLOR_INFO}[ENTRADA] Par #$link_idx - ID inicial VLAN (1-4094): ${COLOR_RESET}" start_vlan
+                if [[ "$start_vlan" =~ ^[0-9]+$ && "$start_vlan" -ge 1 && "$start_vlan" -le 4094 && $((start_vlan + NUM_VLANS - 1)) -le 4094 ]]; then
+                    overlap=0
+                    for range in $USED_VLAN_RANGES; do
+                        IFS='-' read -r r_start r_end <<< "$range"
+                        if [ "$start_vlan" -le "$r_end" ] && [ $((start_vlan + NUM_VLANS - 1)) -ge "$r_start" ]; then overlap=1; fi
+                    done
+                    [ "$overlap" -eq 0 ] && break
+                fi
+                log_message "ERROR" "Rango VLAN inválido o repetido. Debe caber en 1-4094 y no solaparse."
+            done
+            while true; do
+                default_octet=$(( BASE_OCTET + (link_idx - 1) * NUM_VLANS ))
+                read -p "${COLOR_INFO}[ENTRADA] Par #$link_idx - tercer octeto inicial [predeterminado $default_octet]: ${COLOR_RESET}" base_octet_link
+                base_octet_link=${base_octet_link:-$default_octet}
+                if [[ "$base_octet_link" =~ ^[0-9]+$ && "$base_octet_link" -ge 1 && $((base_octet_link + NUM_VLANS - 1)) -le 254 ]]; then
+                    overlap=0
+                    for range in $USED_OCTET_RANGES; do
+                        IFS='-' read -r r_start r_end <<< "$range"
+                        if [ "$base_octet_link" -le "$r_end" ] && [ $((base_octet_link + NUM_VLANS - 1)) -ge "$r_start" ]; then overlap=1; fi
+                    done
+                    [ "$overlap" -eq 0 ] && break
+                fi
+                log_message "ERROR" "Rango de octetos inválido o repetido. Debe caber en 1-254 y no solaparse."
+            done
+            USED_INTERFACES="$USED_INTERFACES $wan_iface $lan_iface"
+            USED_VLAN_RANGES="$USED_VLAN_RANGES $start_vlan-$((start_vlan + NUM_VLANS - 1))"
+            USED_OCTET_RANGES="$USED_OCTET_RANGES $base_octet_link-$((base_octet_link + NUM_VLANS - 1))"
+            [ -n "$L3_LINKS_CSV" ] && L3_LINKS_CSV+=";"
+            L3_LINKS_CSV+="$link_idx:$wan_iface:$lan_iface:$start_vlan:$base_octet_link:$SEGMENT_PREFIX"
         done
-        while true; do
-            read -p "${COLOR_INFO}[ENTRADA] Ingresa la interfaz LAN (para VLANs y DHCP): ${COLOR_RESET}" LAN_IF
-            if [[ -n "$LAN_IF" && " ${VALID_INTERFACES[*]} " =~ " $LAN_IF " && "$LAN_IF" != "$WAN_IF" ]]; then log_message "OK" "Interfaz $LAN_IF válida en el sistema local."; break; else log_message "ERROR" "Interfaz $LAN_IF no encontrada, inválida o igual a WAN ($WAN_IF)."; fi
-        done
+        IFS=':' read -r __idx WAN_IF LAN_IF START_VLAN BASE_OCTET SEGMENT_PREFIX <<< "${L3_LINKS_CSV%%;*}"
         BRIDGE_INTERFACES=(); BRIDGE_IN_IFS=(); BRIDGE_OUT_IFS=()
         NUM_BRIDGE_IFACES=0; NUM_BRIDGE_PAIRS=0; BRIDGE_PAIRS_CSV=""
     fi
@@ -740,7 +942,15 @@ if [ "$INTERACTIVE" -eq 1 ]; then
     echo "${COLOR_CYAN}└───────────────────────────────────────────────────────────┘${COLOR_RESET}"
 fi
 
+configure_https_interactive
 ensure_telegram_runtime
+if [ "${ENABLE_HTTPS:-n}" = "s" ]; then
+    if [ -z "${TLS_CERT_FILE:-}" ] || [ -z "${TLS_KEY_FILE:-}" ] || ! validate_tls_chain "$TLS_CERT_FILE" "$TLS_KEY_FILE"; then
+        log_message "ERROR" "HTTPS esta habilitado pero el certificado/llave no son validos. Detalle: $(cat /tmp/wansim_tls_validate.log 2>/dev/null)"
+        echo "${COLOR_ERROR}HTTPS esta habilitado pero el certificado o la llave no son validos. Reconfigura HTTPS o corrige $TLS_CERT_FILE / $TLS_KEY_FILE.${COLOR_RESET}"
+        exit 1
+    fi
+fi
 
 
 # SECCIÓN 5: Configuración de Red
@@ -901,335 +1111,151 @@ reset_interface() {
 
 # Configurar VLANs, NAT, DHCP o puente según la topología seleccionada
 if [ "$TOPOLOGY_MODE" = "nat" ]; then
-    log_message "INFO" "Configurando VLANs en $LAN_IF..."
-
-    # Verificar que la interfaz LAN_IF exista y esté activa
-    if ! ip link show "$LAN_IF" >/dev/null 2>&1; then
-        log_message "ERROR" "La interfaz $LAN_IF no existe o no está disponible."
-        echo "${COLOR_ERROR}La interfaz $LAN_IF no está disponible. Revisa con 'ip link'.${COLOR_RESET}"
-        exit 1
+    NUM_L3_LINKS=${NUM_L3_LINKS:-1}
+    if [ -z "${L3_LINKS_CSV:-}" ]; then
+        L3_LINKS_CSV="1:${WAN_IF}:${LAN_IF}:${START_VLAN:-100}:${BASE_OCTET:-10}:${SEGMENT_PREFIX:-192.168}"
     fi
-    if ! ip link show "$LAN_IF" | grep -q "UP"; then
-        log_message "INFO" "La interfaz $LAN_IF no está activa. Intentando activarla..."
-        sudo ip link set "$LAN_IF" up >/dev/null 2>&1
-        sleep 2
-        if ! ip link show "$LAN_IF" | grep -q "UP"; then
-            log_message "ERROR" "No se pudo activar la interfaz $LAN_IF."
-            echo "${COLOR_ERROR}No se pudo activar la interfaz $LAN_IF. Revisa con 'ip link'.${COLOR_RESET}"
-            exit 1
-        fi
-    fi
+    log_message "INFO" "Configurando modo L3/NAT con $NUM_L3_LINKS par(es) WAN/LAN..."
 
-    # Cargar el módulo 8021q para soporte de VLANs
     if ! lsmod | grep -q "8021q"; then
         log_message "INFO" "Cargando módulo 8021q para soporte de VLANs..."
         sudo modprobe 8021q >/dev/null 2>&1
-        if ! lsmod | grep -q "8021q"; then
-            log_message "ERROR" "No se pudo cargar el módulo 8021q. Soporte de VLANs no disponible."
-            echo "${COLOR_ERROR}Soporte de VLANs no disponible. Instala el módulo 8021q.${COLOR_RESET}"
-            exit 1
-        fi
-        log_message "OK" "Módulo 8021q cargado."
+        lsmod | grep -q "8021q" || { log_message "ERROR" "No se pudo cargar 8021q."; exit 1; }
     fi
-
-    # Restaurar la interfaz LAN_IF
-    reset_interface "$LAN_IF"
-
-    # Usar un prefijo corto para nombres de VLANs
-    VLAN_PREFIX="v_"
-    log_message "INFO" "Usando prefijo $VLAN_PREFIX para nombres de VLANs."
 
     PYTHON_VLAN_LIST="["
+    PYTHON_INTERFACE_META="{}"
     VALID_VLANS=()
-    max_attempts=3
-    attempt=1
-    while [ $attempt -le $max_attempts ]; do
-        log_message "INFO" "Intento $attempt/$max_attempts: Creando VLANs en $LAN_IF..."
-        VALID_VLANS=()
-        PYTHON_VLAN_LIST="["
-        all_vlans_created=1
+    DHCP_INTERFACES=()
+    META_TSV="/tmp/wansim_nat_meta.tsv"
+    DHCP_TSV="/tmp/wansim_dhcp.tsv"
+    NAT_TSV="/tmp/wansim_nat.tsv"
+    : > "$META_TSV"; : > "$DHCP_TSV"; : > "$NAT_TSV"
+
+    IFS=';' read -r -a L3_LINKS <<< "$L3_LINKS_CSV"
+    for link in "${L3_LINKS[@]}"; do
+        [ -z "$link" ] && continue
+        IFS=':' read -r link_idx wan_iface lan_iface start_vlan base_octet_link segment_prefix_link <<< "$link"
+        segment_prefix_link=${segment_prefix_link:-192.168}
+        log_message "INFO" "Preparando L3#$link_idx WAN=$wan_iface LAN=$lan_iface VLAN_START=$start_vlan OCTETO=$base_octet_link..."
+        ip link show "$wan_iface" >/dev/null 2>&1 || { log_message "ERROR" "WAN $wan_iface no existe."; exit 1; }
+        ip link show "$lan_iface" >/dev/null 2>&1 || { log_message "ERROR" "LAN $lan_iface no existe."; exit 1; }
+        sudo ip link set "$wan_iface" up >/dev/null 2>&1 || true
+        sudo ip link set "$lan_iface" up >/dev/null 2>&1 || true
+        reset_interface "$lan_iface"
+        wan_private=$(iface_private_ip "$wan_iface"); wan_private=${wan_private:-N/D}
+        wan_public=$(iface_public_ip "$wan_iface")
+        wan_bw=$(iface_bw_probe "$wan_iface")
+        wan_mac=$(cat "/sys/class/net/$wan_iface/address" 2>/dev/null || echo "N/D")
+        log_message "OK" "L3#$link_idx WAN $wan_iface privada=$wan_private publica=$wan_public bw=$wan_bw"
+
         for (( i=0; i<${NUM_VLANS:-0}; i++ )); do
-            current_vlan_id=$(( ${START_VLAN:-100} + i ))
-            subnet_octet=$(( ${BASE_OCTET:-10} + i ))
-            vlan_name="${VLAN_PREFIX}${current_vlan_id}"
-
-            # Validar longitud del nombre de la VLAN
-            if [ ${#vlan_name} -gt 15 ]; then
-                log_message "ERROR" "El nombre de la VLAN $vlan_name excede el límite de 15 caracteres."
-                echo "${COLOR_ERROR}El nombre de la VLAN $vlan_name es demasiado largo. Usa un ID más corto.${COLOR_RESET}"
+            current_vlan_id=$(( start_vlan + i ))
+            subnet_octet=$(( base_octet_link + i ))
+            vlan_name="v${link_idx}_${current_vlan_id}"
+            [ ${#vlan_name} -le 15 ] || { log_message "ERROR" "Nombre VLAN $vlan_name excede 15 caracteres."; exit 1; }
+            sudo ip link add link "$lan_iface" name "$vlan_name" type vlan id "$current_vlan_id" >/tmp/vlan_error.log 2>&1 || {
+                log_message "ERROR" "No se pudo crear $vlan_name: $(cat /tmp/vlan_error.log)"
                 exit 1
-            fi
-
-            # Intentar crear la VLAN
-            if sudo ip link add link "$LAN_IF" name "$vlan_name" type vlan id "$current_vlan_id" >/tmp/vlan_error.log 2>&1; then
-                sudo ip addr add "${SEGMENT_PREFIX:-192.168}.${subnet_octet}.1/24" dev "$vlan_name" >/tmp/ip_error.log 2>&1
-                if [ $? -eq 0 ]; then
-                    sudo ip link set "$vlan_name" up >/tmp/ip_error.log 2>&1
-                    if [ $? -eq 0 ] && ip link show "$vlan_name" | grep -q "UP"; then
-                        VALID_VLANS+=("$vlan_name")
-                        if [ $i -eq $(( ${NUM_VLANS:-0} - 1 )) ]; then
-                            PYTHON_VLAN_LIST+="\"$vlan_name\""
-                        else
-                            PYTHON_VLAN_LIST+="\"$vlan_name\", "
-                        fi
-                        log_message "OK" "Creada VLAN $vlan_name con IP ${SEGMENT_PREFIX:-192.168}.${subnet_octet}.1/24"
-                    else
-                        ip_error=$(cat /tmp/ip_error.log)
-                        log_message "ERROR" "VLAN $vlan_name creada pero no activa. Error: $ip_error"
-                        all_vlans_created=0
-                    fi
-                else
-                    ip_error=$(cat /tmp/ip_error.log)
-                    log_message "ERROR" "No se pudo asignar IP a VLAN $vlan_name. Error: $ip_error"
-                    all_vlans_created=0
-                fi
-            else
-                vlan_error=$(cat /tmp/vlan_error.log)
-                log_message "ERROR" "No se pudo crear la VLAN $vlan_name en $LAN_IF. Error: $vlan_error"
-                # Intentar con IDs alternativos
-                for alt_offset in 1000 2000 3000; do
-                    alt_vlan_id=$(( $current_vlan_id + $alt_offset ))
-                    vlan_name="${VLAN_PREFIX}${alt_vlan_id}"
-                    if [ ${#vlan_name} -gt 15 ]; then
-                        log_message "ERROR" "El nombre alternativo de la VLAN $vlan_name excede el límite de 15 caracteres."
-                        continue
-                    fi
-                    log_message "INFO" "Reintentando con ID alternativo $alt_vlan_id..."
-                    if sudo ip link add link "$LAN_IF" name "$vlan_name" type vlan id "$alt_vlan_id" >/tmp/vlan_error.log 2>&1; then
-                        sudo ip addr add "${SEGMENT_PREFIX:-192.168}.${subnet_octet}.1/24" dev "$vlan_name" >/tmp/ip_error.log 2>&1
-                        if [ $? -eq 0 ]; then
-                            sudo ip link set "$vlan_name" up >/tmp/ip_error.log 2>&1
-                            if [ $? -eq 0 ] && ip link show "$vlan_name" | grep -q "UP"; then
-                                VALID_VLANS+=("$vlan_name")
-                                if [ $i -eq $(( ${NUM_VLANS:-0} - 1 )) ]; then
-                                    PYTHON_VLAN_LIST+="\"$vlan_name\""
-                                else
-                                    PYTHON_VLAN_LIST+="\"$vlan_name\", "
-                                fi
-                                log_message "OK" "Creada VLAN $vlan_name con IP ${SEGMENT_PREFIX:-192.168}.${subnet_octet}.1/24 (ID alternativo $alt_vlan_id)"
-                                break
-                            else
-                                ip_error=$(cat /tmp/ip_error.log)
-                                log_message "ERROR" "VLAN $vlan_name (ID alternativo $alt_vlan_id) creada pero no activa. Error: $ip_error"
-                            fi
-                        else
-                            ip_error=$(cat /tmp/ip_error.log)
-                            log_message "ERROR" "No se pudo asignar IP a VLAN $vlan_name (ID alternativo $alt_vlan_id). Error: $ip_error"
-                        fi
-                    else
-                        alt_vlan_error=$(cat /tmp/vlan_error.log)
-                        log_message "ERROR" "No se pudo crear la VLAN $vlan_name con ID alternativo $alt_vlan_id. Error: $alt_vlan_error"
-                    fi
-                done
-                if [ ! " ${VALID_VLANS[*]} " =~ " ${VLAN_PREFIX}${current_vlan_id} " ] && \
-                   [ ! " ${VALID_VLANS[*]} " =~ " ${VLAN_PREFIX}$((current_vlan_id + 1000)) " ] && \
-                   [ ! " ${VALID_VLANS[*]} " =~ " ${VLAN_PREFIX}$((current_vlan_id + 2000)) " ] && \
-                   [ ! " ${VALID_VLANS[*]} " =~ " ${VLAN_PREFIX}$((current_vlan_id + 3000)) " ]; then
-                    all_vlans_created=0
-                fi
-            fi
+            }
+            sudo ip addr add "${segment_prefix_link}.${subnet_octet}.1/24" dev "$vlan_name" >/tmp/ip_error.log 2>&1 || {
+                log_message "ERROR" "No se pudo asignar IP a $vlan_name: $(cat /tmp/ip_error.log)"
+                exit 1
+            }
+            sudo ip link set "$vlan_name" up >/dev/null 2>&1
+            VALID_VLANS+=("$vlan_name")
+            DHCP_INTERFACES+=("$vlan_name")
+            PYTHON_VLAN_LIST=$(append_json_item "$PYTHON_VLAN_LIST" "$vlan_name")
+            subnet="${segment_prefix_link}.${subnet_octet}.0/24"
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+                "$vlan_name" "L3#$link_idx VLAN $current_vlan_id ($lan_iface -> $wan_iface)" "" "L3/NAT" "$wan_iface" "$wan_mac" \
+                "$wan_iface" "$lan_iface" "$wan_private" "$wan_public" "$wan_bw" "$subnet" >> "$META_TSV"
+            printf '%s\t%s\t%s\n' "$segment_prefix_link" "$subnet_octet" "$vlan_name" >> "$DHCP_TSV"
+            printf '%s\t%s.%s.0/24\n' "$wan_iface" "$segment_prefix_link" "$subnet_octet" >> "$NAT_TSV"
+            log_message "OK" "Creada $vlan_name VLAN=$current_vlan_id subnet=${segment_prefix_link}.${subnet_octet}.0/24 WAN=$wan_iface"
         done
-        PYTHON_VLAN_LIST+="]"
-
-        # Verificar si todas las VLANs se crearon correctamente
-        if [ $all_vlans_created -eq 1 ] && [ ${#VALID_VLANS[@]} -eq ${NUM_VLANS:-0} ]; then
-            log_message "OK" "Todas las VLANs creadas correctamente en el intento $attempt."
-            rm -f /tmp/vlan_error.log /tmp/ip_error.log
-            break
-        else
-            log_message "ADVERTENCIA" "No se crearon todas las VLANs en el intento $attempt. Restaurando y reintentando..."
-            reset_interface "$LAN_IF"
-        fi
-        attempt=$((attempt + 1))
     done
+    PYTHON_VLAN_LIST+="]"
 
-    # Verificar resultado final
     if [ ${#VALID_VLANS[@]} -eq 0 ]; then
-        log_message "ERROR" "No se crearon VLANs válidas tras $max_attempts intentos. Verifica la interfaz $LAN_IF y el soporte de VLANs."
-        echo "${COLOR_ERROR}No se crearon VLANs válidas. Revisa los logs en $LOGFILE y verifica 'ip link' y 'lsmod | grep 8021q'.${COLOR_RESET}"
+        log_message "ERROR" "No se creó ninguna VLAN válida en modo L3."
         exit 1
-    elif [ ${#VALID_VLANS[@]} -lt ${NUM_VLANS:-0} ]; then
-        log_message "ADVERTENCIA" "Solo se crearon ${#VALID_VLANS[@]} de ${NUM_VLANS:-0} VLANs solicitadas. Continuando con VLANs válidas."
-        echo "${COLOR_WARN}Solo se crearon ${#VALID_VLANS[@]} de ${NUM_VLANS:-0} VLANs. Revisa los logs en $LOGFILE.${COLOR_RESET}"
     fi
 
-    # Configurar DHCP si está habilitado
     if [ "$CONFIG_DHCP" = "s" ]; then
-        log_message "INFO" "Configurando DHCP..."
-        all_interfaces_up=1
-        for vlan in "${VALID_VLANS[@]}"; do
-            if ! ip link show "$vlan" | grep -q "UP"; then
-                log_message "ADVERTENCIA" "Interfaz $vlan no está activa."
-                all_interfaces_up=0
-            fi
-        done
-
-        if [ "$all_interfaces_up" -eq 0 ]; then
-            log_message "INFO" "Algunas interfaces VLAN no están activas. Intentando activarlas..."
-            for vlan in "${VALID_VLANS[@]}"; do
-                sudo ip link set dev "$vlan" up >/dev/null 2>&1 || true
-            done
-            sleep 2
-            all_interfaces_up=1
-            for vlan in "${VALID_VLANS[@]}"; do
-                if ! ip link show "$vlan" | grep -q "UP"; then
-                    log_message "ERROR" "Interfaz $vlan aún no está activa."
-                    all_interfaces_up=0
-                fi
-            done
-        fi
-
-        if [ "$all_interfaces_up" -eq 1 ]; then
-            [ -f /etc/dhcp/dhcpd.conf ] && sudo cp /etc/dhcp/dhcpd.conf /etc/dhcp/dhcpd.conf.bak
-            sudo tee /etc/dhcp/dhcpd.conf > /dev/null <<EOL
+        log_message "INFO" "Configurando DHCP para ${#DHCP_INTERFACES[@]} VLAN(s)..."
+        [ -f /etc/dhcp/dhcpd.conf ] && sudo cp /etc/dhcp/dhcpd.conf /etc/dhcp/dhcpd.conf.bak
+        sudo tee /etc/dhcp/dhcpd.conf > /dev/null <<EOL
 default-lease-time 600;
 max-lease-time 7200;
 authoritative;
 EOL
-            for (( i=0; i<${#VALID_VLANS[@]}; i++ )); do
-                subnet_octet=$(( ${BASE_OCTET:-10} + i ))
-                sudo tee -a /etc/dhcp/dhcpd.conf > /dev/null <<EOF
-subnet ${SEGMENT_PREFIX:-192.168}.${subnet_octet}.0 netmask 255.255.255.0 {
-    range ${SEGMENT_PREFIX:-192.168}.${subnet_octet}.100 ${SEGMENT_PREFIX:-192.168}.${subnet_octet}.200;
-    option routers ${SEGMENT_PREFIX:-192.168}.${subnet_octet}.1;
+        while IFS=$'\t' read -r segment_prefix_link subnet_octet vlan_name; do
+            [ -z "$segment_prefix_link" ] && continue
+            sudo tee -a /etc/dhcp/dhcpd.conf > /dev/null <<EOF
+subnet ${segment_prefix_link}.${subnet_octet}.0 netmask 255.255.255.0 {
+    range ${segment_prefix_link}.${subnet_octet}.100 ${segment_prefix_link}.${subnet_octet}.200;
+    option routers ${segment_prefix_link}.${subnet_octet}.1;
 }
 EOF
-            done
-
-            sudo tee "$DHCP_DEFAULT_FILE" > /dev/null <<EOF
-INTERFACESv4="${VALID_VLANS[*]}"
-DHCPDARGS="${VALID_VLANS[*]}"
+        done < "$DHCP_TSV"
+        sudo tee "$DHCP_DEFAULT_FILE" > /dev/null <<EOF
+INTERFACESv4="${DHCP_INTERFACES[*]}"
+DHCPDARGS="${DHCP_INTERFACES[*]}"
 EOF
-
-            log_message "INFO" "Validando configuración DHCP..."
-            if dhcpd -t -cf /etc/dhcp/dhcpd.conf >/dev/null 2>&1; then
-                log_message "OK" "Configuración DHCP válida."
-                sudo systemctl enable "$DHCP_SERVICE" >/dev/null 2>&1
-                if sudo systemctl restart "$DHCP_SERVICE" >/dev/null 2>&1; then
-                    sleep 2
-                    if systemctl is-active "$DHCP_SERVICE" >/dev/null; then
-                        log_message "OK" "DHCP configurado correctamente."
-                        echo "DHCP - Configurado correctamente."
-                    else
-                        log_message "ERROR" "Error al iniciar el servicio DHCP. Revisando logs..."
-                        dhcp_error=$(journalctl -u "$DHCP_SERVICE" -n 50 --no-pager 2>&1)
-                        log_message "ERROR" "Error DHCP: $dhcp_error"
-                        echo "  [ERROR] DHCP no configurado. Revisa los logs in $LOGFILE."
-                    fi
-                else
-                    log_message "ERROR" "Error al reiniciar el servicio DHCP. Revisando logs..."
-                    dhcp_error=$(journalctl -u "$DHCP_SERVICE" -n 50 --no-pager 2>&1)
-                    log_message "ERROR" "Error DHCP: $dhcp_error"
-                    echo "  [ERROR] DHCP no configurado. Revisa los logs in $LOGFILE."
-                fi
-            else
-                log_message "ERROR" "Configuración DHCP inválida. Revisando errores..."
-                dhcp_error=$(dhcpd -t -cf /etc/dhcp/dhcpd.conf 2>&1)
-                log_message "ERROR" "Error DHCP: $dhcp_error"
-                echo "  [ERROR] Configuración DHCP inválida. Revisa los logs in $LOGFILE."
-            fi
-        else
-            log_message "ERROR" "No todas las interfaces VLAN están activas. No se puede configurar DHCP."
-            echo "  [ERROR] No se puede configurar DHCP porque las interfaces VLAN no están activas."
-            echo "  Revisa las interfaces con 'ip link' y los logs in $LOGFILE."
-        fi
+        dhcpd -t -cf /etc/dhcp/dhcpd.conf >/tmp/wansim_dhcp_validate.log 2>&1 || {
+            log_message "ERROR" "Configuración DHCP inválida: $(cat /tmp/wansim_dhcp_validate.log)"
+            exit 1
+        }
+        sudo systemctl enable "$DHCP_SERVICE" >/dev/null 2>&1
+        sudo systemctl restart "$DHCP_SERVICE" >/dev/null 2>&1 || {
+            log_message "ERROR" "No se pudo iniciar $DHCP_SERVICE: $(journalctl -u "$DHCP_SERVICE" -n 50 --no-pager 2>&1)"
+            exit 1
+        }
+        log_message "OK" "DHCP configurado para modo L3 multi enlace."
     fi
 
-    # Configurar NAT
-    log_message "INFO" "Configurando NAT..."
+    log_message "INFO" "Configurando NAT multi WAN..."
     sudo sysctl -w net.ipv4.ip_forward=1 >/dev/null
-
-    # Verificar y liberar el archivo de bloqueo xtables.lock
-    max_attempts=3
-    attempt=1
-    while [ $attempt -le $max_attempts ]; do
-        log_message "INFO" "Intento $attempt/$max_attempts: Verificando archivo de bloqueo /run/xtables.lock..."
-        if [ -f /run/xtables.lock ]; then
-            log_message "INFO" "Archivo de bloqueo /run/xtables.lock encontrado. Intentando liberarlo..."
-            if command -v lsof >/dev/null 2>&1; then
-                lock_pid=$(sudo lsof /run/xtables.lock | awk '{print $2}' | tail -n 1)
-                if [ -n "$lock_pid" ]; then
-                    log_message "INFO" "Proceso $lock_pid bloqueando /run/xtables.lock. Intentando terminarlo..."
-                    sudo kill -15 "$lock_pid" >/dev/null 2>&1
-                    sleep 1
-                    if kill -0 "$lock_pid" >/dev/null 2>&1; then
-                        log_message "WARN" "Proceso $lock_pid no terminó. Forzando terminación..."
-                        sudo kill -9 "$lock_pid" >/dev/null 2>&1
-                    fi
-                fi
-            fi
-            sudo rm -f /run/xtables.lock >/dev/null 2>&1
-            sleep 1
-            if [ -f /run/xtables.lock ]; then
-                log_message "ERROR" "No se pudo liberar /run/xtables.lock en el intento $attempt."
-                attempt=$((attempt + 1))
-                continue
-            fi
-        fi
-        log_message "OK" "Archivo de bloqueo /run/xtables.lock libre o eliminado."
-        break
-    done
-    if [ $attempt -gt $max_attempts ]; then
-        log_message "ERROR" "No se pudo liberar /run/xtables.lock tras $max_attempts intentos."
-        echo "${COLOR_ERROR}No se pudo liberar el archivo de bloqueo /run/xtables.lock. Revisa permisos y procesos en ejecución.${COLOR_RESET}"
-        exit 1
-    fi
-
-    # Verificar permisos del directorio de reglas persistentes.
     IPTABLES_SAVE_DIR="$(dirname "$IPTABLES_SAVE_FILE")"
-    if [ ! -d "$IPTABLES_SAVE_DIR" ]; then
-        log_message "INFO" "Creando directorio $IPTABLES_SAVE_DIR..."
-        sudo mkdir -p "$IPTABLES_SAVE_DIR" >/dev/null 2>&1
-        sudo chmod 755 "$IPTABLES_SAVE_DIR" >/dev/null 2>&1
-    fi
-    if [ ! -w "$IPTABLES_SAVE_DIR" ]; then
-        log_message "INFO" "Ajustando permisos del directorio $IPTABLES_SAVE_DIR..."
-        sudo chmod 755 "$IPTABLES_SAVE_DIR" >/dev/null 2>&1
-    fi
-
-    # Aplicar reglas de iptables y guardarlas
-    attempt=1
-    while [ $attempt -le $max_attempts ]; do
-        log_message "INFO" "Intento $attempt/$max_attempts: Aplicando reglas de NAT..."
-        # Limpiar reglas existentes
-        sudo iptables -t nat -F POSTROUTING >/dev/null 2>&1
-        for (( i=0; i<${#VALID_VLANS[@]}; i++ )); do
-            subnet_octet=$(( ${BASE_OCTET:-10} + i ))
-            sudo iptables -t nat -A POSTROUTING -o "$WAN_IF" -s "${SEGMENT_PREFIX:-192.168}.${subnet_octet}.0/24" -j MASQUERADE
-        done
-
-        # Guardar reglas en un archivo temporal y moverlo
-        temp_rules="/tmp/iptables_rules.v4"
-        sudo iptables-save > "$temp_rules" 2>/tmp/iptables_error.log
-        if [ $? -eq 0 ]; then
-            sudo mv "$temp_rules" "$IPTABLES_SAVE_FILE" >/tmp/iptables_error.log 2>&1
-            if [ $? -eq 0 ]; then
-                sudo chmod 644 "$IPTABLES_SAVE_FILE" >/dev/null 2>&1
-                if [ "$OS_FAMILY" = "rhel" ]; then
-                    sudo systemctl enable iptables >/dev/null 2>&1 || true
-                fi
-                log_message "OK" "Reglas de NAT guardadas correctamente en $IPTABLES_SAVE_FILE."
-                echo "NAT - Configurado y guardado correctamente."
-                rm -f /tmp/iptables_error.log
-                break
-            else
-                iptables_error=$(cat /tmp/iptables_error.log)
-                log_message "ERROR" "Error al mover reglas de NAT a $IPTABLES_SAVE_FILE: $iptables_error"
-            fi
-        else
-            iptables_error=$(cat /tmp/iptables_error.log)
-            log_message "ERROR" "Error al guardar reglas de NAT: $iptables_error"
-        fi
-        log_message "INFO" "Reintentando configuración de NAT..."
-        attempt=$((attempt + 1))
-        sleep 2
-    done
-
-    if [ $attempt -gt $max_attempts ]; then
-        log_message "ERROR" "No se pudo configurar NAT tras $max_attempts intentos."
-        echo "${COLOR_ERROR}No se pudo configurar NAT. Revisa los logs en $LOGFILE y verifica permisos en $IPTABLES_SAVE_DIR.${COLOR_RESET}"
+    sudo mkdir -p "$IPTABLES_SAVE_DIR" >/dev/null 2>&1
+    sudo iptables -t nat -F POSTROUTING >/dev/null 2>&1
+    while IFS=$'\t' read -r wan_iface subnet; do
+        [ -z "$wan_iface" ] && continue
+        sudo iptables -t nat -A POSTROUTING -o "$wan_iface" -s "$subnet" -j MASQUERADE
+    done < "$NAT_TSV"
+    temp_rules="/tmp/iptables_rules.v4"
+    sudo iptables-save > "$temp_rules" 2>/tmp/iptables_error.log || {
+        log_message "ERROR" "Error al guardar reglas NAT: $(cat /tmp/iptables_error.log)"
         exit 1
-    fi
+    }
+    sudo mv "$temp_rules" "$IPTABLES_SAVE_FILE"
+    sudo chmod 644 "$IPTABLES_SAVE_FILE" >/dev/null 2>&1
+    [ "$OS_FAMILY" = "rhel" ] && sudo systemctl enable iptables >/dev/null 2>&1 || true
+
+    export META_TSV
+    PYTHON_INTERFACE_META=$(python3 - <<'PYJSON'
+import json, os
+meta={}
+path=os.environ.get('META_TSV','')
+try:
+    with open(path, 'r', encoding='utf-8') as f:
+        for line in f:
+            parts=line.rstrip('\n').split('\t')
+            if len(parts) < 12:
+                continue
+            iface,label,bridge,role,peer,mac,wan,lan,wan_private,wan_public,wan_bw,subnet=parts[:12]
+            meta[iface]={
+                "label":label,"bridge":bridge,"role":role,"peer":peer,"mac":mac,
+                "wan":wan,"lan":lan,"wan_private":wan_private,"wan_public":wan_public,
+                "wan_bw":wan_bw,"subnet":subnet
+            }
+except FileNotFoundError:
+    pass
+print(json.dumps(meta, ensure_ascii=False))
+PYJSON
+)
+    log_message "OK" "Modo L3/NAT multi enlace configurado. Interfaces controladas: ${VALID_VLANS[*]}"
 elif [ "$TOPOLOGY_MODE" = "bridge" ]; then
     log_message "INFO" "Configurando modo Bridge L2 por pares entrada/salida..."
     if [ ${#BRIDGE_IN_IFS[@]} -eq 0 ] && [ -n "${BRIDGE_PAIRS_CSV:-}" ]; then
@@ -1327,6 +1353,8 @@ if [ "$INTERACTIVE" -eq 1 ]; then
     }
     cat > "$CONFIG_FILE" <<EOF
 TOPOLOGY_MODE=$TOPOLOGY_MODE
+NUM_L3_LINKS=${NUM_L3_LINKS:-1}
+L3_LINKS_CSV=${L3_LINKS_CSV:-}
 NUM_VLANS=${NUM_VLANS:-0}
 START_VLAN=${START_VLAN:-0}
 CONFIG_DHCP=${CONFIG_DHCP:-n}
@@ -1335,6 +1363,10 @@ BASE_OCTET=${BASE_OCTET:-0}
 INTEGRATE_TELEGRAM=$INTEGRATE_TELEGRAM
 TELEGRAM_TOKEN=$TELEGRAM_TOKEN
 TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID
+ENABLE_HTTPS=${ENABLE_HTTPS:-n}
+TLS_MODE=${TLS_MODE:-none}
+TLS_CERT_FILE=$(printf '%q' "${TLS_CERT_FILE:-}")
+TLS_KEY_FILE=$(printf '%q' "${TLS_KEY_FILE:-}")
 WAN_IF=${WAN_IF:-}
 LAN_IF=${LAN_IF:-}
 DEST_IF=${DEST_IF:-}
@@ -1560,7 +1592,8 @@ fi
 # Crear el archivo Python con el dashboard Flask
 cat > "$WANSIM_DASHBOARD" <<'EOF'
 #!/usr/bin/env python3
-import os, re, json, logging, subprocess, threading, sys
+import os, re, json, logging, subprocess, threading, sys, time
+import requests
 from flask import Flask, request, render_template_string, redirect, url_for, flash
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 logger=logging.getLogger(__name__)
@@ -1585,6 +1618,9 @@ INTERFACE_META=load_json_literal(__PYTHON_INTERFACE_META_LITERAL__, {})
 TELEGRAM_TOKEN=__TELEGRAM_TOKEN_LITERAL__
 TELEGRAM_CHAT_ID=__TELEGRAM_CHAT_ID_LITERAL__
 TELEGRAM_ENABLED=bool(int(__TELEGRAM_ENABLED__))
+HTTPS_ENABLED=bool(int(__HTTPS_ENABLED__))
+TLS_CERT_FILE=__TLS_CERT_FILE_LITERAL__
+TLS_KEY_FILE=__TLS_KEY_FILE_LITERAL__
 def iface_ok(i):
     if not re.match(r'^[A-Za-z0-9_.:@-]+$', i or ''): raise ValueError(f'Interfaz inválida: {i}')
     return i
@@ -1617,7 +1653,19 @@ def collect():
     for i in CONTROL_INTERFACES:
         ok,out=run(f'tc qdisc show dev {iface_ok(i)}'); s[i]=parse_qdisc(out) if ok else {'delay':0,'jitter':0,'loss':0}
         s[i].update(traffic(i)); meta=INTERFACE_META.get(i,{}) if isinstance(INTERFACE_META,dict) else {}
-        s[i].update({'label':meta.get('label',i),'bridge':meta.get('bridge',''),'role':meta.get('role',''),'peer':meta.get('peer',''),'mac':meta.get('mac','')})
+        s[i].update({
+            'label':meta.get('label',i),
+            'bridge':meta.get('bridge',''),
+            'role':meta.get('role',''),
+            'peer':meta.get('peer',''),
+            'mac':meta.get('mac',''),
+            'wan':meta.get('wan',''),
+            'lan':meta.get('lan',''),
+            'wan_private':meta.get('wan_private',''),
+            'wan_public':meta.get('wan_public',''),
+            'wan_bw':meta.get('wan_bw',''),
+            'subnet':meta.get('subnet','')
+        })
     return s
 def to_number(value, name, min_value=0.0, max_value=None):
     try:
@@ -1708,7 +1756,28 @@ if TELEGRAM_ENABLED and Updater:
     def sel(update,ctx):
         q=update.callback_query; q.answer(); i=q.data.split('_',1)[1]
         if i not in CONTROL_INTERFACES: q.edit_message_text('Selección inválida.'); return -1
-        ctx.user_data['iface']=i; q.edit_message_text(f'Interfaz {INTERFACE_META.get(i,{}).get("label",i)}. Delay/latencia ms:'); return DELAY
+        ctx.user_data['iface']=i
+        label=INTERFACE_META.get(i,{}).get("label",i)
+        kb=[
+            [InlineKeyboardButton('100ms',callback_data=f'quick|{i}|100|0|0'), InlineKeyboardButton('300ms',callback_data=f'quick|{i}|300|0|0'), InlineKeyboardButton('500ms',callback_data=f'quick|{i}|500|0|0')],
+            [InlineKeyboardButton('Jitter 50',callback_data=f'quick|{i}|0|50|0'), InlineKeyboardButton('Jitter 100',callback_data=f'quick|{i}|0|100|0')],
+            [InlineKeyboardButton('Loss 1%',callback_data=f'quick|{i}|0|0|1'), InlineKeyboardButton('Loss 5%',callback_data=f'quick|{i}|0|0|5'), InlineKeyboardButton('Loss 10%',callback_data=f'quick|{i}|0|0|10')],
+            [InlineKeyboardButton('Manual',callback_data=f'manual|{i}'), InlineKeyboardButton('Reset',callback_data=f'quick|{i}|0|0|0')]
+        ]
+        q.edit_message_text(f'Interfaz {label}. Elige preset o modo manual:',reply_markup=InlineKeyboardMarkup(kb)); return DELAY
+    def quick(update,ctx):
+        q=update.callback_query; q.answer()
+        parts=q.data.split('|')
+        if parts[0]=='manual':
+            i=parts[1]; ctx.user_data['iface']=i
+            q.edit_message_text(f'Interfaz {INTERFACE_META.get(i,{}).get("label",i)}. Delay/latencia ms:')
+            return DELAY
+        _,i,d,j,l=parts
+        if i not in CONTROL_INTERFACES: q.edit_message_text('Interfaz inválida.'); return -1
+        ok,out=apply_netem(i,d,j,l)
+        label=INTERFACE_META.get(i,{}).get('label',i)
+        q.edit_message_text(f'Aplicado preset en {label}: delay={d}ms jitter={j}ms pérdida={l}%. {out}' if ok else f'Error en {label}: {out}')
+        return -1
     def setd(update,ctx):
         try: v=to_number(update.message.text,'delay',0.0)
         except Exception as e: update.message.reply_text(f'Número inválido para delay: {e}'); return DELAY
@@ -1734,12 +1803,108 @@ if TELEGRAM_ENABLED and Updater:
     def bot():
         try:
             u=Updater(TELEGRAM_TOKEN,use_context=True); dp=u.dispatcher
-            dp.add_handler(ConversationHandler(entry_points=[CommandHandler('start',start),CommandHandler('config',start)],states={SELECT:[CallbackQueryHandler(sel,pattern='^select_')],DELAY:[MessageHandler(Filters.text & ~Filters.command,setd)],JITTER:[MessageHandler(Filters.text & ~Filters.command,setj)],LOSS:[MessageHandler(Filters.text & ~Filters.command,setl)]},fallbacks=[CommandHandler('cancel',cancel)]))
+            dp.add_handler(ConversationHandler(entry_points=[CommandHandler('start',start),CommandHandler('config',start)],states={SELECT:[CallbackQueryHandler(sel,pattern='^select_')],DELAY:[CallbackQueryHandler(quick,pattern='^(quick|manual)\\|'),MessageHandler(Filters.text & ~Filters.command,setd)],JITTER:[MessageHandler(Filters.text & ~Filters.command,setj)],LOSS:[MessageHandler(Filters.text & ~Filters.command,setl)]},fallbacks=[CommandHandler('cancel',cancel)]))
             u.start_polling(); u.idle()
         except Exception as e: logger.error(f'Telegram error: {e}')
     threading.Thread(target=bot,daemon=True).start()
+if TELEGRAM_ENABLED and not Updater:
+    TG_STATE={}
+    def tg_api(method, payload=None):
+        url=f'https://api.telegram.org/bot{TELEGRAM_TOKEN}/{method}'
+        try:
+            r=requests.post(url,json=payload or {},timeout=15)
+            if not r.ok: logger.error(f'Telegram API {method} fallo: {r.status_code} {r.text[:300]}')
+            return r.ok, r.json() if r.text else {}
+        except Exception as e:
+            logger.error(f'Telegram API {method} error: {e}')
+            return False, {}
+    def tg_allowed(chat_id):
+        return (not TELEGRAM_CHAT_ID) or str(chat_id)==str(TELEGRAM_CHAT_ID)
+    def tg_iface_label(i):
+        return INTERFACE_META.get(i,{}).get('label',i) if isinstance(INTERFACE_META,dict) else i
+    def tg_iface_keyboard():
+        return {'inline_keyboard':[[{'text':tg_iface_label(i)[:60],'callback_data':f'select_{i}'}] for i in CONTROL_INTERFACES]}
+    def tg_preset_keyboard(i):
+        return {'inline_keyboard':[
+            [{'text':'100ms','callback_data':f'quick|{i}|100|0|0'},{'text':'300ms','callback_data':f'quick|{i}|300|0|0'},{'text':'500ms','callback_data':f'quick|{i}|500|0|0'}],
+            [{'text':'Jitter 50','callback_data':f'quick|{i}|0|50|0'},{'text':'Jitter 100','callback_data':f'quick|{i}|0|100|0'}],
+            [{'text':'Loss 1%','callback_data':f'quick|{i}|0|0|1'},{'text':'Loss 5%','callback_data':f'quick|{i}|0|0|5'},{'text':'Loss 10%','callback_data':f'quick|{i}|0|0|10'}],
+            [{'text':'Manual','callback_data':f'manual|{i}'},{'text':'Reset','callback_data':f'quick|{i}|0|0|0'}]
+        ]}
+    def tg_send(chat_id, text, markup=None):
+        payload={'chat_id':chat_id,'text':text}
+        if markup: payload['reply_markup']=markup
+        return tg_api('sendMessage',payload)
+    def tg_edit(chat_id, message_id, text, markup=None):
+        payload={'chat_id':chat_id,'message_id':message_id,'text':text}
+        if markup: payload['reply_markup']=markup
+        return tg_api('editMessageText',payload)
+    def tg_handle_text(msg):
+        chat_id=msg.get('chat',{}).get('id')
+        text=(msg.get('text') or '').strip()
+        if not tg_allowed(chat_id): tg_send(chat_id,'Acceso no autorizado.'); return
+        if text in ('/start','/config','start','config'):
+            TG_STATE.pop(str(chat_id),None)
+            tg_send(chat_id,'Selecciona la interfaz:',tg_iface_keyboard()); return
+        if text == '/cancel':
+            TG_STATE.pop(str(chat_id),None)
+            tg_send(chat_id,'Cancelado.'); return
+        state=TG_STATE.get(str(chat_id))
+        if not state:
+            tg_send(chat_id,'Usa /start para seleccionar una interfaz.'); return
+        try:
+            if state.get('step')=='delay':
+                state['delay']=to_number(text,'delay',0.0); state['step']='jitter'; tg_send(chat_id,'Jitter ms:'); return
+            if state.get('step')=='jitter':
+                state['jitter']=to_number(text,'jitter',0.0); state['step']='loss'; tg_send(chat_id,'Ruido/perdida %:'); return
+            if state.get('step')=='loss':
+                loss=to_number(text,'perdida',0.0,100.0)
+                iface=state['iface']; delay=state.get('delay',0); jitter=state.get('jitter',0)
+                ok,out=apply_netem(iface,delay,jitter,loss)
+                label=tg_iface_label(iface)
+                tg_send(chat_id, f'Aplicado en {label}: delay={tc_num(delay)}ms jitter={tc_num(jitter)}ms perdida={tc_num(loss)}%. {out}' if ok else f'Error en {label}: {out}')
+                TG_STATE.pop(str(chat_id),None); return
+        except Exception as e:
+            tg_send(chat_id,f'Valor invalido: {e}')
+    def tg_handle_callback(cb):
+        chat_id=cb.get('message',{}).get('chat',{}).get('id')
+        msg_id=cb.get('message',{}).get('message_id')
+        data=cb.get('data') or ''
+        tg_api('answerCallbackQuery',{'callback_query_id':cb.get('id')})
+        if not tg_allowed(chat_id): tg_edit(chat_id,msg_id,'Acceso no autorizado.'); return
+        if data.startswith('select_'):
+            iface=data.split('_',1)[1]
+            if iface not in CONTROL_INTERFACES: tg_edit(chat_id,msg_id,'Seleccion invalida.'); return
+            TG_STATE[str(chat_id)]={'iface':iface,'step':'preset'}
+            tg_edit(chat_id,msg_id,f'Interfaz {tg_iface_label(iface)}. Elige preset o modo manual:',tg_preset_keyboard(iface)); return
+        parts=data.split('|')
+        if len(parts)>=2 and parts[0]=='manual':
+            iface=parts[1]
+            TG_STATE[str(chat_id)]={'iface':iface,'step':'delay'}
+            tg_edit(chat_id,msg_id,f'Interfaz {tg_iface_label(iface)}. Delay/latencia ms:'); return
+        if len(parts)==5 and parts[0]=='quick':
+            _,iface,delay,jitter,loss=parts
+            if iface not in CONTROL_INTERFACES: tg_edit(chat_id,msg_id,'Interfaz invalida.'); return
+            ok,out=apply_netem(iface,delay,jitter,loss)
+            label=tg_iface_label(iface)
+            tg_edit(chat_id,msg_id,f'Aplicado preset en {label}: delay={delay}ms jitter={jitter}ms perdida={loss}%. {out}' if ok else f'Error en {label}: {out}')
+    def tg_http_bot():
+        offset=0
+        while True:
+            try:
+                ok,data=tg_api('getUpdates',{'timeout':25,'offset':offset,'allowed_updates':['message','callback_query']})
+                if ok:
+                    for upd in data.get('result',[]):
+                        offset=max(offset,upd.get('update_id',0)+1)
+                        if 'message' in upd: tg_handle_text(upd['message'])
+                        if 'callback_query' in upd: tg_handle_callback(upd['callback_query'])
+                time.sleep(1)
+            except Exception as e:
+                logger.error(f'Telegram HTTP fallback error: {e}')
+                time.sleep(5)
+    threading.Thread(target=tg_http_bot,daemon=True).start()
 TEMPLATE=r"""
-<!doctype html><html lang='es'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Ryuz WAN Simulator</title><link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css' rel='stylesheet'><script src='https://cdn.jsdelivr.net/npm/chart.js'></script><style>body{background:linear-gradient(135deg,#1e3c72,#2a5298);color:white;min-height:100vh}.card{background:rgba(255,255,255,.12);border:0;border-radius:15px}.form-control,.form-select{background:rgba(255,255,255,.22);color:white;border:0}.output{background:rgba(0,0,0,.3);padding:10px;border-radius:6px;white-space:pre-wrap}.chart-container{height:200px}.badge-soft{background:rgba(255,255,255,.2);color:white}</style></head><body><div class='container py-4'><h1 class='text-center'>Ryuz WAN Simulator</h1><p class='text-center'>L3/NAT y L2 Bridge por pares entrada/salida</p>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class='alert alert-{{c}}'>{{m}}</div>{% endfor %}{% endwith %}<div class='d-flex justify-content-center gap-2 mb-4'><form method='post' action='{{url_for("configure")}}'><input type='hidden' name='action' value='reset_all'><button class='btn btn-primary'>Restablecer todas</button></form><select id='unit' class='form-select w-auto' onchange='updateCharts()'><option value='mbps'>Mbps</option><option value='kbps'>Kbps</option><option value='mb'>MB/s</option><option value='kb'>KB/s</option></select></div><div class='row'>{% for i in interfaces %}<div class='col-md-6 col-lg-4 mb-4'><div class='card p-4 h-100'><h4>{{stats[i].label}}</h4><div>{% if stats[i].bridge %}<span class='badge badge-soft'>{{stats[i].bridge}}</span>{% endif %} {% if stats[i].role %}<span class='badge badge-soft'>{{stats[i].role}}</span>{% endif %}</div><small>Interfaz: {{i}}{% if stats[i].peer %}<br>Peer: {{stats[i].peer}}{% endif %}{% if stats[i].mac %}<br>MAC: {{stats[i].mac}}{% endif %}</small><form method='post' action='{{url_for("configure")}}' class='mt-3'><input type='hidden' name='iface' value='{{i}}'><input type='hidden' name='action' value='apply'><label>Delay/latencia ms</label><input class='form-control' type='number' name='delay' step='.1' min='0' value='{{stats[i].delay}}'><label>Jitter ms</label><input class='form-control' type='number' name='jitter' step='.1' min='0' value='{{stats[i].jitter}}'><label>Ruido/Pérdida %</label><input class='form-control' type='number' name='loss' step='.1' min='0' max='100' value='{{stats[i].loss}}'><div class='mt-3 d-flex gap-2'><button class='btn btn-primary'>Aplicar</button><button class='btn btn-warning' onclick='this.form.elements["action"].value="reset"'>Restablecer</button></div></form><div class='mt-3 d-flex flex-wrap gap-1'>{% for label,d,j,l in quicks %}<form method='post' action='{{url_for("configure")}}'><input type='hidden' name='iface' value='{{i}}'><input type='hidden' name='action' value='apply'><input type='hidden' name='delay' value='{{d}}'><input type='hidden' name='jitter' value='{{j}}'><input type='hidden' name='loss' value='{{l}}'><button class='btn btn-outline-light btn-sm'>{{label}}</button></form>{% endfor %}</div><div class='chart-container mt-3'><canvas id='c{{loop.index}}'></canvas></div><pre class='output mt-2' id='o{{loop.index}}'></pre></div></div>{% endfor %}</div><div class='text-center'>Ryuz WAN Simulator - Versión __WANSIM_VERSION__</div></div><script>const data={{chart|safe}};let charts={};function updateCharts(){let u=document.getElementById('unit').value;data.forEach((x,n)=>{let s=x.stats,vals=[s[u+'_in'],s[u+'_out'],s.delay,s.jitter,s.loss],id='c'+(n+1),ctx=document.getElementById(id);if(!ctx)return;if(charts[id]){charts[id].data.datasets[0].data=vals;charts[id].update()}else{charts[id]=new Chart(ctx.getContext('2d'),{type:'bar',data:{labels:['Entrada','Salida','Delay','Jitter','Ruido/Pérdida'],datasets:[{label:x.label,data:vals,borderWidth:1}]},options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true}}}})}document.getElementById('o'+(n+1)).innerText='Delay: '+Number(s.delay).toFixed(1)+' ms\nJitter: '+Number(s.jitter).toFixed(1)+' ms\nRuido/Pérdida: '+Number(s.loss).toFixed(1)+' %\nEntrada: '+Number(s[u+'_in']).toFixed(2)+' '+u+'\nSalida: '+Number(s[u+'_out']).toFixed(2)+' '+u})}window.onload=updateCharts;</script></body></html>
+<!doctype html><html lang='es'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Ryuz WAN Simulator</title><link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css' rel='stylesheet'><script src='https://cdn.jsdelivr.net/npm/chart.js'></script><style>body{background:linear-gradient(135deg,#1e3c72,#2a5298);color:white;min-height:100vh}.card{background:rgba(255,255,255,.12);border:0;border-radius:15px}.form-control,.form-select{background:rgba(255,255,255,.22);color:white;border:0}.output{background:rgba(0,0,0,.3);padding:10px;border-radius:6px;white-space:pre-wrap}.chart-container{height:200px}.badge-soft{background:rgba(255,255,255,.2);color:white}</style></head><body><div class='container py-4'><h1 class='text-center'>Ryuz WAN Simulator</h1><p class='text-center'>L3/NAT y L2 Bridge por pares entrada/salida</p>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class='alert alert-{{c}}'>{{m}}</div>{% endfor %}{% endwith %}<div class='d-flex justify-content-center gap-2 mb-4'><form method='post' action='{{url_for("configure")}}'><input type='hidden' name='action' value='reset_all'><button class='btn btn-primary'>Restablecer todas</button></form><select id='unit' class='form-select w-auto' onchange='updateCharts()'><option value='mbps'>Mbps</option><option value='kbps'>Kbps</option><option value='mb'>MB/s</option><option value='kb'>KB/s</option></select></div><div class='row'>{% for i in interfaces %}<div class='col-md-6 col-lg-4 mb-4'><div class='card p-4 h-100'><h4>{{stats[i].label}}</h4><div>{% if stats[i].bridge %}<span class='badge badge-soft'>{{stats[i].bridge}}</span>{% endif %} {% if stats[i].role %}<span class='badge badge-soft'>{{stats[i].role}}</span>{% endif %}{% if stats[i].wan %}<span class='badge badge-soft'>WAN {{stats[i].wan}}</span>{% endif %}</div><small>Interfaz: {{i}}{% if stats[i].lan %}<br>LAN: {{stats[i].lan}}{% endif %}{% if stats[i].wan %}<br>WAN: {{stats[i].wan}}{% endif %}{% if stats[i].subnet %}<br>Subred: {{stats[i].subnet}}{% endif %}{% if stats[i].wan_private %}<br>IP WAN privada: {{stats[i].wan_private}}{% endif %}{% if stats[i].wan_public %}<br>IP WAN pública: {{stats[i].wan_public}}{% endif %}{% if stats[i].wan_bw %}<br>BW estimado: {{stats[i].wan_bw}}{% endif %}{% if stats[i].peer %}<br>Peer: {{stats[i].peer}}{% endif %}{% if stats[i].mac %}<br>MAC: {{stats[i].mac}}{% endif %}</small><form method='post' action='{{url_for("configure")}}' class='mt-3'><input type='hidden' name='iface' value='{{i}}'><input type='hidden' name='action' value='apply'><label>Delay/latencia ms</label><input class='form-control' type='number' name='delay' step='.1' min='0' value='{{stats[i].delay}}'><label>Jitter ms</label><input class='form-control' type='number' name='jitter' step='.1' min='0' value='{{stats[i].jitter}}'><label>Ruido/Pérdida %</label><input class='form-control' type='number' name='loss' step='.1' min='0' max='100' value='{{stats[i].loss}}'><div class='mt-3 d-flex gap-2'><button class='btn btn-primary'>Aplicar</button><button class='btn btn-warning' onclick='this.form.elements["action"].value="reset"'>Restablecer</button></div></form><div class='mt-3 d-flex flex-wrap gap-1'>{% for label,d,j,l in quicks %}<form method='post' action='{{url_for("configure")}}'><input type='hidden' name='iface' value='{{i}}'><input type='hidden' name='action' value='apply'><input type='hidden' name='delay' value='{{d}}'><input type='hidden' name='jitter' value='{{j}}'><input type='hidden' name='loss' value='{{l}}'><button class='btn btn-outline-light btn-sm'>{{label}}</button></form>{% endfor %}</div><div class='chart-container mt-3'><canvas id='c{{loop.index}}'></canvas></div><pre class='output mt-2' id='o{{loop.index}}'></pre></div></div>{% endfor %}</div><div class='text-center'>Ryuz WAN Simulator - Versión __WANSIM_VERSION__</div></div><script>const data={{chart|safe}};let charts={};function updateCharts(){let u=document.getElementById('unit').value;data.forEach((x,n)=>{let s=x.stats,vals=[s[u+'_in'],s[u+'_out'],s.delay,s.jitter,s.loss],id='c'+(n+1),ctx=document.getElementById(id);if(!ctx)return;if(charts[id]){charts[id].data.datasets[0].data=vals;charts[id].update()}else{charts[id]=new Chart(ctx.getContext('2d'),{type:'bar',data:{labels:['Entrada','Salida','Delay','Jitter','Ruido/Pérdida'],datasets:[{label:x.label,data:vals,borderWidth:1}]},options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true}}}})}document.getElementById('o'+(n+1)).innerText='WAN: '+(s.wan||'')+'\nLAN: '+(s.lan||'')+'\nSubred: '+(s.subnet||'')+'\nDelay: '+Number(s.delay).toFixed(1)+' ms\nJitter: '+Number(s.jitter).toFixed(1)+' ms\nRuido/Pérdida: '+Number(s.loss).toFixed(1)+' %\nEntrada: '+Number(s[u+'_in']).toFixed(2)+' '+u+'\nSalida: '+Number(s[u+'_out']).toFixed(2)+' '+u})}window.onload=updateCharts;</script></body></html>
 """
 
 @app.route('/')
@@ -1771,7 +1936,9 @@ def configure():
     except Exception as e:
         logger.exception('Error en /configure'); flash(f'Error interno controlado: {e}','danger'); return redirect(url_for('dashboard'))
 
-if __name__=='__main__': app.run(host='0.0.0.0',port=app.config['PORT'])
+if __name__=='__main__':
+    ssl_context=(TLS_CERT_FILE,TLS_KEY_FILE) if HTTPS_ENABLED and TLS_CERT_FILE and TLS_KEY_FILE else None
+    app.run(host='0.0.0.0',port=app.config['PORT'],ssl_context=ssl_context)
 EOF
 
 # Configurar permisos del archivo del dashboard
@@ -1799,7 +1966,11 @@ log_message "OK" "Sintaxis de $WANSIM_DASHBOARD verificada."
 
 # Reemplazar placeholders en el archivo Python de forma segura
 log_message "DEBUG" "Reemplazando placeholders en $WANSIM_DASHBOARD con reemplazo seguro..."
-export TELEGRAM_TOKEN TELEGRAM_CHAT_ID TELEGRAM_ENABLED PYTHON_VLAN_LIST PYTHON_INTERFACE_META DASHBOARD_PORT WANSIM_VERSION NETEM_STATE_FILE
+HTTPS_ENABLED=0
+if [ "${ENABLE_HTTPS:-n}" = "s" ] && [ -n "${TLS_CERT_FILE:-}" ] && [ -n "${TLS_KEY_FILE:-}" ]; then
+    HTTPS_ENABLED=1
+fi
+export TELEGRAM_TOKEN TELEGRAM_CHAT_ID TELEGRAM_ENABLED PYTHON_VLAN_LIST PYTHON_INTERFACE_META DASHBOARD_PORT WANSIM_VERSION NETEM_STATE_FILE HTTPS_ENABLED TLS_CERT_FILE TLS_KEY_FILE
 if ! "$PYTHON_BIN" - "$WANSIM_DASHBOARD" <<'PYREPLACE'
 import json
 import os
@@ -1834,8 +2005,11 @@ replacements = {
     "__TELEGRAM_TOKEN_LITERAL__": json.dumps(os.environ.get("TELEGRAM_TOKEN", "")),
     "__TELEGRAM_CHAT_ID_LITERAL__": json.dumps(os.environ.get("TELEGRAM_CHAT_ID", "")),
     "__TELEGRAM_ENABLED__": os.environ.get("TELEGRAM_ENABLED", "0"),
+    "__HTTPS_ENABLED__": os.environ.get("HTTPS_ENABLED", "0"),
+    "__TLS_CERT_FILE_LITERAL__": json.dumps(os.environ.get("TLS_CERT_FILE", "")),
+    "__TLS_KEY_FILE_LITERAL__": json.dumps(os.environ.get("TLS_KEY_FILE", "")),
     "__NETEM_STATE_FILE__": os.environ.get("NETEM_STATE_FILE", os.path.expanduser("~/wansim_netem_state.json")),
-    "__WANSIM_VERSION__": os.environ.get("WANSIM_VERSION", "1.112"),
+    "__WANSIM_VERSION__": os.environ.get("WANSIM_VERSION", "1.113"),
 }
 for key, value in replacements.items():
     text = text.replace(key, value)
@@ -1882,9 +2056,9 @@ free_port_single() {
     log_message "OK" "Puerto $port liberado o disponible."
 }
 
-# Liberar puertos 5000 y 443
-log_message "INFO" "Liberando puertos 5000 y 443..."
-for port in 5000 443; do
+# Liberar el puerto del dashboard
+log_message "INFO" "Liberando puerto $DASHBOARD_PORT..."
+for port in "$DASHBOARD_PORT"; do
     free_port_single $port
 done
 
@@ -1942,7 +2116,7 @@ log_message "OK" "wansim.service configurado y iniciado."
 # Verificar despliegue del servidor Flask
 log_message "INFO" "Verificando despliegue de Flask..."
 sleep 5
-if ss -tuln | grep -q ":5000\|:443"; then
+if ss -tuln | grep -q ":$DASHBOARD_PORT"; then
     log_message "OK" "Flask desplegado correctamente."
     echo "${COLOR_OK}Flask - Desplegado correctamente.${COLOR_RESET}"
 else
@@ -2027,7 +2201,11 @@ if [ "$INTERACTIVE" -eq 1 ]; then
 fi
 
 # Mostrar URL del dashboard y código QR
-HTTP_URL="http://$HOST_IP:$DASHBOARD_PORT"
+URL_SCHEME="http"
+if [ "${ENABLE_HTTPS:-n}" = "s" ]; then
+    URL_SCHEME="https"
+fi
+HTTP_URL="$URL_SCHEME://$HOST_IP:$DASHBOARD_PORT"
 echo "${COLOR_INFO}Dashboard disponible en: $HTTP_URL${COLOR_RESET}"
 if command -v qrencode >/dev/null 2>&1; then
     qrencode -t ANSIUTF8 "$HTTP_URL"
