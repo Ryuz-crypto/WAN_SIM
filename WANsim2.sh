@@ -864,11 +864,8 @@ if [ "$INTERACTIVE" -eq 1 ]; then
                 SEGMENT_OPTION=${SEGMENT_OPTION:-3}
                 case "$SEGMENT_OPTION" in 1) SEGMENT_PREFIX="10.254"; break ;; 2) SEGMENT_PREFIX="172.16"; break ;; 3) SEGMENT_PREFIX="192.168"; break ;; *) log_message "ERROR" "Opción inválida. Ingresa 1, 2 o 3." ;; esac
             done
-            while true; do
-                read -p "${COLOR_INFO}[ENTRADA] Ingresa el tercer octeto inicial para las VLANs (1-254) [predeterminado 10]: ${COLOR_RESET}" BASE_OCTET
-                BASE_OCTET=${BASE_OCTET:-10}
-                if [[ "$BASE_OCTET" =~ ^[0-9]+$ && "$BASE_OCTET" -ge 1 && "$BASE_OCTET" -le 254 ]]; then break; else log_message "ERROR" "Ingresa un número válido entre 1 y 254."; fi
-            done
+            BASE_OCTET=10
+            echo "${COLOR_INFO}El tercer octeto se definira por cada par WAN/LAN para evitar rangos repetidos.${COLOR_RESET}"
         else
             SEGMENT_PREFIX="192.168"
             BASE_OCTET=10
@@ -2151,21 +2148,24 @@ if [ "$TOPOLOGY_MODE" = "bridge" ]; then
     echo "${COLOR_CYAN}│ ${COLOR_CYAN}Interfaces Bridge:${COLOR_RESET} ${BRIDGE_INTERFACES_CSV:-${BRIDGE_INTERFACES[*]}}${COLOR_CYAN}         │${COLOR_RESET}"
     echo "${COLOR_CYAN}│ ${COLOR_CYAN}Control de Tráfico:${COLOR_RESET} Habilitado${COLOR_CYAN}               │${COLOR_RESET}"
 else
-    echo "${COLOR_CYAN}│ ${COLOR_GREEN}WAN:${COLOR_RESET} $WAN_IF${COLOR_CYAN}                                        │${COLOR_RESET}"
-    echo "${COLOR_CYAN}│       |                                                │${COLOR_RESET}"
-    echo "${COLOR_CYAN}│ ${COLOR_CYAN}$HOSTNAME${COLOR_CYAN}                                          │${COLOR_RESET}"
-    echo "${COLOR_CYAN}│       |                                                │${COLOR_RESET}"
-    echo "${COLOR_CYAN}│ ${COLOR_GREEN}LAN:${COLOR_RESET} $LAN_IF (Trunk VLAN)${COLOR_CYAN}                         │${COLOR_RESET}"
-    echo "${COLOR_CYAN}│ ┌──────────────────────────────┐                       │${COLOR_RESET}"
-    for (( i=0; i<${NUM_VLANS:-0} && i<2; i++ )); do
-        current_vlan_id=$(( ${START_VLAN:-100} + i ))
-        subnet_octet=$(( ${BASE_OCTET:-10} + i ))
-        printf "${COLOR_CYAN}│ │ ${COLOR_CYAN}vlan%-4s:${COLOR_RESET} %-16s │                       │${COLOR_RESET}\n" "$current_vlan_id" "${SEGMENT_PREFIX:-192.168}.$subnet_octet.1"
-    done
-    if [ ${NUM_VLANS:-0} -gt 2 ]; then
-        echo "${COLOR_CYAN}│ │ ${COLOR_CYAN}... (total $NUM_VLANS VLANs)${COLOR_CYAN}                    │${COLOR_RESET}"
+    echo "${COLOR_CYAN}│ ${COLOR_CYAN}$HOSTNAME - pares L3/NAT configurados${COLOR_CYAN}             │${COLOR_RESET}"
+    if [ -n "${L3_LINKS_CSV:-}" ]; then
+        IFS=';' read -r -a SUMMARY_L3_LINKS <<< "$L3_LINKS_CSV"
+    else
+        SUMMARY_L3_LINKS=("1:${WAN_IF}:${LAN_IF}:${START_VLAN:-100}:${BASE_OCTET:-10}:${SEGMENT_PREFIX:-192.168}")
     fi
-    echo "${COLOR_CYAN}│ └──────────────────────────────┐                       │${COLOR_RESET}"
+    for summary_link in "${SUMMARY_L3_LINKS[@]}"; do
+        IFS=':' read -r summary_idx summary_wan summary_lan summary_start_vlan summary_base_octet summary_segment <<< "$summary_link"
+        echo "${COLOR_CYAN}│ ${COLOR_GREEN}Par #$summary_idx:${COLOR_RESET} LAN $summary_lan -> WAN $summary_wan${COLOR_CYAN}                  │${COLOR_RESET}"
+        for (( i=0; i<${NUM_VLANS:-0} && i<3; i++ )); do
+            current_vlan_id=$(( summary_start_vlan + i ))
+            subnet_octet=$(( summary_base_octet + i ))
+            printf "${COLOR_CYAN}│   ${COLOR_CYAN}VLAN %-4s${COLOR_RESET} %-18s ${COLOR_CYAN}│${COLOR_RESET}\n" "$current_vlan_id" "${summary_segment}.${subnet_octet}.0/24"
+        done
+        if [ ${NUM_VLANS:-0} -gt 3 ]; then
+            echo "${COLOR_CYAN}│   ${COLOR_CYAN}... total ${NUM_VLANS:-0} VLANs para este par${COLOR_CYAN}                  │${COLOR_RESET}"
+        fi
+    done
 fi
 echo "${COLOR_CYAN}│                                                        │${COLOR_RESET}"
 echo "${COLOR_CYAN}│ ${COLOR_CYAN}Topología:${COLOR_RESET} $TOPOLOGY_MODE${COLOR_CYAN}                              │${COLOR_RESET}"
@@ -2175,14 +2175,12 @@ if [ "$TOPOLOGY_MODE" = "bridge" ]; then
     echo "${COLOR_CYAN}│ ${COLOR_CYAN}Control de Tráfico:${COLOR_RESET} $( [ "$CONFIG_TC" = "s" ] && echo "Habilitado" || echo "Deshabilitado")${COLOR_CYAN}               │${COLOR_RESET}"
     echo "${COLOR_CYAN}│ ${COLOR_CYAN}Gestión con Salida a Internet:${COLOR_RESET} $( [ "$IS_MGMT" = "s" ] && echo "Sí" || echo "No")${COLOR_CYAN}          │${COLOR_RESET}"
 else
-    echo "${COLOR_CYAN}│ ${COLOR_CYAN}VLANs:${COLOR_RESET} ${NUM_VLANS:-0} (ID inicial: ${START_VLAN:-0})${COLOR_CYAN}             │${COLOR_RESET}"
+    echo "${COLOR_CYAN}│ ${COLOR_CYAN}Pares L3:${COLOR_RESET} ${NUM_L3_LINKS:-1} / VLANs por par: ${NUM_VLANS:-0}${COLOR_CYAN}             │${COLOR_RESET}"
     if [ "$CONFIG_DHCP" = "s" ]; then
-        echo "${COLOR_CYAN}│ ${COLOR_CYAN}DHCP:${COLOR_RESET} Sí (Segmento base: ${SEGMENT_PREFIX:-192.168}.X.0/24, Tercer octeto inicial: ${BASE_OCTET:-10})${COLOR_CYAN} │${COLOR_RESET}"
+        echo "${COLOR_CYAN}│ ${COLOR_CYAN}DHCP:${COLOR_RESET} Sí (segmento base: ${SEGMENT_PREFIX:-192.168}.X.0/24)${COLOR_CYAN} │${COLOR_RESET}"
     else
         echo "${COLOR_CYAN}│ ${COLOR_CYAN}DHCP:${COLOR_RESET} No${COLOR_CYAN}                                       │${COLOR_RESET}"
     fi
-    echo "${COLOR_CYAN}│ ${COLOR_CYAN}WAN:${COLOR_RESET} $WAN_IF${COLOR_CYAN}                                        │${COLOR_RESET}"
-    echo "${COLOR_CYAN}│ ${COLOR_CYAN}LAN:${COLOR_RESET} $LAN_IF${COLOR_CYAN}                                        │${COLOR_RESET}"
 fi
 echo "${COLOR_CYAN}│ ${COLOR_CYAN}Bot de Telegram:${COLOR_RESET} $( [ "$INTEGRATE_TELEGRAM" = "s" ] && echo "Sí" || echo "No")${COLOR_CYAN}                        │${COLOR_RESET}"
 echo "${COLOR_CYAN}│                                                        │${COLOR_RESET}"
