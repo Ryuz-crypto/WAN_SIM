@@ -1,6 +1,6 @@
 # Ryuz WAN Simulator
 
-**Version 1.114** | **Autor**: decameru@outlook.com
+**Version 1.115** | **Autor**: decameru@outlook.com
 
 Ryuz WAN Simulator es una herramienta para simular condiciones WAN en Linux. Permite aplicar latencia, jitter y perdida de paquetes sobre interfaces fisicas, VLANs o bridges L2, con un dashboard Flask para control operativo.
 
@@ -13,6 +13,7 @@ Esta rama se mantiene como la base principal del simulador. La evolucion FastAPI
 - Modo Bridge L2 con 1 a 3 pares de interfaces entrada/salida.
 - Control de latencia, jitter y perdida por interfaz usando `tc/netem`.
 - Dashboard web Flask en el puerto `5000`, con administracion HTTPS desde la interfaz web.
+- Seccion `Pre-beta ReactUI` para preparar la evolucion grafica de configuracion L3/L2, Telegram multi-bot, daemons y leases DHCP.
 - DHCP automatico para VLANs.
 - Persistencia L2 mediante `wansim-l2-persist.service`.
 - Integracion opcional con Telegram, botones de presets y fallback HTTP API si falla la libreria legacy.
@@ -20,7 +21,7 @@ Esta rama se mantiene como la base principal del simulador. La evolucion FastAPI
 
 ## Sistemas Soportados
 
-La version 1.114 detecta el gestor de paquetes y ajusta dependencias para:
+La version 1.115 detecta el gestor de paquetes y ajusta dependencias para:
 
 - Ubuntu Server 20.04 o superior.
 - Ubuntu Workstation 20.04 o superior.
@@ -108,6 +109,20 @@ Desde el boton `HTTPS` del dashboard puedes cargar un certificado PEM, PEM bundl
 https://<IP_DEL_SERVIDOR>:5000
 ```
 
+## Pre-beta ReactUI
+
+La version estable sigue siendo el dashboard principal. Para revisar la evolucion, abre el dashboard y usa el boton `Pre-beta ReactUI`.
+
+En esa vista puedes:
+
+- Preparar cambios de topologia L3/NAT o Bridge L2L sin romper la configuracion estable.
+- Guardar un draft persistente en `~/.wansim/reactui_prebeta.json`.
+- Ver interfaces detectadas con IP, estado y MAC.
+- Ver daemons relevantes y enviar restart controlado.
+- Ver leases DHCP con IP, host, MAC y estado.
+- Preparar multiples bots de Telegram y validar sincronizacion contra Telegram API.
+- Revisar un diagrama conceptual de los cambios propuestos para L2 o L3.
+
 ## Archivos Generados
 
 Los archivos operativos se crean en el home del usuario que ejecuta el script:
@@ -121,6 +136,7 @@ Los archivos operativos se crean en el home del usuario que ejecuta el script:
 | `~/wansim_netem_state.json` | Estado tc/netem |
 | `~/.wansim/venv` | Entorno Python aislado del dashboard |
 | `~/.wansim/tls/` | Certificado y llave normalizados para HTTPS |
+| `~/.wansim/reactui_prebeta.json` | Draft guardado desde `Pre-beta ReactUI` |
 
 Archivos del sistema:
 
@@ -162,6 +178,14 @@ Antes de ejecutar en un servidor compartido, revisa:
 Si una ejecucion falla, el script ejecuta rollback automatico de servicios, dashboard generado, virtualenv parcial, bridges/VLANs generadas y archivos temporales. El log principal se conserva en `~/emix_abundix.log`.
 
 ## Release Notes
+
+### Version 1.115
+
+- Se agrega `MAC LAN` al detalle desplegable de cada enlace L3.
+- Se actualiza el branding visual del dashboard a una paleta viva profesional inspirada en HPE: verde principal, fondo claro y acentos cian/purpura.
+- Se agrega boton `Pre-beta ReactUI` con una consola React embebida para preparar cambios futuros de topologia L3/NAT y Bridge L2L.
+- La pre-beta permite guardar drafts, preparar Telegram multi-bot, validar sincronizacion, ver/reiniciar daemons y revisar leases DHCP.
+- La version estable V1 sigue intacta y puede convivir con el draft de la pre-beta.
 
 ### Version 1.114
 

@@ -10,7 +10,7 @@ exec > >(tee -a /tmp/wansim_debug.log) 2>&1
 # -----------------------------------------------
 # Variables de configuración
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WANSIM_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "1.114")"
+WANSIM_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "1.115")"
 USER_HOME="${HOME:-$(getent passwd "$(whoami)" | cut -d: -f6)}"
 WANSIM_HOME="$USER_HOME/.wansim"
 PYTHON_VENV="$WANSIM_HOME/venv"
@@ -24,6 +24,7 @@ SERVICE_FILE="/etc/systemd/system/wansim.service"
 PERSIST_SCRIPT="/usr/local/sbin/wansim_l2_persist.sh"
 PERSIST_SERVICE="/etc/systemd/system/wansim-l2-persist.service"
 NETEM_STATE_FILE="$USER_HOME/wansim_netem_state.json"
+PREBETA_STATE_FILE="$WANSIM_HOME/reactui_prebeta.json"
 TLS_DIR="$WANSIM_HOME/tls"
 TLS_CERT_FILE="$TLS_DIR/wansim.crt"
 TLS_KEY_FILE="$TLS_DIR/wansim.key"
@@ -405,7 +406,7 @@ set_dependency_list
 # Configurar permisos de sudo para el usuario actual
 log_message "DEBUG" "Configurando permisos de sudo para $CURRENT_USER..."
 SUDOERS_FILE="/etc/sudoers.d/wansim"
-SUDOERS_CONTENT="$CURRENT_USER ALL=(ALL) NOPASSWD: /usr/bin/apt-get, /usr/bin/dnf, /usr/bin/yum, /usr/bin/debconf-set-selections, /usr/sbin/tc, /usr/bin/tc, /usr/sbin/ip, /usr/bin/ip, /usr/sbin/iptables, /usr/sbin/iptables-save, /usr/sbin/sysctl, /usr/sbin/dhcpd, /usr/bin/systemctl, /usr/bin/systemctl stop unattended-upgrades, /usr/bin/systemctl restart wansim.service, /usr/bin/fuser, /usr/bin/kill, /usr/bin/rm, /usr/sbin/dpkg, /usr/bin/tee, /usr/bin/mv, /usr/bin/chmod, /usr/bin/chown"
+SUDOERS_CONTENT="$CURRENT_USER ALL=(ALL) NOPASSWD: /usr/bin/apt-get, /usr/bin/dnf, /usr/bin/yum, /usr/bin/debconf-set-selections, /usr/sbin/tc, /usr/bin/tc, /usr/sbin/ip, /usr/bin/ip, /usr/sbin/iptables, /usr/sbin/iptables-save, /usr/sbin/sysctl, /usr/sbin/dhcpd, /usr/bin/systemctl, /usr/bin/systemctl stop unattended-upgrades, /usr/bin/systemctl restart wansim.service, /usr/bin/systemctl restart wansim-l2-persist.service, /usr/bin/systemctl restart isc-dhcp-server, /usr/bin/systemctl restart dhcpd, /usr/bin/systemctl restart iptables, /usr/bin/fuser, /usr/bin/kill, /usr/bin/rm, /usr/sbin/dpkg, /usr/bin/tee, /usr/bin/mv, /usr/bin/chmod, /usr/bin/chown"
 if ! sudo -n true 2>/dev/null; then
     log_message "INFO" "Configurando permisos de sudo automáticamente..."
     # Intentar configurar sudoers usando una contraseña temporal o existente
@@ -1076,6 +1077,7 @@ if [ "$TOPOLOGY_MODE" = "nat" ]; then
         wan_public=$(iface_public_ip "$wan_iface")
         wan_bw=$(iface_bw_probe "$wan_iface")
         wan_mac=$(cat "/sys/class/net/$wan_iface/address" 2>/dev/null || echo "N/D")
+        lan_mac=$(cat "/sys/class/net/$lan_iface/address" 2>/dev/null || echo "N/D")
         log_message "OK" "L3#$link_idx WAN $wan_iface privada=$wan_private publica=$wan_public bw=$wan_bw"
 
         for (( i=0; i<${NUM_VLANS:-0}; i++ )); do
@@ -1096,9 +1098,9 @@ if [ "$TOPOLOGY_MODE" = "nat" ]; then
             DHCP_INTERFACES+=("$vlan_name")
             PYTHON_VLAN_LIST=$(append_json_item "$PYTHON_VLAN_LIST" "$vlan_name")
             subnet="${segment_prefix_link}.${subnet_octet}.0/24"
-            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
                 "$vlan_name" "VLAN $current_vlan_id ($lan_iface -> $wan_iface)" "" "L3/NAT" "$wan_iface" "$wan_mac" \
-                "$wan_iface" "$lan_iface" "$wan_private" "$wan_public" "$wan_bw" "$subnet" >> "$META_TSV"
+                "$wan_iface" "$lan_iface" "$wan_private" "$wan_public" "$wan_bw" "$subnet" "$lan_mac" >> "$META_TSV"
             printf '%s\t%s\t%s\n' "$segment_prefix_link" "$subnet_octet" "$vlan_name" >> "$DHCP_TSV"
             printf '%s\t%s.%s.0/24\n' "$wan_iface" "$segment_prefix_link" "$subnet_octet" >> "$NAT_TSV"
             log_message "OK" "Creada $vlan_name VLAN=$current_vlan_id subnet=${segment_prefix_link}.${subnet_octet}.0/24 WAN=$wan_iface"
@@ -1174,10 +1176,11 @@ try:
             if len(parts) < 12:
                 continue
             iface,label,bridge,role,peer,mac,wan,lan,wan_private,wan_public,wan_bw,subnet=parts[:12]
+            lan_mac=parts[12] if len(parts) > 12 else ""
             meta[iface]={
                 "label":label,"bridge":bridge,"role":role,"peer":peer,"mac":mac,
                 "wan":wan,"lan":lan,"wan_private":wan_private,"wan_public":wan_public,
-                "wan_bw":wan_bw,"subnet":subnet
+                "wan_bw":wan_bw,"subnet":subnet,"lan_mac":lan_mac
             }
 except FileNotFoundError:
     pass
@@ -1524,7 +1527,7 @@ cat > "$WANSIM_DASHBOARD" <<'EOF'
 #!/usr/bin/env python3
 import os, re, json, logging, subprocess, threading, sys, time
 import requests
-from flask import Flask, request, render_template_string, redirect, url_for, flash
+from flask import Flask, request, render_template_string, redirect, url_for, flash, jsonify
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 logger=logging.getLogger(__name__)
 try:
@@ -1554,6 +1557,9 @@ TLS_KEY_FILE=__TLS_KEY_FILE_LITERAL__
 TLS_DIR=__TLS_DIR_LITERAL__
 TLS_ENABLE_FILE=__TLS_ENABLE_FILE_LITERAL__
 CONFIG_FILE=__CONFIG_FILE_LITERAL__
+PREBETA_STATE_FILE=__PREBETA_STATE_FILE_LITERAL__
+DHCP_SERVICE=__DHCP_SERVICE_LITERAL__
+TOPOLOGY_MODE=__TOPOLOGY_MODE_LITERAL__
 def tls_is_ready():
     if not (TLS_CERT_FILE and TLS_KEY_FILE and TLS_ENABLE_FILE):
         return False
@@ -1611,7 +1617,8 @@ def collect():
             'wan_private':meta.get('wan_private',''),
             'wan_public':meta.get('wan_public',''),
             'wan_bw':meta.get('wan_bw',''),
-            'subnet':meta.get('subnet','')
+            'subnet':meta.get('subnet',''),
+            'lan_mac':meta.get('lan_mac','')
         })
     return s
 def to_number(value, name, min_value=0.0, max_value=None):
@@ -1851,11 +1858,34 @@ if TELEGRAM_ENABLED and not Updater:
                 time.sleep(5)
     threading.Thread(target=tg_http_bot,daemon=True).start()
 TEMPLATE=r"""
-<!doctype html><html lang='es'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Ryuz WAN Simulator</title><link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css' rel='stylesheet'><script src='https://cdn.jsdelivr.net/npm/chart.js'></script><style>body{background:linear-gradient(135deg,#1e3c72,#2a5298);color:white;min-height:100vh}.card{background:rgba(255,255,255,.12);border:0;border-radius:15px}.form-control,.form-select{background:rgba(255,255,255,.22);color:white;border:0}.output{background:rgba(0,0,0,.3);padding:10px;border-radius:6px;white-space:pre-wrap}.chart-container{height:200px}.badge-soft{background:rgba(255,255,255,.2);color:white}details{background:rgba(0,0,0,.16);border-radius:6px;padding:8px 10px;margin-top:10px}summary{cursor:pointer}</style></head><body><div class='container py-4'><h1 class='text-center'>Ryuz WAN Simulator</h1><p class='text-center'>L3/NAT y L2 Bridge por pares entrada/salida</p>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class='alert alert-{{c}}'>{{m}}</div>{% endfor %}{% endwith %}<div class='d-flex justify-content-center gap-2 mb-4'><form method='post' action='{{url_for("configure")}}'><input type='hidden' name='action' value='reset_all'><button class='btn btn-primary'>Restablecer todas</button></form><a class='btn btn-outline-light' href='{{url_for("tls_settings")}}'>HTTPS</a><select id='unit' class='form-select w-auto' onchange='updateCharts()'><option value='mbps'>Mbps</option><option value='kbps'>Kbps</option><option value='mb'>MB/s</option><option value='kb'>KB/s</option></select></div><div class='row'>{% for i in interfaces %}<div class='col-md-6 col-lg-4 mb-4'><div class='card p-4 h-100'><h4>{{stats[i].label}}</h4><div>{% if stats[i].bridge %}<span class='badge badge-soft'>{{stats[i].bridge}}</span>{% endif %} {% if stats[i].role %}<span class='badge badge-soft'>{{stats[i].role}}</span>{% endif %}{% if stats[i].wan %}<span class='badge badge-soft'>WAN {{stats[i].wan}}</span>{% endif %}{% if stats[i].lan %}<span class='badge badge-soft'>LAN {{stats[i].lan}}</span>{% endif %}</div><details><summary>Detalles del enlace</summary><small>Interfaz: {{i}}{% if stats[i].subnet %}<br>Subred: {{stats[i].subnet}}{% endif %}{% if stats[i].wan_private %}<br>IP WAN privada: {{stats[i].wan_private}}{% endif %}{% if stats[i].wan_public %}<br>IP WAN pública: {{stats[i].wan_public}}{% endif %}{% if stats[i].wan_bw %}<br>BW estimado: {{stats[i].wan_bw}}{% endif %}{% if stats[i].peer %}<br>Peer: {{stats[i].peer}}{% endif %}{% if stats[i].mac %}<br>MAC: {{stats[i].mac}}{% endif %}</small></details><form method='post' action='{{url_for("configure")}}' class='mt-3'><input type='hidden' name='iface' value='{{i}}'><input type='hidden' name='action' value='apply'><label>Delay/latencia ms</label><input class='form-control' type='number' name='delay' step='.1' min='0' value='{{stats[i].delay}}'><label>Jitter ms</label><input class='form-control' type='number' name='jitter' step='.1' min='0' value='{{stats[i].jitter}}'><label>Ruido/Pérdida %</label><input class='form-control' type='number' name='loss' step='.1' min='0' max='100' value='{{stats[i].loss}}'><div class='mt-3 d-flex gap-2'><button class='btn btn-primary'>Aplicar</button><button class='btn btn-warning' onclick='this.form.elements["action"].value="reset"'>Restablecer</button></div></form><div class='mt-3 d-flex flex-wrap gap-1'>{% for label,d,j,l in quicks %}<form method='post' action='{{url_for("configure")}}'><input type='hidden' name='iface' value='{{i}}'><input type='hidden' name='action' value='apply'><input type='hidden' name='delay' value='{{d}}'><input type='hidden' name='jitter' value='{{j}}'><input type='hidden' name='loss' value='{{l}}'><button class='btn btn-outline-light btn-sm'>{{label}}</button></form>{% endfor %}</div><div class='chart-container mt-3'><canvas id='c{{loop.index}}'></canvas></div><pre class='output mt-2' id='o{{loop.index}}'></pre></div></div>{% endfor %}</div><div class='text-center'>Ryuz WAN Simulator - Versión __WANSIM_VERSION__</div></div><script>const data={{chart|safe}};let charts={};function updateCharts(){let u=document.getElementById('unit').value;data.forEach((x,n)=>{let s=x.stats,vals=[s[u+'_in'],s[u+'_out'],s.delay,s.jitter,s.loss],id='c'+(n+1),ctx=document.getElementById(id);if(!ctx)return;if(charts[id]){charts[id].data.datasets[0].data=vals;charts[id].update()}else{charts[id]=new Chart(ctx.getContext('2d'),{type:'bar',data:{labels:['Entrada','Salida','Delay','Jitter','Ruido/Pérdida'],datasets:[{label:x.label,data:vals,borderWidth:1}]},options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true}}}})}document.getElementById('o'+(n+1)).innerText='WAN: '+(s.wan||'')+'\nLAN: '+(s.lan||'')+'\nSubred: '+(s.subnet||'')+'\nDelay: '+Number(s.delay).toFixed(1)+' ms\nJitter: '+Number(s.jitter).toFixed(1)+' ms\nRuido/Pérdida: '+Number(s.loss).toFixed(1)+' %\nEntrada: '+Number(s[u+'_in']).toFixed(2)+' '+u+'\nSalida: '+Number(s[u+'_out']).toFixed(2)+' '+u})}window.onload=updateCharts;</script></body></html>
+<!doctype html><html lang='es'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Ryuz WAN Simulator</title><link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css' rel='stylesheet'><script src='https://cdn.jsdelivr.net/npm/chart.js'></script><style>:root{--ryuz-green:#01a982;--ryuz-ink:#18212a;--ryuz-teal:#0b7f77;--ryuz-cyan:#00c8ff;--ryuz-purple:#614ad3;--ryuz-bg:#f4faf8}body{background:radial-gradient(circle at 15% 0%,rgba(1,169,130,.22),transparent 28%),linear-gradient(135deg,#f7fffc,#eef6ff 58%,#fff7fb);color:var(--ryuz-ink);min-height:100vh}.card{background:rgba(255,255,255,.94);border:1px solid rgba(1,169,130,.28);border-top:5px solid var(--ryuz-green);border-radius:8px;box-shadow:0 18px 42px rgba(24,33,42,.12)}.form-control,.form-select{background:#fff;color:var(--ryuz-ink);border:1px solid rgba(24,33,42,.18)}.btn-primary{background:var(--ryuz-green);border-color:var(--ryuz-green);color:#071512;font-weight:700}.btn-outline-light{border-color:var(--ryuz-green);color:var(--ryuz-ink);background:#fff}.btn-outline-light:hover{background:var(--ryuz-green);border-color:var(--ryuz-green);color:#071512}.output{background:#10251f;color:#dffcf3;padding:10px;border-radius:6px;white-space:pre-wrap}.chart-container{height:200px}.badge-soft{background:linear-gradient(135deg,var(--ryuz-green),var(--ryuz-cyan));color:#071512}details{background:#eefaf6;border:1px solid rgba(1,169,130,.24);border-radius:6px;padding:8px 10px;margin-top:10px}summary{cursor:pointer;color:var(--ryuz-teal);font-weight:700}</style></head><body><div class='container py-4'><h1 class='text-center'>Ryuz WAN Simulator</h1><p class='text-center'>L3/NAT y L2 Bridge por pares entrada/salida</p>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class='alert alert-{{c}}'>{{m}}</div>{% endfor %}{% endwith %}<div class='d-flex justify-content-center gap-2 mb-4 flex-wrap'><form method='post' action='{{url_for("configure")}}'><input type='hidden' name='action' value='reset_all'><button class='btn btn-primary'>Restablecer todas</button></form><a class='btn btn-outline-light' href='{{url_for("tls_settings")}}'>HTTPS</a><a class='btn btn-outline-light' href='{{url_for("prebeta")}}'>Pre-beta ReactUI</a><select id='unit' class='form-select w-auto' onchange='updateCharts()'><option value='mbps'>Mbps</option><option value='kbps'>Kbps</option><option value='mb'>MB/s</option><option value='kb'>KB/s</option></select></div><div class='row'>{% for i in interfaces %}<div class='col-md-6 col-lg-4 mb-4'><div class='card p-4 h-100'><h4>{{stats[i].label}}</h4><div>{% if stats[i].bridge %}<span class='badge badge-soft'>{{stats[i].bridge}}</span>{% endif %} {% if stats[i].role %}<span class='badge badge-soft'>{{stats[i].role}}</span>{% endif %}{% if stats[i].wan %}<span class='badge badge-soft'>WAN {{stats[i].wan}}</span>{% endif %}{% if stats[i].lan %}<span class='badge badge-soft'>LAN {{stats[i].lan}}</span>{% endif %}</div><details><summary>Detalles del enlace</summary><small>Interfaz: {{i}}{% if stats[i].subnet %}<br>Subred: {{stats[i].subnet}}{% endif %}{% if stats[i].wan_private %}<br>IP WAN privada: {{stats[i].wan_private}}{% endif %}{% if stats[i].wan_public %}<br>IP WAN pública: {{stats[i].wan_public}}{% endif %}{% if stats[i].wan_bw %}<br>BW estimado: {{stats[i].wan_bw}}{% endif %}{% if stats[i].peer %}<br>Peer: {{stats[i].peer}}{% endif %}{% if stats[i].mac %}<br>MAC WAN/Peer: {{stats[i].mac}}{% endif %}{% if stats[i].lan_mac %}<br>MAC LAN: {{stats[i].lan_mac}}{% endif %}</small></details><form method='post' action='{{url_for("configure")}}' class='mt-3'><input type='hidden' name='iface' value='{{i}}'><input type='hidden' name='action' value='apply'><label>Delay/latencia ms</label><input class='form-control' type='number' name='delay' step='.1' min='0' value='{{stats[i].delay}}'><label>Jitter ms</label><input class='form-control' type='number' name='jitter' step='.1' min='0' value='{{stats[i].jitter}}'><label>Ruido/Pérdida %</label><input class='form-control' type='number' name='loss' step='.1' min='0' max='100' value='{{stats[i].loss}}'><div class='mt-3 d-flex gap-2'><button class='btn btn-primary'>Aplicar</button><button class='btn btn-warning' onclick='this.form.elements["action"].value="reset"'>Restablecer</button></div></form><div class='mt-3 d-flex flex-wrap gap-1'>{% for label,d,j,l in quicks %}<form method='post' action='{{url_for("configure")}}'><input type='hidden' name='iface' value='{{i}}'><input type='hidden' name='action' value='apply'><input type='hidden' name='delay' value='{{d}}'><input type='hidden' name='jitter' value='{{j}}'><input type='hidden' name='loss' value='{{l}}'><button class='btn btn-outline-light btn-sm'>{{label}}</button></form>{% endfor %}</div><div class='chart-container mt-3'><canvas id='c{{loop.index}}'></canvas></div><pre class='output mt-2' id='o{{loop.index}}'></pre></div></div>{% endfor %}</div><div class='text-center'>Ryuz WAN Simulator - Versión __WANSIM_VERSION__</div></div><script>const data={{chart|safe}};let charts={};function updateCharts(){let u=document.getElementById('unit').value;data.forEach((x,n)=>{let s=x.stats,vals=[s[u+'_in'],s[u+'_out'],s.delay,s.jitter,s.loss],id='c'+(n+1),ctx=document.getElementById(id);if(!ctx)return;if(charts[id]){charts[id].data.datasets[0].data=vals;charts[id].update()}else{charts[id]=new Chart(ctx.getContext('2d'),{type:'bar',data:{labels:['Entrada','Salida','Delay','Jitter','Ruido/Pérdida'],datasets:[{label:x.label,data:vals,borderWidth:1,backgroundColor:['#01a982','#00c8ff','#614ad3','#ffb000','#ff5a7a']}]},options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true}}}})}document.getElementById('o'+(n+1)).innerText='WAN: '+(s.wan||'')+'\nLAN: '+(s.lan||'')+'\nSubred: '+(s.subnet||'')+'\nDelay: '+Number(s.delay).toFixed(1)+' ms\nJitter: '+Number(s.jitter).toFixed(1)+' ms\nRuido/Pérdida: '+Number(s.loss).toFixed(1)+' %\nEntrada: '+Number(s[u+'_in']).toFixed(2)+' '+u+'\nSalida: '+Number(s[u+'_out']).toFixed(2)+' '+u})}window.onload=updateCharts;</script></body></html>
 """
 
 TLS_TEMPLATE=r"""
-<!doctype html><html lang='es'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>HTTPS - Ryuz WAN Simulator</title><link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css' rel='stylesheet'><style>body{background:linear-gradient(135deg,#1e3c72,#2a5298);color:white;min-height:100vh}.panel{background:rgba(255,255,255,.12);border-radius:8px;padding:24px}.form-control,.form-select{background:rgba(255,255,255,.22);color:white;border:0}.form-select option{color:#111}</style></head><body><div class='container py-4'><div class='d-flex justify-content-between align-items-center mb-3'><h1>HTTPS</h1><a class='btn btn-outline-light' href='{{url_for("dashboard")}}'>Dashboard</a></div>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class='alert alert-{{c}}'>{{m}}</div>{% endfor %}{% endwith %}<div class='panel'><p>Estado actual: <strong>{{"habilitado" if enabled else "deshabilitado"}}</strong></p><form method='post' action='{{url_for("tls_upload")}}' enctype='multipart/form-data'><label>Formato</label><select class='form-select mb-3' name='mode'><option value='pfx'>PFX / P12 / PKCS12</option><option value='pem'>PEM certificado + llave</option><option value='bundle'>PEM bundle</option><option value='der'>DER certificado + llave DER</option></select><label>Certificado, bundle o PFX</label><input class='form-control mb-3' type='file' name='cert' required><label>Llave privada, solo para PEM/DER separados</label><input class='form-control mb-3' type='file' name='key'><label>Password, solo para PFX/P12 si aplica</label><input class='form-control mb-3' type='password' name='password'><button class='btn btn-primary'>Activar HTTPS</button></form><form method='post' action='{{url_for("tls_disable")}}' class='mt-3'><button class='btn btn-warning'>Desactivar HTTPS</button></form></div></div></body></html>
+<!doctype html><html lang='es'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>HTTPS - Ryuz WAN Simulator</title><link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css' rel='stylesheet'><style>body{background:linear-gradient(135deg,#f7fffc,#eef6ff);color:#18212a;min-height:100vh}.panel{background:#fff;border:1px solid rgba(1,169,130,.24);border-top:5px solid #01a982;border-radius:8px;padding:24px;box-shadow:0 18px 42px rgba(24,33,42,.12)}.form-control,.form-select{background:#fff;color:#18212a;border:1px solid rgba(24,33,42,.18)}.form-select option{color:#111}.btn-primary{background:#01a982;border-color:#01a982;color:#071512;font-weight:700}.btn-outline-light{border-color:#01a982;color:#18212a;background:#fff}.btn-outline-light:hover{background:#01a982;color:#071512}</style></head><body><div class='container py-4'><div class='d-flex justify-content-between align-items-center mb-3'><h1>HTTPS</h1><a class='btn btn-outline-light' href='{{url_for("dashboard")}}'>Dashboard</a></div>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class='alert alert-{{c}}'>{{m}}</div>{% endfor %}{% endwith %}<div class='panel'><p>Estado actual: <strong>{{"habilitado" if enabled else "deshabilitado"}}</strong></p><form method='post' action='{{url_for("tls_upload")}}' enctype='multipart/form-data'><label>Formato</label><select class='form-select mb-3' name='mode'><option value='pfx'>PFX / P12 / PKCS12</option><option value='pem'>PEM certificado + llave</option><option value='bundle'>PEM bundle</option><option value='der'>DER certificado + llave DER</option></select><label>Certificado, bundle o PFX</label><input class='form-control mb-3' type='file' name='cert' required><label>Llave privada, solo para PEM/DER separados</label><input class='form-control mb-3' type='file' name='key'><label>Password, solo para PFX/P12 si aplica</label><input class='form-control mb-3' type='password' name='password'><button class='btn btn-primary'>Activar HTTPS</button></form><form method='post' action='{{url_for("tls_disable")}}' class='mt-3'><button class='btn btn-warning'>Desactivar HTTPS</button></form></div></div></body></html>
+"""
+
+PREBETA_TEMPLATE=r"""
+<!doctype html><html lang='es'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Pre-beta ReactUI - Ryuz WAN Simulator</title><link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css' rel='stylesheet'><script src='https://unpkg.com/react@18/umd/react.development.js'></script><script src='https://unpkg.com/react-dom@18/umd/react-dom.development.js'></script><script src='https://unpkg.com/@babel/standalone/babel.min.js'></script><style>:root{--g:#01a982;--ink:#18212a;--cyan:#00c8ff;--purple:#614ad3;--mag:#ff5a7a;--bg:#f4faf8}body{background:radial-gradient(circle at 12% 0%,rgba(1,169,130,.22),transparent 28%),linear-gradient(135deg,#f7fffc,#eef6ff 58%,#fff7fb);color:var(--ink);min-height:100vh}.panel{background:rgba(255,255,255,.96);border:1px solid rgba(1,169,130,.25);border-top:5px solid var(--g);border-radius:8px;padding:18px;box-shadow:0 18px 42px rgba(24,33,42,.12)}.pill{display:inline-flex;gap:6px;align-items:center;border-radius:999px;padding:4px 10px;background:#e9faf5;color:#0b645c;font-weight:700}.btn-primary{background:var(--g);border-color:var(--g);color:#071512;font-weight:700}.btn-outline-dark{border-color:var(--g)}.diagram{background:#10251f;color:#dffcf3;border-radius:8px;padding:14px;white-space:pre-wrap;font-family:ui-monospace,Menlo,Consolas,monospace}.service-ok{color:#078765;font-weight:700}.service-bad{color:#b42318;font-weight:700}.table{--bs-table-bg:transparent}</style></head><body><div id='root'></div><script type='text/babel'>
+const {useEffect,useState}=React;
+const emptyDraft={topology:'nat',l3:{segment:'10.254',links:[{wan:'',lan:'',vlans:10,startVlan:100,baseOctet:10}]},bridge:{pairs:[{in:'',out:''},{in:'',out:''},{in:'',out:''}]},telegram:{bots:[{name:'principal',token:'',chatId:''}]}};
+function App(){
+  const [state,setState]=useState(null); const [draft,setDraft]=useState(emptyDraft); const [msg,setMsg]=useState('');
+  const load=()=>fetch('/api/prebeta/state').then(r=>r.json()).then(d=>{setState(d); setDraft(Object.assign({},emptyDraft,d.draft||{}));});
+  useEffect(()=>{load();},[]);
+  const save=()=>fetch('/api/prebeta/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(draft)}).then(r=>r.json()).then(d=>setMsg(d.message||'Guardado'));
+  const restart=s=>fetch('/api/prebeta/daemon/restart',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({service:s})}).then(r=>r.json()).then(d=>{setMsg(d.message||d.error); setTimeout(load,1200);});
+  const validateBot=b=>fetch('/api/prebeta/telegram/validate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(r=>r.json()).then(d=>setMsg(d.message||d.error));
+  if(!state)return <div className='container py-4'>Cargando...</div>;
+  const ifaces=state.interfaces||[];
+  const setL3=(idx,key,val)=>{const links=[...(draft.l3?.links||[])]; links[idx]={...links[idx],[key]:val}; setDraft({...draft,l3:{...draft.l3,links}})};
+  const setBridge=(idx,key,val)=>{const pairs=[...(draft.bridge?.pairs||[])]; pairs[idx]={...pairs[idx],[key]:val}; setDraft({...draft,bridge:{...draft.bridge,pairs}})};
+  const addL3=()=>setDraft({...draft,l3:{...draft.l3,links:[...(draft.l3?.links||[]),{wan:'',lan:'',vlans:10,startVlan:200,baseOctet:20}].slice(0,2)}});
+  const diagram=draft.topology==='bridge' ? (draft.bridge?.pairs||[]).filter(p=>p.in||p.out).map((p,i)=>`L2L #${i+1}: ${p.in||'entrada'} <== bridge ==> ${p.out||'salida'}`).join('\\n') : (draft.l3?.links||[]).map((l,i)=>`WAN ${i+1}: ${l.wan||'wan'}\\n  | NAT/DHCP VLAN ${l.startVlan||100}-${Number(l.startVlan||100)+Number(l.vlans||1)-1}\\nLAN ${i+1}: ${l.lan||'lan'} -> ${draft.l3?.segment||'10.254'}.${l.baseOctet||10}.0/24`).join('\\n\\n');
+  return <div className='container-fluid py-4 px-4'><div className='d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2'><div><h1>Pre-beta ReactUI</h1><span className='pill'>Version 2 draft</span> <span className='pill'>V1 estable sincronizada</span></div><a className='btn btn-outline-dark' href='/'>Volver a V1</a></div>{msg&&<div className='alert alert-info'>{msg}</div>}<div className='row g-3'><div className='col-xl-4'><div className='panel mb-3'><h4>Topologia</h4><select className='form-select mb-3' value={draft.topology} onChange={e=>setDraft({...draft,topology:e.target.value})}><option value='nat'>L3 / NAT</option><option value='bridge'>Bridge L2L</option></select>{draft.topology==='nat'&&<div><label>Segmento recomendado</label><select className='form-select mb-3' value={draft.l3?.segment||'10.254'} onChange={e=>setDraft({...draft,l3:{...draft.l3,segment:e.target.value}})}><option>10.254</option><option>172.16</option><option>192.168</option></select>{(draft.l3?.links||[]).map((l,i)=><div className='border rounded p-2 mb-2' key={i}><strong>WAN/LAN #{i+1}</strong><select className='form-select my-1' value={l.wan||''} onChange={e=>setL3(i,'wan',e.target.value)}><option value=''>WAN</option>{ifaces.map(x=><option key={x.name}>{x.name}</option>)}</select><select className='form-select my-1' value={l.lan||''} onChange={e=>setL3(i,'lan',e.target.value)}><option value=''>LAN trunk</option>{ifaces.map(x=><option key={x.name}>{x.name}</option>)}</select><div className='row g-2'><div className='col'><input className='form-control' type='number' value={l.vlans||1} onChange={e=>setL3(i,'vlans',e.target.value)} placeholder='VLANs'/></div><div className='col'><input className='form-control' type='number' value={l.startVlan||100} onChange={e=>setL3(i,'startVlan',e.target.value)} placeholder='VLAN inicial'/></div><div className='col'><input className='form-control' type='number' value={l.baseOctet||10} onChange={e=>setL3(i,'baseOctet',e.target.value)} placeholder='Octeto'/></div></div></div>)}<button className='btn btn-sm btn-outline-dark' onClick={addL3}>Agregar WAN/LAN</button></div>}{draft.topology==='bridge'&&<div>{(draft.bridge?.pairs||[]).map((p,i)=><div className='border rounded p-2 mb-2' key={i}><strong>L2L #{i+1}</strong><select className='form-select my-1' value={p.in||''} onChange={e=>setBridge(i,'in',e.target.value)}><option value=''>Entrada</option>{ifaces.map(x=><option key={x.name}>{x.name}</option>)}</select><select className='form-select my-1' value={p.out||''} onChange={e=>setBridge(i,'out',e.target.value)}><option value=''>Salida</option>{ifaces.map(x=><option key={x.name}>{x.name}</option>)}</select></div>)}</div>}<button className='btn btn-primary mt-2' onClick={save}>Guardar draft</button></div><div className='panel'><h4>Telegram multi-bot</h4>{(draft.telegram?.bots||[]).map((b,i)=><div className='border rounded p-2 mb-2' key={i}><input className='form-control my-1' value={b.name||''} onChange={e=>{const bots=[...(draft.telegram?.bots||[])]; bots[i]={...bots[i],name:e.target.value}; setDraft({...draft,telegram:{bots}})}} placeholder='Nombre'/><input className='form-control my-1' value={b.token||''} onChange={e=>{const bots=[...(draft.telegram?.bots||[])]; bots[i]={...bots[i],token:e.target.value}; setDraft({...draft,telegram:{bots}})}} placeholder='Bot token'/><input className='form-control my-1' value={b.chatId||''} onChange={e=>{const bots=[...(draft.telegram?.bots||[])]; bots[i]={...bots[i],chatId:e.target.value}; setDraft({...draft,telegram:{bots}})}} placeholder='Chat ID'/><button className='btn btn-sm btn-outline-dark' onClick={()=>validateBot(b)}>Validar sincronizacion</button></div>)}<button className='btn btn-sm btn-outline-dark' onClick={()=>setDraft({...draft,telegram:{bots:[...(draft.telegram?.bots||[]),{name:'bot',token:'',chatId:''}]}})}>Agregar bot</button></div></div><div className='col-xl-4'><div className='panel mb-3'><h4>Resumen conceptual</h4><div className='diagram'>{diagram||'Define interfaces para generar el diagrama.'}</div></div><div className='panel'><h4>Interfaces detectadas</h4><div className='table-responsive'><table className='table table-sm'><thead><tr><th>Interfaz</th><th>IP</th><th>MAC</th><th>Estado</th></tr></thead><tbody>{ifaces.map(x=><tr key={x.name}><td>{x.name}</td><td>{x.ip||'-'}</td><td>{x.mac||'-'}</td><td>{x.state}</td></tr>)}</tbody></table></div></div></div><div className='col-xl-4'><div className='panel mb-3'><h4>Daemons</h4>{(state.daemons||[]).map(s=><div className='d-flex justify-content-between align-items-center border-bottom py-2' key={s.name}><div><strong>{s.name}</strong><br/><span className={s.active==='active'?'service-ok':'service-bad'}>{s.active||'unknown'}</span> / {s.enabled||'unknown'}</div><button className='btn btn-sm btn-outline-dark' onClick={()=>restart(s.name)}>Restart</button></div>)}</div><div className='panel'><h4>DHCP leases</h4><div className='table-responsive'><table className='table table-sm'><thead><tr><th>IP</th><th>Host</th><th>MAC</th><th>Estado</th></tr></thead><tbody>{(state.leases||[]).map((l,i)=><tr key={i}><td>{l.ip}</td><td>{l.host||'-'}</td><td>{l.mac||'-'}</td><td>{l.state||'-'}</td></tr>)}</tbody></table></div></div></div></div></div>
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script></body></html>
 """
 
 def restart_service_later():
@@ -1954,6 +1984,152 @@ def tls_disable():
         flash(f'No se pudo desactivar HTTPS: {e}','danger')
     return redirect(url_for('tls_settings'))
 
+def read_config_file():
+    data={}
+    try:
+        with open(CONFIG_FILE,'r',encoding='utf-8',errors='ignore') as f:
+            for line in f:
+                line=line.strip()
+                if not line or line.startswith('#') or '=' not in line: continue
+                k,v=line.split('=',1); data[k]=v
+    except Exception:
+        pass
+    return data
+
+def list_interfaces():
+    items=[]
+    root='/sys/class/net'
+    try:
+        names=sorted(n for n in os.listdir(root) if n!='lo')
+    except Exception:
+        names=[]
+    ip_map={}
+    ok,out=run("ip -o -4 addr show")
+    if ok:
+        for line in out.splitlines():
+            parts=line.split()
+            if len(parts)>=4: ip_map[parts[1]]=parts[3].split('/')[0]
+    for name in names:
+        try:
+            mac=open(os.path.join(root,name,'address'),encoding='utf-8').read().strip()
+        except Exception:
+            mac=''
+        try:
+            state=open(os.path.join(root,name,'operstate'),encoding='utf-8').read().strip()
+        except Exception:
+            state='unknown'
+        items.append({'name':name,'mac':mac,'state':state,'ip':ip_map.get(name,'')})
+    return items
+
+def service_state(name):
+    safe={'wansim.service','wansim-l2-persist.service','isc-dhcp-server','dhcpd','iptables'}
+    if name not in safe:
+        return {'name':name,'active':'blocked','enabled':'blocked'}
+    ok_a,out_a=run(f'systemctl is-active {name} 2>/dev/null || true')
+    ok_e,out_e=run(f'systemctl is-enabled {name} 2>/dev/null || true')
+    return {'name':name,'active':out_a.strip() or 'unknown','enabled':out_e.strip() or 'unknown'}
+
+def daemon_list():
+    names=['wansim.service']
+    if DHCP_SERVICE: names.append(DHCP_SERVICE)
+    names.extend(['wansim-l2-persist.service','iptables'])
+    dedup=[]
+    for n in names:
+        if n and n not in dedup: dedup.append(n)
+    return [service_state(n) for n in dedup]
+
+def read_dhcp_leases():
+    paths=['/var/lib/dhcp/dhcpd.leases','/var/lib/dhcpd/dhcpd.leases','/var/lib/dhcp/dhcpd.leases~']
+    text=''
+    for p in paths:
+        try:
+            with open(p,'r',encoding='utf-8',errors='ignore') as f:
+                text=f.read()
+                break
+        except Exception:
+            continue
+    leases=[]
+    for m in re.finditer(r'lease\s+([0-9.]+)\s+\{(.*?)\}',text,re.S):
+        body=m.group(2); ip=m.group(1)
+        mac=re.search(r'hardware\s+ethernet\s+([^;]+);',body)
+        host=re.search(r'client-hostname\s+"([^"]+)"',body)
+        state=re.search(r'binding\s+state\s+([^;]+);',body)
+        leases.append({'ip':ip,'mac':mac.group(1) if mac else '', 'host':host.group(1) if host else '', 'state':state.group(1) if state else ''})
+    return leases[-80:]
+
+def default_prebeta_draft():
+    cfg=read_config_file()
+    draft={'topology':'bridge' if cfg.get('TOPOLOGY_MODE')=='bridge' else 'nat','l3':{'segment':cfg.get('SEGMENT_PREFIX','10.254'),'links':[]},'bridge':{'pairs':[]},'telegram':{'bots':[{'name':'principal','token':TELEGRAM_TOKEN,'chatId':TELEGRAM_CHAT_ID}]}}
+    for link in (cfg.get('L3_LINKS_CSV') or '').split(';'):
+        parts=link.split(':')
+        if len(parts)>=6:
+            _,wan,lan,start,octet,segment=parts[:6]
+            draft['l3']['segment']=segment
+            draft['l3']['links'].append({'wan':wan,'lan':lan,'vlans':cfg.get('NUM_VLANS','10'),'startVlan':start,'baseOctet':octet})
+    if not draft['l3']['links']:
+        draft['l3']['links']=[{'wan':cfg.get('WAN_IF',''),'lan':cfg.get('LAN_IF',''),'vlans':cfg.get('NUM_VLANS','10'),'startVlan':cfg.get('START_VLAN','100'),'baseOctet':cfg.get('BASE_OCTET','10')}]
+    for pair in (cfg.get('BRIDGE_PAIRS_CSV') or '').split(';'):
+        parts=pair.split(':')
+        if len(parts)>=3: draft['bridge']['pairs'].append({'in':parts[1],'out':parts[2]})
+    while len(draft['bridge']['pairs'])<3:
+        draft['bridge']['pairs'].append({'in':'','out':''})
+    return draft
+
+def load_prebeta_draft():
+    try:
+        with open(PREBETA_STATE_FILE,'r',encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return default_prebeta_draft()
+
+@app.route('/prebeta')
+def prebeta():
+    return render_template_string(PREBETA_TEMPLATE)
+
+@app.route('/api/prebeta/state')
+def prebeta_state():
+    return jsonify({'version':'pre-beta-reactui','topology':TOPOLOGY_MODE,'interfaces':list_interfaces(),'controlInterfaces':CONTROL_INTERFACES,'meta':INTERFACE_META,'draft':load_prebeta_draft(),'daemons':daemon_list(),'leases':read_dhcp_leases()})
+
+@app.route('/api/prebeta/save',methods=['POST'])
+def prebeta_save():
+    try:
+        data=request.get_json(force=True,silent=False)
+        os.makedirs(os.path.dirname(PREBETA_STATE_FILE),exist_ok=True)
+        with open(PREBETA_STATE_FILE,'w',encoding='utf-8') as f:
+            json.dump(data,f,ensure_ascii=False,indent=2)
+        return jsonify({'ok':True,'message':'Draft pre-beta guardado y disponible para la siguiente evolucion.'})
+    except Exception as e:
+        logger.exception('No se pudo guardar prebeta')
+        return jsonify({'ok':False,'error':str(e)}),400
+
+@app.route('/api/prebeta/daemon/restart',methods=['POST'])
+def prebeta_daemon_restart():
+    data=request.get_json(force=True,silent=True) or {}
+    service=data.get('service','')
+    allowed={'wansim.service','wansim-l2-persist.service','isc-dhcp-server','dhcpd','iptables'}
+    if service not in allowed:
+        return jsonify({'ok':False,'error':'Servicio no permitido'}),400
+    ok,out=run(f'sudo systemctl restart {service}')
+    return jsonify({'ok':ok,'message':f'Restart enviado a {service}' if ok else out})
+
+@app.route('/api/prebeta/telegram/validate',methods=['POST'])
+def prebeta_telegram_validate():
+    data=request.get_json(force=True,silent=True) or {}
+    token=(data.get('token') or TELEGRAM_TOKEN or '').strip()
+    chat_id=(data.get('chatId') or TELEGRAM_CHAT_ID or '').strip()
+    if not token:
+        return jsonify({'ok':False,'error':'Token requerido'}),400
+    try:
+        r=requests.get(f'https://api.telegram.org/bot{token}/getMe',timeout=12)
+        if not r.ok: return jsonify({'ok':False,'error':r.text}),400
+        bot=r.json().get('result',{}).get('username','bot')
+        if chat_id:
+            c=requests.get(f'https://api.telegram.org/bot{token}/getChat',params={'chat_id':chat_id},timeout=12)
+            if not c.ok: return jsonify({'ok':False,'error':c.text}),400
+        return jsonify({'ok':True,'message':f'Telegram sincronizado con @{bot}.'})
+    except Exception as e:
+        return jsonify({'ok':False,'error':str(e)}),400
+
 @app.route('/')
 def dashboard():
     s=collect(); chart=json.dumps([{'iface':i,'label':s[i].get('label',i),'stats':s[i]} for i in CONTROL_INTERFACES])
@@ -2017,7 +2193,7 @@ HTTPS_ENABLED=0
 if [ "${ENABLE_HTTPS:-n}" = "s" ] && [ -n "${TLS_CERT_FILE:-}" ] && [ -n "${TLS_KEY_FILE:-}" ]; then
     HTTPS_ENABLED=1
 fi
-export TELEGRAM_TOKEN TELEGRAM_CHAT_ID TELEGRAM_ENABLED PYTHON_VLAN_LIST PYTHON_INTERFACE_META DASHBOARD_PORT WANSIM_VERSION NETEM_STATE_FILE HTTPS_ENABLED TLS_CERT_FILE TLS_KEY_FILE TLS_DIR TLS_ENABLE_FILE CONFIG_FILE
+export TELEGRAM_TOKEN TELEGRAM_CHAT_ID TELEGRAM_ENABLED PYTHON_VLAN_LIST PYTHON_INTERFACE_META DASHBOARD_PORT WANSIM_VERSION NETEM_STATE_FILE HTTPS_ENABLED TLS_CERT_FILE TLS_KEY_FILE TLS_DIR TLS_ENABLE_FILE CONFIG_FILE PREBETA_STATE_FILE DHCP_SERVICE TOPOLOGY_MODE
 if ! "$PYTHON_BIN" - "$WANSIM_DASHBOARD" <<'PYREPLACE'
 import json
 import os
@@ -2058,8 +2234,11 @@ replacements = {
     "__TLS_DIR_LITERAL__": json.dumps(os.environ.get("TLS_DIR", "")),
     "__TLS_ENABLE_FILE_LITERAL__": json.dumps(os.environ.get("TLS_ENABLE_FILE", "")),
     "__CONFIG_FILE_LITERAL__": json.dumps(os.environ.get("CONFIG_FILE", "")),
+    "__PREBETA_STATE_FILE_LITERAL__": json.dumps(os.environ.get("PREBETA_STATE_FILE", "")),
+    "__DHCP_SERVICE_LITERAL__": json.dumps(os.environ.get("DHCP_SERVICE", "")),
+    "__TOPOLOGY_MODE_LITERAL__": json.dumps(os.environ.get("TOPOLOGY_MODE", "")),
     "__NETEM_STATE_FILE__": os.environ.get("NETEM_STATE_FILE", os.path.expanduser("~/wansim_netem_state.json")),
-    "__WANSIM_VERSION__": os.environ.get("WANSIM_VERSION", "1.114"),
+    "__WANSIM_VERSION__": os.environ.get("WANSIM_VERSION", "1.115"),
 }
 for key, value in replacements.items():
     text = text.replace(key, value)
