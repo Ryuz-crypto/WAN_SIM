@@ -10,7 +10,7 @@ exec > >(tee -a /tmp/wansim_debug.log) 2>&1
 # -----------------------------------------------
 # Variables de configuración
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WANSIM_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "1.109")"
+WANSIM_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "1.110")"
 USER_HOME="${HOME:-$(getent passwd "$(whoami)" | cut -d: -f6)}"
 LOGFILE="$USER_HOME/emix_abundix.log"
 CONFIG_FILE="$USER_HOME/emix_abundix.conf"
@@ -146,7 +146,7 @@ pkg_installed() {
 
 pkg_update() {
     case "$PKG_MANAGER" in
-        apt) sudo DEBIAN_FRONTEND=noninteractive apt-get update ;;
+        apt) sudo apt-get update ;;
         dnf) sudo dnf makecache -y ;;
         yum) sudo yum makecache -y ;;
     esac
@@ -172,7 +172,7 @@ pkg_install() {
     case "$PKG_MANAGER" in
         apt)
             preseed_debian_package "$dep"
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            sudo apt-get install -y \
                 -o Dpkg::Options::="--force-confdef" \
                 -o Dpkg::Options::="--force-confold" \
                 "$dep"
@@ -355,7 +355,7 @@ set_dependency_list
 # Configurar permisos de sudo para el usuario actual
 log_message "DEBUG" "Configurando permisos de sudo para $CURRENT_USER..."
 SUDOERS_FILE="/etc/sudoers.d/wansim"
-SUDOERS_CONTENT="$CURRENT_USER ALL=(ALL) NOPASSWD: /usr/bin/apt-get, /usr/bin/dnf, /usr/bin/yum, /usr/sbin/tc, /usr/bin/tc, /usr/sbin/ip, /usr/bin/ip, /usr/sbin/iptables, /usr/sbin/iptables-save, /usr/sbin/sysctl, /usr/sbin/dhcpd, /usr/bin/systemctl, /usr/bin/systemctl stop unattended-upgrades, /usr/bin/systemctl restart wansim.service, /usr/bin/fuser, /usr/bin/kill, /usr/bin/rm, /usr/sbin/dpkg, /usr/bin/tee, /usr/bin/mv, /usr/bin/chmod, /usr/bin/chown"
+SUDOERS_CONTENT="$CURRENT_USER ALL=(ALL) NOPASSWD: /usr/bin/apt-get, /usr/bin/dnf, /usr/bin/yum, /usr/bin/debconf-set-selections, /usr/sbin/tc, /usr/bin/tc, /usr/sbin/ip, /usr/bin/ip, /usr/sbin/iptables, /usr/sbin/iptables-save, /usr/sbin/sysctl, /usr/sbin/dhcpd, /usr/bin/systemctl, /usr/bin/systemctl stop unattended-upgrades, /usr/bin/systemctl restart wansim.service, /usr/bin/fuser, /usr/bin/kill, /usr/bin/rm, /usr/sbin/dpkg, /usr/bin/tee, /usr/bin/mv, /usr/bin/chmod, /usr/bin/chown"
 if ! sudo -n true 2>/dev/null; then
     log_message "INFO" "Configurando permisos de sudo automáticamente..."
     # Intentar configurar sudoers usando una contraseña temporal o existente
@@ -1765,7 +1765,7 @@ replacements = {
     "__TELEGRAM_CHAT_ID_LITERAL__": json.dumps(os.environ.get("TELEGRAM_CHAT_ID", "")),
     "__TELEGRAM_ENABLED__": os.environ.get("TELEGRAM_ENABLED", "0"),
     "__NETEM_STATE_FILE__": os.environ.get("NETEM_STATE_FILE", os.path.expanduser("~/wansim_netem_state.json")),
-    "__WANSIM_VERSION__": os.environ.get("WANSIM_VERSION", "1.109"),
+    "__WANSIM_VERSION__": os.environ.get("WANSIM_VERSION", "1.110"),
 }
 for key, value in replacements.items():
     text = text.replace(key, value)

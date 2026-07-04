@@ -1,6 +1,6 @@
 # Project Structure
 
-Version 1.109 keeps `WANsim2.sh` as the main entrypoint for compatibility with existing installs.
+Version 1.110 keeps `WANsim2.sh` as the main entrypoint for compatibility with existing installs.
 
 Current layout:
 
