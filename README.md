@@ -1,6 +1,6 @@
 # Ryuz WAN Simulator
 
-**Version 1.116-stable** | **Autor**: decameru@outlook.com
+**Version 1.117-stable** | **Autor**: decameru@outlook.com
 
 Ryuz WAN Simulator es una herramienta para simular condiciones WAN en Linux. Permite aplicar latencia, jitter y perdida de paquetes sobre interfaces fisicas, VLANs o bridges L2, con un dashboard Flask para control operativo.
 
@@ -22,7 +22,7 @@ Esta rama se mantiene como la base principal del simulador. La evolucion FastAPI
 
 ## Sistemas Soportados
 
-La version 1.116-stable detecta el gestor de paquetes y ajusta dependencias para:
+La version 1.117-stable detecta el gestor de paquetes y ajusta dependencias para:
 
 - Ubuntu Server 20.04 o superior.
 - Ubuntu Workstation 20.04 o superior.
@@ -119,12 +119,13 @@ En esa vista puedes:
 
 - Preparar cambios de topologia L3/NAT o Bridge L2L sin romper la configuracion estable.
 - Guardar un draft persistente en `~/.wansim/reactui_prebeta.json`.
+- Enviar parametros validados al backend pre-beta sin aplicar cambios destructivos.
 - Validar si los cambios son permisibles antes de aplicarlos.
 - Generar un plan de despliegue con las acciones que se realizarian.
 - Ver interfaces detectadas con IP, estado y MAC.
 - Ver daemons relevantes y enviar restart controlado.
 - Ver leases DHCP con IP, host, MAC y estado.
-- Preparar multiples bots de Telegram y validar sincronizacion contra Telegram API.
+- Preparar multiples bots de Telegram, revelar token/chat id solo con password Linux y validar sincronizacion contra Telegram API.
 - Revisar un diagrama conceptual de los cambios propuestos para L2 o L3.
 
 ## Archivos Generados
@@ -182,6 +183,13 @@ Antes de ejecutar en un servidor compartido, revisa:
 Si una ejecucion falla, el script ejecuta rollback automatico de servicios, dashboard generado, virtualenv parcial, bridges/VLANs generadas y archivos temporales. El log principal se conserva en `~/emix_abundix.log`.
 
 ## Release Notes
+
+### Version 1.117-stable
+
+- Corrige el resumen L3/NAT cuando una WAN usa DHCP/manual para que el segmento LAN no se mezcle con modo WAN, CIDR o gateway.
+- ReactUI pre-beta reorganiza los campos L3 con etiquetas, ejemplos y contexto para WAN, LAN trunk, direccionamiento, VLAN ID y octetos.
+- ReactUI agrega `Enviar parametros`, que valida y guarda el draft pre-beta en backend sin aplicar cambios destructivos.
+- Las credenciales Telegram se entregan ocultas por API y solo se revelan tras validar la password Linux; la validacion usa el secreto guardado aunque la pantalla muestre `__hidden__`.
 
 ### Version 1.116-stable
 

@@ -10,7 +10,7 @@ exec > >(tee -a /tmp/wansim_debug.log) 2>&1
 # -----------------------------------------------
 # Variables de configuración
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WANSIM_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "1.116-stable")"
+WANSIM_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "1.117-stable")"
 USER_HOME="${HOME:-$(getent passwd "$(whoami)" | cut -d: -f6)}"
 WANSIM_HOME="$USER_HOME/.wansim"
 PYTHON_VENV="$WANSIM_HOME/venv"
@@ -965,7 +965,7 @@ if [ "$INTERACTIVE" -eq 1 ]; then
             [ -n "$L3_LINKS_CSV" ] && L3_LINKS_CSV+=";"
             L3_LINKS_CSV+="$link_idx:$wan_iface:$lan_iface:$start_vlan:$base_octet_link:$SEGMENT_PREFIX:$wan_addr_mode:$wan_cidr:$wan_gateway"
         done
-        IFS=':' read -r __idx WAN_IF LAN_IF START_VLAN BASE_OCTET SEGMENT_PREFIX <<< "${L3_LINKS_CSV%%;*}"
+        IFS=':' read -r __idx WAN_IF LAN_IF START_VLAN BASE_OCTET SEGMENT_PREFIX WAN_ADDR_MODE WAN_CIDR WAN_GATEWAY <<< "${L3_LINKS_CSV%%;*}"
         BRIDGE_INTERFACES=(); BRIDGE_IN_IFS=(); BRIDGE_OUT_IFS=()
         NUM_BRIDGE_IFACES=0; NUM_BRIDGE_PAIRS=0; BRIDGE_PAIRS_CSV=""
     fi
@@ -1687,6 +1687,7 @@ CONFIG_FILE=__CONFIG_FILE_LITERAL__
 PREBETA_STATE_FILE=__PREBETA_STATE_FILE_LITERAL__
 DHCP_SERVICE=__DHCP_SERVICE_LITERAL__
 TOPOLOGY_MODE=__TOPOLOGY_MODE_LITERAL__
+CURRENT_USER_NAME=__CURRENT_USER_LITERAL__
 def tls_is_ready():
     if not (TLS_CERT_FILE and TLS_KEY_FILE and TLS_ENABLE_FILE):
         return False
@@ -2045,10 +2046,11 @@ REACTUI_STAGE_TEMPLATE=r"""
 const {useEffect,useState}=React;
 const emptyDraft={topology:'nat',l3:{segment:'10.254',links:[{wan:'',lan:'',vlans:10,startVlan:100,baseOctet:10,wanMode:'dhcp',wanIp:'',wanMask:'24',wanGateway:''}]},bridge:{pairs:[{in:'',out:''},{in:'',out:''},{in:'',out:''}]},telegram:{bots:[{name:'principal',token:'',chatId:''}]}};
 function App(){
-  const [state,setState]=useState(null),[draft,setDraft]=useState(emptyDraft),[result,setResult]=useState(null);
+  const [state,setState]=useState(null),[draft,setDraft]=useState(emptyDraft),[result,setResult]=useState(null),[linuxPassword,setLinuxPassword]=useState('');
   const load=()=>fetch('/api/prebeta/state').then(r=>r.json()).then(d=>{setState(d); setDraft({...emptyDraft,...(d.draft||{})});});
   useEffect(()=>{load();},[]);
   const api=(url,body)=>fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json()).then(setResult);
+  const revealTelegram=()=>fetch('/api/prebeta/telegram/reveal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:linuxPassword})}).then(r=>r.json()).then(d=>{setResult(d); if(d.ok){setDraft({...draft,telegram:{bots:d.bots||[]}}); setLinuxPassword('');}});
   const setL3=(i,k,v)=>{const links=[...(draft.l3?.links||[])]; links[i]={...links[i],[k]:v}; setDraft({...draft,l3:{...draft.l3,links}})};
   const setBridge=(i,k,v)=>{const pairs=[...(draft.bridge?.pairs||[])]; pairs[i]={...pairs[i],[k]:v}; setDraft({...draft,bridge:{...draft.bridge,pairs}})};
   const addL3=()=>setDraft({...draft,l3:{...draft.l3,links:[...(draft.l3?.links||[]),{wan:'',lan:'',vlans:10,startVlan:200,baseOctet:20,wanMode:'dhcp',wanIp:'',wanMask:'24',wanGateway:''}].slice(0,2)}});
@@ -2058,14 +2060,14 @@ function App(){
     ? (draft.bridge?.pairs||[]).filter(p=>p.in||p.out).map((p,i)=>`L2L #${i+1}: ${p.in||'entrada'} <== bridge ==> ${p.out||'salida'}`).join('\n')
     : (draft.l3?.links||[]).map((l,i)=>`WAN ${i+1}: ${l.wan||'wan'} (${l.wanMode||'dhcp'}${l.wanMode==='manual'?`, ${l.wanIp}/${l.wanMask} gw ${l.wanGateway}`:''})\n  | NAT/DHCP VLAN ${l.startVlan||100}-${Number(l.startVlan||100)+Number(l.vlans||1)-1}\nLAN ${i+1}: ${l.lan||'lan'} -> ${draft.l3?.segment||'10.254'}.${l.baseOctet||10}.0/24`).join('\n\n');
   return <div className="container-fluid py-4 px-4">
-    <div className="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2"><div><h1>ReactUI pre-beta</h1><span className="pill">V1 estable: 1.116-stable</span> <span className="pill">Etapa 2 draft</span></div><a className="btn btn-outline-dark" href="/">Volver a Stable</a></div>
+    <div className="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2"><div><h1>ReactUI pre-beta</h1><span className="pill">V1 estable: __WANSIM_VERSION__</span> <span className="pill">Etapa 2 draft</span></div><a className="btn btn-outline-dark" href="/">Volver a Stable</a></div>
     {result&&<div className={'alert '+(result.ok?'alert-success':'alert-warning')}>{result.message||result.error||'Resultado recibido'}</div>}
     <div className="row g-3">
       <div className="col-xl-4"><div className="panel mb-3"><h4>Topologia editable</h4><select className="form-select mb-3" value={draft.topology} onChange={e=>setDraft({...draft,topology:e.target.value})}><option value="nat">L3 / NAT</option><option value="bridge">Bridge L2L</option></select>
-        {draft.topology==='nat'&&<div><label>Segmento VLAN recomendado</label><select className="form-select mb-3" value={draft.l3?.segment||'10.254'} onChange={e=>setDraft({...draft,l3:{...draft.l3,segment:e.target.value}})}><option>10.254</option><option>172.16</option><option>192.168</option></select>{(draft.l3?.links||[]).map((l,i)=><div className="border rounded p-2 mb-2" key={i}><strong>WAN/LAN #{i+1}</strong><select className="form-select my-1" value={l.wan||''} onChange={e=>setL3(i,'wan',e.target.value)}><option value="">WAN</option>{ifaces.map(x=><option key={x.name}>{x.name}</option>)}</select><select className="form-select my-1" value={l.lan||''} onChange={e=>setL3(i,'lan',e.target.value)}><option value="">LAN trunk</option>{ifaces.map(x=><option key={x.name}>{x.name}</option>)}</select><select className="form-select my-1" value={l.wanMode||'dhcp'} onChange={e=>setL3(i,'wanMode',e.target.value)}><option value="dhcp">WAN DHCP</option><option value="manual">WAN Manual</option></select>{l.wanMode==='manual'&&<div className="row g-2 mb-2"><div className="col"><input className="form-control" value={l.wanIp||''} onChange={e=>setL3(i,'wanIp',e.target.value)} placeholder="IP WAN"/></div><div className="col"><input className="form-control" value={l.wanMask||'24'} onChange={e=>setL3(i,'wanMask',e.target.value)} placeholder="Mascara/CIDR"/></div><div className="col"><input className="form-control" value={l.wanGateway||''} onChange={e=>setL3(i,'wanGateway',e.target.value)} placeholder="Gateway"/></div></div>}<div className="row g-2"><div className="col"><input className="form-control" type="number" value={l.vlans||1} onChange={e=>setL3(i,'vlans',e.target.value)} placeholder="VLANs"/></div><div className="col"><input className="form-control" type="number" value={l.startVlan||100} onChange={e=>setL3(i,'startVlan',e.target.value)} placeholder="VLAN inicial"/></div><div className="col"><input className="form-control" type="number" value={l.baseOctet||10} onChange={e=>setL3(i,'baseOctet',e.target.value)} placeholder="Octeto"/></div></div></div>)}<button className="btn btn-sm btn-outline-dark" onClick={addL3}>Agregar WAN/LAN</button></div>}
+        {draft.topology==='nat'&&<div><label className="form-label">Segmento base para VLANs LAN</label><select className="form-select mb-3" value={draft.l3?.segment||'10.254'} onChange={e=>setDraft({...draft,l3:{...draft.l3,segment:e.target.value}})}><option value="10.254">10.254.X.0/24 recomendado para laboratorio aislado</option><option value="172.16">172.16.X.0/24 recomendado para redes privadas medianas</option><option value="192.168">192.168.X.0/24 recomendado para pruebas pequenas</option></select>{(draft.l3?.links||[]).map((l,i)=><div className="border rounded p-3 mb-3" key={i}><strong>WAN/LAN #{i+1}</strong><label className="form-label mt-2 mb-1">Interfaz WAN - salida a Internet</label><select className="form-select" value={l.wan||''} onChange={e=>setL3(i,'wan',e.target.value)}><option value="">Selecciona WAN</option>{ifaces.map(x=><option key={x.name}>{x.name}</option>)}</select><label className="form-label mt-2 mb-1">Interfaz LAN trunk para VLANs</label><select className="form-select" value={l.lan||''} onChange={e=>setL3(i,'lan',e.target.value)}><option value="">Selecciona LAN trunk</option>{ifaces.map(x=><option key={x.name}>{x.name}</option>)}</select><label className="form-label mt-2 mb-1">Direccionamiento de la WAN</label><select className="form-select" value={l.wanMode||'dhcp'} onChange={e=>setL3(i,'wanMode',e.target.value)}><option value="dhcp">DHCP - tomar IP, mascara y gateway automaticamente</option><option value="manual">Manual - definir IP, mascara y gateway</option></select>{l.wanMode==='manual'&&<div className="row g-2 mt-1 mb-2"><div className="col-md-4"><label className="form-label mb-1">IP WAN</label><input className="form-control" value={l.wanIp||''} onChange={e=>setL3(i,'wanIp',e.target.value)} placeholder="192.168.1.204"/></div><div className="col-md-4"><label className="form-label mb-1">Mascara/CIDR</label><input className="form-control" value={l.wanMask||'24'} onChange={e=>setL3(i,'wanMask',e.target.value)} placeholder="24 o 255.255.255.0"/></div><div className="col-md-4"><label className="form-label mb-1">Gateway WAN</label><input className="form-control" value={l.wanGateway||''} onChange={e=>setL3(i,'wanGateway',e.target.value)} placeholder="192.168.1.254"/></div></div>}<div className="row g-2 mt-1"><div className="col-md-4"><label className="form-label mb-1">Numero de VLANs</label><input className="form-control" type="number" min="1" value={l.vlans||1} onChange={e=>setL3(i,'vlans',e.target.value)} placeholder="2"/></div><div className="col-md-4"><label className="form-label mb-1">ID VLAN inicial</label><input className="form-control" type="number" min="1" max="4094" value={l.startVlan||100} onChange={e=>setL3(i,'startVlan',e.target.value)} placeholder="100"/></div><div className="col-md-4"><label className="form-label mb-1">Tercer octeto inicial</label><input className="form-control" type="number" min="1" max="254" value={l.baseOctet||10} onChange={e=>setL3(i,'baseOctet',e.target.value)} placeholder="10"/></div></div></div>)}<button className="btn btn-sm btn-outline-dark" onClick={addL3}>Agregar WAN/LAN</button></div>}
         {draft.topology==='bridge'&&<div>{(draft.bridge?.pairs||[]).map((p,i)=><div className="border rounded p-2 mb-2" key={i}><strong>L2L #{i+1}</strong><select className="form-select my-1" value={p.in||''} onChange={e=>setBridge(i,'in',e.target.value)}><option value="">Entrada</option>{ifaces.map(x=><option key={x.name}>{x.name}</option>)}</select><select className="form-select my-1" value={p.out||''} onChange={e=>setBridge(i,'out',e.target.value)}><option value="">Salida</option>{ifaces.map(x=><option key={x.name}>{x.name}</option>)}</select></div>)}</div>}
-        <div className="d-flex flex-wrap gap-2 mt-3"><button className="btn btn-primary" onClick={()=>api('/api/prebeta/save',draft)}>Guardar draft</button><button className="btn btn-outline-dark" onClick={()=>api('/api/reactui/validate',draft)}>Validar</button><button className="btn btn-outline-dark" onClick={()=>api('/api/reactui/plan',draft)}>Plan de despliegue</button></div></div>
-        <div className="panel"><h4>Telegram multi-bot</h4>{(draft.telegram?.bots||[]).map((b,i)=><div className="border rounded p-2 mb-2" key={i}><input className="form-control my-1" value={b.name||''} onChange={e=>{const bots=[...(draft.telegram?.bots||[])]; bots[i]={...bots[i],name:e.target.value}; setDraft({...draft,telegram:{bots}})}} placeholder="Nombre"/><input className="form-control my-1" value={b.token||''} onChange={e=>{const bots=[...(draft.telegram?.bots||[])]; bots[i]={...bots[i],token:e.target.value}; setDraft({...draft,telegram:{bots}})}} placeholder="Bot token"/><input className="form-control my-1" value={b.chatId||''} onChange={e=>{const bots=[...(draft.telegram?.bots||[])]; bots[i]={...bots[i],chatId:e.target.value}; setDraft({...draft,telegram:{bots}})}} placeholder="Chat ID"/><button className="btn btn-sm btn-outline-dark" onClick={()=>api('/api/prebeta/telegram/validate',b)}>Validar sincronizacion</button></div>)}</div></div>
+        <div className="d-flex flex-wrap gap-2 mt-3"><button className="btn btn-primary" onClick={()=>api('/api/reactui/submit',draft)}>Enviar parametros</button><button className="btn btn-outline-dark" onClick={()=>api('/api/prebeta/save',draft)}>Guardar draft</button><button className="btn btn-outline-dark" onClick={()=>api('/api/reactui/validate',draft)}>Validar</button><button className="btn btn-outline-dark" onClick={()=>api('/api/reactui/plan',draft)}>Plan de despliegue</button></div></div>
+        <div className="panel"><h4>Telegram multi-bot</h4><div className="input-group mb-2"><input className="form-control" type="password" value={linuxPassword} onChange={e=>setLinuxPassword(e.target.value)} placeholder="Password Linux para revelar token/chat id"/><button className="btn btn-outline-dark" onClick={revealTelegram}>Revelar</button></div>{(draft.telegram?.bots||[]).map((b,i)=><div className="border rounded p-2 mb-2" key={i}><label className="form-label mb-1">Nombre del bot</label><input className="form-control mb-2" value={b.name||''} onChange={e=>{const bots=[...(draft.telegram?.bots||[])]; bots[i]={...bots[i],name:e.target.value}; setDraft({...draft,telegram:{bots}})}} placeholder="principal"/><label className="form-label mb-1">Bot token</label><input className="form-control mb-2" value={b.token||''} onChange={e=>{const bots=[...(draft.telegram?.bots||[])]; bots[i]={...bots[i],token:e.target.value}; setDraft({...draft,telegram:{bots}})}} placeholder="__hidden__ hasta revelar"/><label className="form-label mb-1">Chat ID</label><input className="form-control mb-2" value={b.chatId||''} onChange={e=>{const bots=[...(draft.telegram?.bots||[])]; bots[i]={...bots[i],chatId:e.target.value}; setDraft({...draft,telegram:{bots}})}} placeholder="__hidden__ hasta revelar"/><button className="btn btn-sm btn-outline-dark" onClick={()=>api('/api/prebeta/telegram/validate',{...b,index:i})}>Validar sincronizacion</button></div>)}<button className="btn btn-sm btn-outline-dark" onClick={()=>setDraft({...draft,telegram:{bots:[...(draft.telegram?.bots||[]),{name:'bot',token:'',chatId:''}]}})}>Agregar bot</button></div></div>
       <div className="col-xl-4"><div className="panel mb-3"><h4>Diagrama conceptual</h4><div className="diagram">{diagram||'Define interfaces para generar el diagrama.'}</div></div><div className="panel"><h4>Resultado validacion/plan</h4><pre className="plan">{result?JSON.stringify(result,null,2):'Sin validacion todavia.'}</pre></div></div>
       <div className="col-xl-4"><div className="panel mb-3"><h4>Daemons</h4>{(state.daemons||[]).map(s=><div className="d-flex justify-content-between align-items-center border-bottom py-2" key={s.name}><div><strong>{s.name}</strong><br/><span className={s.active==='active'?'ok':'bad'}>{s.active||'unknown'}</span> / {s.enabled||'unknown'}</div><button className="btn btn-sm btn-outline-dark" onClick={()=>api('/api/prebeta/daemon/restart',{service:s.name})}>Restart</button></div>)}</div><div className="panel"><h4>DHCP leases</h4><table className="table table-sm"><thead><tr><th>IP</th><th>Host</th><th>MAC</th><th>Estado</th></tr></thead><tbody>{(state.leases||[]).map((l,i)=><tr key={i}><td>{l.ip}</td><td>{l.host||'-'}</td><td>{l.mac||'-'}</td><td>{l.state||'-'}</td></tr>)}</tbody></table></div></div>
     </div></div>
@@ -2274,18 +2276,53 @@ def load_prebeta_draft():
     except Exception:
         return default_prebeta_draft()
 
+def sanitize_prebeta_draft(draft):
+    safe=json.loads(json.dumps(draft))
+    bots=((safe.get('telegram') or {}).get('bots') or [])
+    for bot in bots:
+        if bot.get('token'): bot['token']='__hidden__'
+        if bot.get('chatId'): bot['chatId']='__hidden__'
+    return safe
+
+def merge_hidden_telegram_secrets(incoming, existing):
+    bots=(incoming.get('telegram') or {}).get('bots') or []
+    old=(existing.get('telegram') or {}).get('bots') or []
+    for i,bot in enumerate(bots):
+        old_bot=old[i] if i < len(old) else {}
+        if bot.get('token') == '__hidden__': bot['token']=old_bot.get('token','')
+        if bot.get('chatId') == '__hidden__': bot['chatId']=old_bot.get('chatId','')
+    incoming['telegram']={'bots':bots}
+    return incoming
+
+def verify_linux_password(password):
+    if not password:
+        return False
+    checks=[
+        ['sudo','-k','-S','-p','','true'],
+        ['su',CURRENT_USER_NAME,'-c','true']
+    ]
+    for cmd in checks:
+        try:
+            proc=subprocess.run(cmd,input=password+'\n',text=True,capture_output=True,timeout=12)
+            if proc.returncode==0:
+                return True
+        except Exception as e:
+            logger.error(f'Verificacion de password fallo con {cmd}: {e}')
+    return False
+
 @app.route('/prebeta')
 def prebeta():
     return render_template_string(REACTUI_STAGE_TEMPLATE)
 
 @app.route('/api/prebeta/state')
 def prebeta_state():
-    return jsonify({'version':'pre-beta-reactui','topology':TOPOLOGY_MODE,'interfaces':list_interfaces(),'controlInterfaces':CONTROL_INTERFACES,'meta':INTERFACE_META,'draft':load_prebeta_draft(),'daemons':daemon_list(),'leases':read_dhcp_leases()})
+    return jsonify({'version':'pre-beta-reactui','topology':TOPOLOGY_MODE,'interfaces':list_interfaces(),'controlInterfaces':CONTROL_INTERFACES,'meta':INTERFACE_META,'draft':sanitize_prebeta_draft(load_prebeta_draft()),'daemons':daemon_list(),'leases':read_dhcp_leases()})
 
 @app.route('/api/prebeta/save',methods=['POST'])
 def prebeta_save():
     try:
         data=request.get_json(force=True,silent=False)
+        data=merge_hidden_telegram_secrets(data, load_prebeta_draft())
         os.makedirs(os.path.dirname(PREBETA_STATE_FILE),exist_ok=True)
         with open(PREBETA_STATE_FILE,'w',encoding='utf-8') as f:
             json.dump(data,f,ensure_ascii=False,indent=2)
@@ -2376,6 +2413,22 @@ def reactui_plan():
     result['note']='Pre-beta: este endpoint enumera y valida cambios. La aplicacion destructiva queda bloqueada hasta estabilizar ReactUI.'
     return jsonify(result), (200 if result['ok'] else 400)
 
+@app.route('/api/reactui/submit',methods=['POST'])
+def reactui_submit():
+    draft=request.get_json(force=True,silent=True) or {}
+    result=validate_reactui_draft(draft)
+    if not result['ok']:
+        result['message']='Parametros rechazados por validacion.'
+        return jsonify(result),400
+    draft=merge_hidden_telegram_secrets(draft, load_prebeta_draft())
+    os.makedirs(os.path.dirname(PREBETA_STATE_FILE),exist_ok=True)
+    with open(PREBETA_STATE_FILE,'w',encoding='utf-8') as f:
+        json.dump(draft,f,ensure_ascii=False,indent=2)
+    result['message']='Parametros recibidos y guardados en ReactUI pre-beta.'
+    result['applied']=False
+    result['note']='Pre-beta: guardado validado; la aplicacion real de topologia queda bloqueada hasta marcar esta etapa como estable.'
+    return jsonify(result)
+
 @app.route('/api/prebeta/daemon/restart',methods=['POST'])
 def prebeta_daemon_restart():
     data=request.get_json(force=True,silent=True) or {}
@@ -2391,6 +2444,17 @@ def prebeta_telegram_validate():
     data=request.get_json(force=True,silent=True) or {}
     token=(data.get('token') or TELEGRAM_TOKEN or '').strip()
     chat_id=(data.get('chatId') or TELEGRAM_CHAT_ID or '').strip()
+    if token == '__hidden__' or chat_id == '__hidden__':
+        bots=(load_prebeta_draft().get('telegram') or {}).get('bots') or []
+        try:
+            idx=int(data.get('index',0))
+        except Exception:
+            idx=0
+        stored=bots[idx] if 0 <= idx < len(bots) else {}
+        if token == '__hidden__':
+            token=(stored.get('token') or TELEGRAM_TOKEN or '').strip()
+        if chat_id == '__hidden__':
+            chat_id=(stored.get('chatId') or TELEGRAM_CHAT_ID or '').strip()
     if not token:
         return jsonify({'ok':False,'error':'Token requerido'}),400
     try:
@@ -2403,6 +2467,14 @@ def prebeta_telegram_validate():
         return jsonify({'ok':True,'message':f'Telegram sincronizado con @{bot}.'})
     except Exception as e:
         return jsonify({'ok':False,'error':str(e)}),400
+
+@app.route('/api/prebeta/telegram/reveal',methods=['POST'])
+def prebeta_telegram_reveal():
+    data=request.get_json(force=True,silent=True) or {}
+    if not verify_linux_password(data.get('password') or ''):
+        return jsonify({'ok':False,'error':'Password Linux invalido o no verificable.'}),403
+    draft=load_prebeta_draft()
+    return jsonify({'ok':True,'message':'Credenciales Telegram reveladas para edicion local.','bots':(draft.get('telegram') or {}).get('bots') or []})
 
 @app.route('/')
 def dashboard():
@@ -2467,7 +2539,7 @@ HTTPS_ENABLED=0
 if [ "${ENABLE_HTTPS:-n}" = "s" ] && [ -n "${TLS_CERT_FILE:-}" ] && [ -n "${TLS_KEY_FILE:-}" ]; then
     HTTPS_ENABLED=1
 fi
-export TELEGRAM_TOKEN TELEGRAM_CHAT_ID TELEGRAM_ENABLED PYTHON_VLAN_LIST PYTHON_INTERFACE_META DASHBOARD_PORT WANSIM_VERSION NETEM_STATE_FILE HTTPS_ENABLED TLS_CERT_FILE TLS_KEY_FILE TLS_DIR TLS_ENABLE_FILE CONFIG_FILE PREBETA_STATE_FILE DHCP_SERVICE TOPOLOGY_MODE
+export TELEGRAM_TOKEN TELEGRAM_CHAT_ID TELEGRAM_ENABLED PYTHON_VLAN_LIST PYTHON_INTERFACE_META DASHBOARD_PORT WANSIM_VERSION NETEM_STATE_FILE HTTPS_ENABLED TLS_CERT_FILE TLS_KEY_FILE TLS_DIR TLS_ENABLE_FILE CONFIG_FILE PREBETA_STATE_FILE DHCP_SERVICE TOPOLOGY_MODE CURRENT_USER
 if ! "$PYTHON_BIN" - "$WANSIM_DASHBOARD" <<'PYREPLACE'
 import json
 import os
@@ -2511,8 +2583,9 @@ replacements = {
     "__PREBETA_STATE_FILE_LITERAL__": json.dumps(os.environ.get("PREBETA_STATE_FILE", "")),
     "__DHCP_SERVICE_LITERAL__": json.dumps(os.environ.get("DHCP_SERVICE", "")),
     "__TOPOLOGY_MODE_LITERAL__": json.dumps(os.environ.get("TOPOLOGY_MODE", "")),
+    "__CURRENT_USER_LITERAL__": json.dumps(os.environ.get("CURRENT_USER", "")),
     "__NETEM_STATE_FILE__": os.environ.get("NETEM_STATE_FILE", os.path.expanduser("~/wansim_netem_state.json")),
-    "__WANSIM_VERSION__": os.environ.get("WANSIM_VERSION", "1.116-stable"),
+    "__WANSIM_VERSION__": os.environ.get("WANSIM_VERSION", "1.117-stable"),
 }
 for key, value in replacements.items():
     text = text.replace(key, value)
@@ -2661,8 +2734,13 @@ else
         SUMMARY_L3_LINKS=("1:${WAN_IF}:${LAN_IF}:${START_VLAN:-100}:${BASE_OCTET:-10}:${SEGMENT_PREFIX:-192.168}")
     fi
     for summary_link in "${SUMMARY_L3_LINKS[@]}"; do
-        IFS=':' read -r summary_idx summary_wan summary_lan summary_start_vlan summary_base_octet summary_segment <<< "$summary_link"
+        IFS=':' read -r summary_idx summary_wan summary_lan summary_start_vlan summary_base_octet summary_segment summary_wan_mode summary_wan_cidr summary_wan_gateway <<< "$summary_link"
         echo "${COLOR_CYAN}│ ${COLOR_GREEN}Par #$summary_idx:${COLOR_RESET} LAN $summary_lan -> WAN $summary_wan${COLOR_CYAN}                  │${COLOR_RESET}"
+        if [ "${summary_wan_mode:-dhcp}" = "manual" ]; then
+            echo "${COLOR_CYAN}│   ${COLOR_CYAN}WAN manual:${COLOR_RESET} ${summary_wan_cidr:-N/D} gw ${summary_wan_gateway:-N/D}${COLOR_CYAN}        │${COLOR_RESET}"
+        else
+            echo "${COLOR_CYAN}│   ${COLOR_CYAN}WAN DHCP:${COLOR_RESET} lease dinamico${COLOR_CYAN}                         │${COLOR_RESET}"
+        fi
         for (( i=0; i<${NUM_VLANS:-0} && i<3; i++ )); do
             current_vlan_id=$(( summary_start_vlan + i ))
             subnet_octet=$(( summary_base_octet + i ))
