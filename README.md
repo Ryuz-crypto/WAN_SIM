@@ -1,6 +1,6 @@
 # Ryuz WAN Simulator
 
-**Version 1.115** | **Autor**: decameru@outlook.com
+**Version 1.116-stable** | **Autor**: decameru@outlook.com
 
 Ryuz WAN Simulator es una herramienta para simular condiciones WAN en Linux. Permite aplicar latencia, jitter y perdida de paquetes sobre interfaces fisicas, VLANs o bridges L2, con un dashboard Flask para control operativo.
 
@@ -9,11 +9,12 @@ Esta rama se mantiene como la base principal del simulador. La evolucion FastAPI
 ## Funcionalidades
 
 - Modo L3/NAT con hasta dos pares WAN/LAN y multiples VLANs por LAN.
+- Cada WAN L3 puede configurarse por DHCP o manualmente con IP, mascara/CIDR y gateway.
 - Deteccion por WAN de IP privada, IP publica y estimacion de ancho de banda disponible.
 - Modo Bridge L2 con 1 a 3 pares de interfaces entrada/salida.
 - Control de latencia, jitter y perdida por interfaz usando `tc/netem`.
 - Dashboard web Flask en el puerto `5000`, con administracion HTTPS desde la interfaz web.
-- Seccion `Pre-beta ReactUI` para preparar la evolucion grafica de configuracion L3/L2, Telegram multi-bot, daemons y leases DHCP.
+- Seccion `ReactUI pre-beta` para preparar la evolucion grafica de configuracion L3/L2, Telegram multi-bot, daemons y leases DHCP.
 - DHCP automatico para VLANs.
 - Persistencia L2 mediante `wansim-l2-persist.service`.
 - Integracion opcional con Telegram, botones de presets y fallback HTTP API si falla la libreria legacy.
@@ -21,7 +22,7 @@ Esta rama se mantiene como la base principal del simulador. La evolucion FastAPI
 
 ## Sistemas Soportados
 
-La version 1.115 detecta el gestor de paquetes y ajusta dependencias para:
+La version 1.116-stable detecta el gestor de paquetes y ajusta dependencias para:
 
 - Ubuntu Server 20.04 o superior.
 - Ubuntu Workstation 20.04 o superior.
@@ -93,6 +94,7 @@ No lo ejecutes directamente como `root`. El script usa `sudo` para las operacion
 Durante el asistente interactivo podras elegir:
 
 - `L3 / NAT`: uno o dos pares WAN/LAN, cada LAN con VLANs + DHCP + NAT hacia su WAN.
+- Direccionamiento WAN por par: DHCP o manual con IP, mascara/CIDR y gateway.
 - `Bridge L2`: bridges entre pares de interfaces fisicas.
 - Integracion opcional con Telegram.
 - HTTPS opcional desde el dashboard usando PEM, PEM bundle, PFX/PKCS12 o DER.
@@ -109,14 +111,16 @@ Desde el boton `HTTPS` del dashboard puedes cargar un certificado PEM, PEM bundl
 https://<IP_DEL_SERVIDOR>:5000
 ```
 
-## Pre-beta ReactUI
+## ReactUI Pre-Beta
 
-La version estable sigue siendo el dashboard principal. Para revisar la evolucion, abre el dashboard y usa el boton `Pre-beta ReactUI`.
+La version estable sigue siendo el dashboard principal. Para revisar la evolucion, abre el dashboard y usa el boton `ReactUI pre-beta`.
 
 En esa vista puedes:
 
 - Preparar cambios de topologia L3/NAT o Bridge L2L sin romper la configuracion estable.
 - Guardar un draft persistente en `~/.wansim/reactui_prebeta.json`.
+- Validar si los cambios son permisibles antes de aplicarlos.
+- Generar un plan de despliegue con las acciones que se realizarian.
 - Ver interfaces detectadas con IP, estado y MAC.
 - Ver daemons relevantes y enviar restart controlado.
 - Ver leases DHCP con IP, host, MAC y estado.
@@ -136,7 +140,7 @@ Los archivos operativos se crean en el home del usuario que ejecuta el script:
 | `~/wansim_netem_state.json` | Estado tc/netem |
 | `~/.wansim/venv` | Entorno Python aislado del dashboard |
 | `~/.wansim/tls/` | Certificado y llave normalizados para HTTPS |
-| `~/.wansim/reactui_prebeta.json` | Draft guardado desde `Pre-beta ReactUI` |
+| `~/.wansim/reactui_prebeta.json` | Draft guardado desde `ReactUI pre-beta` |
 
 Archivos del sistema:
 
@@ -178,6 +182,14 @@ Antes de ejecutar en un servidor compartido, revisa:
 Si una ejecucion falla, el script ejecuta rollback automatico de servicios, dashboard generado, virtualenv parcial, bridges/VLANs generadas y archivos temporales. El log principal se conserva en `~/emix_abundix.log`.
 
 ## Release Notes
+
+### Version 1.116-stable
+
+- Se marca la rama actual como estable para la base V1.
+- En modo L3/NAT, cada WAN puede configurarse por DHCP o manualmente con IP, mascara/CIDR y gateway.
+- El despliegue aplica direccionamiento WAN antes de medir IP publica/BW y antes de configurar NAT.
+- ReactUI pasa a etapa 2 pre-beta con validacion server-side y boton `Plan de despliegue`; aun no aplica cambios destructivos hasta estabilizarse.
+- El README documenta como revisar la version estable y la etapa ReactUI pre-beta.
 
 ### Version 1.115
 

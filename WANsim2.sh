@@ -10,7 +10,7 @@ exec > >(tee -a /tmp/wansim_debug.log) 2>&1
 # -----------------------------------------------
 # Variables de configuración
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WANSIM_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "1.115")"
+WANSIM_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "1.116-stable")"
 USER_HOME="${HOME:-$(getent passwd "$(whoami)" | cut -d: -f6)}"
 WANSIM_HOME="$USER_HOME/.wansim"
 PYTHON_VENV="$WANSIM_HOME/venv"
@@ -193,10 +193,10 @@ pkg_install() {
 
 set_dependency_list() {
     if [ "$PKG_MANAGER" = "apt" ]; then
-        DEPENDENCIES=("python3" "python3-venv" "python3-pip" "iproute2" "ifstat" "qrencode" "net-tools" "vlan" "sudo" "lsof" "isc-dhcp-server" "iptables-persistent")
+        DEPENDENCIES=("python3" "python3-venv" "python3-pip" "iproute2" "ifstat" "qrencode" "net-tools" "vlan" "sudo" "lsof" "isc-dhcp-server" "isc-dhcp-client" "iptables-persistent")
         LOCK_FILES=("/var/lib/dpkg/lock-frontend" "/var/lib/apt/lists/lock" "/var/cache/apt/archives/lock")
     else
-        DEPENDENCIES=("python3" "python3-pip" "iproute" "ifstat" "qrencode" "net-tools" "sudo" "lsof" "dhcp-server" "iptables-services")
+        DEPENDENCIES=("python3" "python3-pip" "iproute" "ifstat" "qrencode" "net-tools" "sudo" "lsof" "dhcp-server" "dhcp-client" "iptables-services")
         LOCK_FILES=()
     fi
 }
@@ -406,7 +406,7 @@ set_dependency_list
 # Configurar permisos de sudo para el usuario actual
 log_message "DEBUG" "Configurando permisos de sudo para $CURRENT_USER..."
 SUDOERS_FILE="/etc/sudoers.d/wansim"
-SUDOERS_CONTENT="$CURRENT_USER ALL=(ALL) NOPASSWD: /usr/bin/apt-get, /usr/bin/dnf, /usr/bin/yum, /usr/bin/debconf-set-selections, /usr/sbin/tc, /usr/bin/tc, /usr/sbin/ip, /usr/bin/ip, /usr/sbin/iptables, /usr/sbin/iptables-save, /usr/sbin/sysctl, /usr/sbin/dhcpd, /usr/bin/systemctl, /usr/bin/systemctl stop unattended-upgrades, /usr/bin/systemctl restart wansim.service, /usr/bin/systemctl restart wansim-l2-persist.service, /usr/bin/systemctl restart isc-dhcp-server, /usr/bin/systemctl restart dhcpd, /usr/bin/systemctl restart iptables, /usr/bin/fuser, /usr/bin/kill, /usr/bin/rm, /usr/sbin/dpkg, /usr/bin/tee, /usr/bin/mv, /usr/bin/chmod, /usr/bin/chown"
+SUDOERS_CONTENT="$CURRENT_USER ALL=(ALL) NOPASSWD: /usr/bin/apt-get, /usr/bin/dnf, /usr/bin/yum, /usr/bin/debconf-set-selections, /usr/sbin/tc, /usr/bin/tc, /usr/sbin/ip, /usr/bin/ip, /usr/sbin/iptables, /usr/sbin/iptables-save, /usr/sbin/sysctl, /usr/sbin/dhcpd, /usr/sbin/dhclient, /sbin/dhclient, /usr/bin/systemctl, /usr/bin/systemctl stop unattended-upgrades, /usr/bin/systemctl restart wansim.service, /usr/bin/systemctl restart wansim-l2-persist.service, /usr/bin/systemctl restart isc-dhcp-server, /usr/bin/systemctl restart dhcpd, /usr/bin/systemctl restart iptables, /usr/bin/fuser, /usr/bin/kill, /usr/bin/rm, /usr/sbin/dpkg, /usr/bin/tee, /usr/bin/mv, /usr/bin/chmod, /usr/bin/chown"
 if ! sudo -n true 2>/dev/null; then
     log_message "INFO" "Configurando permisos de sudo automáticamente..."
     # Intentar configurar sudoers usando una contraseña temporal o existente
@@ -571,6 +571,78 @@ ensure_telegram_runtime() {
 iface_private_ip() {
     local iface="$1"
     ip -o -4 addr show "$iface" 2>/dev/null | awk '{print $4}' | cut -d'/' -f1 | head -n 1
+}
+
+normalize_ipv4_cidr() {
+    local ip_addr="$1"
+    local mask="$2"
+    python3 - "$ip_addr" "$mask" <<'PYCIDR' 2>/dev/null
+import ipaddress, sys
+ip_addr=sys.argv[1].strip()
+mask=sys.argv[2].strip().lstrip("/")
+iface=ipaddress.ip_interface(f"{ip_addr}/{mask}")
+print(iface.with_prefixlen)
+PYCIDR
+}
+
+valid_ipv4() {
+    local ip_addr="$1"
+    python3 - "$ip_addr" <<'PYIP' >/dev/null 2>&1
+import ipaddress, sys
+ipaddress.ip_address(sys.argv[1].strip())
+PYIP
+}
+
+wan_cidr_overlaps_lan_range() {
+    local wan_cidr="$1"
+    local segment_prefix="$2"
+    local base_octet="$3"
+    local vlan_count="$4"
+    python3 - "$wan_cidr" "$segment_prefix" "$base_octet" "$vlan_count" <<'PYOVERLAP' >/dev/null 2>&1
+import ipaddress, sys
+wan=ipaddress.ip_interface(sys.argv[1]).network
+prefix=sys.argv[2]
+base=int(sys.argv[3])
+count=int(sys.argv[4])
+for octet in range(base, base+count):
+    lan=ipaddress.ip_network(f"{prefix}.{octet}.0/24")
+    if wan.overlaps(lan):
+        raise SystemExit(1)
+PYOVERLAP
+}
+
+configure_wan_addressing() {
+    local iface="$1"
+    local mode="$2"
+    local cidr="$3"
+    local gateway="$4"
+    local link_idx="${5:-1}"
+    local metric=$((200 + link_idx))
+
+    sudo ip link set "$iface" up >/dev/null 2>&1 || true
+    if [ "$mode" = "manual" ]; then
+        log_message "INFO" "Configurando WAN $iface en modo manual: $cidr gateway=$gateway metric=$metric"
+        sudo ip addr flush dev "$iface" >/tmp/wansim_wan_ip.log 2>&1 || true
+        sudo ip addr add "$cidr" dev "$iface" >/tmp/wansim_wan_ip.log 2>&1 || {
+            log_message "ERROR" "No se pudo asignar $cidr a $iface: $(cat /tmp/wansim_wan_ip.log)"
+            exit 1
+        }
+        sudo ip route del default via "$gateway" dev "$iface" >/dev/null 2>&1 || true
+        sudo ip route add default via "$gateway" dev "$iface" metric "$metric" >/tmp/wansim_wan_route.log 2>&1 || {
+            log_message "ERROR" "No se pudo agregar gateway $gateway para $iface: $(cat /tmp/wansim_wan_route.log)"
+            exit 1
+        }
+    else
+        log_message "INFO" "Configurando WAN $iface en modo DHCP o conservando lease existente."
+        if command -v dhclient >/dev/null 2>&1; then
+            sudo dhclient -r "$iface" >/dev/null 2>&1 || true
+            sudo dhclient "$iface" >/tmp/wansim_wan_dhcp.log 2>&1 || {
+                log_message "ADVERTENCIA" "dhclient no pudo renovar $iface. Se conserva configuracion actual. Detalle: $(cat /tmp/wansim_wan_dhcp.log)"
+            }
+        elif [ -z "$(iface_private_ip "$iface")" ]; then
+            log_message "ADVERTENCIA" "dhclient no esta disponible y $iface no tiene IPv4. Instala cliente DHCP o usa modo manual."
+        fi
+    fi
 }
 
 validate_tls_chain() {
@@ -848,11 +920,50 @@ if [ "$INTERACTIVE" -eq 1 ]; then
                 fi
                 log_message "ERROR" "Rango de octetos inválido o repetido. Debe caber en 1-254 y no solaparse."
             done
+            while true; do
+                read -p "${COLOR_INFO}[ENTRADA] Par #$link_idx - direccionamiento WAN para $wan_iface (dhcp/manual) [predeterminado dhcp]: ${COLOR_RESET}" wan_addr_mode
+                wan_addr_mode=${wan_addr_mode:-dhcp}
+                wan_addr_mode=$(echo "$wan_addr_mode" | tr '[:upper:]' '[:lower:]')
+                case "$wan_addr_mode" in
+                    dhcp)
+                        wan_cidr=""
+                        wan_gateway=""
+                        break
+                        ;;
+                    manual|static|estatico)
+                        wan_addr_mode="manual"
+                        while true; do
+                            read -p "${COLOR_INFO}[ENTRADA] Par #$link_idx - IP WAN de $wan_iface: ${COLOR_RESET}" wan_ip
+                            valid_ipv4 "$wan_ip" && break
+                            log_message "ERROR" "IP WAN invalida."
+                        done
+                        while true; do
+                            read -p "${COLOR_INFO}[ENTRADA] Par #$link_idx - mascara o prefijo WAN (ej. 24 o 255.255.255.0): ${COLOR_RESET}" wan_mask
+                            wan_cidr=$(normalize_ipv4_cidr "$wan_ip" "$wan_mask" || true)
+                            [ -n "$wan_cidr" ] && break
+                            log_message "ERROR" "Mascara/prefijo invalido."
+                        done
+                        while true; do
+                            read -p "${COLOR_INFO}[ENTRADA] Par #$link_idx - gateway WAN: ${COLOR_RESET}" wan_gateway
+                            valid_ipv4 "$wan_gateway" && break
+                            log_message "ERROR" "Gateway invalido."
+                        done
+                        if ! wan_cidr_overlaps_lan_range "$wan_cidr" "$SEGMENT_PREFIX" "$base_octet_link" "$NUM_VLANS"; then
+                            log_message "ERROR" "La red WAN $wan_cidr se solapa con las VLAN LAN ${SEGMENT_PREFIX}.${base_octet_link}.0/24..."
+                            continue
+                        fi
+                        break
+                        ;;
+                    *)
+                        log_message "ERROR" "Ingresa dhcp o manual."
+                        ;;
+                esac
+            done
             USED_INTERFACES="$USED_INTERFACES $wan_iface $lan_iface"
             USED_VLAN_RANGES="$USED_VLAN_RANGES $start_vlan-$((start_vlan + NUM_VLANS - 1))"
             USED_OCTET_RANGES="$USED_OCTET_RANGES $base_octet_link-$((base_octet_link + NUM_VLANS - 1))"
             [ -n "$L3_LINKS_CSV" ] && L3_LINKS_CSV+=";"
-            L3_LINKS_CSV+="$link_idx:$wan_iface:$lan_iface:$start_vlan:$base_octet_link:$SEGMENT_PREFIX"
+            L3_LINKS_CSV+="$link_idx:$wan_iface:$lan_iface:$start_vlan:$base_octet_link:$SEGMENT_PREFIX:$wan_addr_mode:$wan_cidr:$wan_gateway"
         done
         IFS=':' read -r __idx WAN_IF LAN_IF START_VLAN BASE_OCTET SEGMENT_PREFIX <<< "${L3_LINKS_CSV%%;*}"
         BRIDGE_INTERFACES=(); BRIDGE_IN_IFS=(); BRIDGE_OUT_IFS=()
@@ -1043,7 +1154,7 @@ reset_interface() {
 if [ "$TOPOLOGY_MODE" = "nat" ]; then
     NUM_L3_LINKS=${NUM_L3_LINKS:-1}
     if [ -z "${L3_LINKS_CSV:-}" ]; then
-        L3_LINKS_CSV="1:${WAN_IF}:${LAN_IF}:${START_VLAN:-100}:${BASE_OCTET:-10}:${SEGMENT_PREFIX:-192.168}"
+        L3_LINKS_CSV="1:${WAN_IF}:${LAN_IF}:${START_VLAN:-100}:${BASE_OCTET:-10}:${SEGMENT_PREFIX:-192.168}:dhcp::"
     fi
     log_message "INFO" "Configurando modo L3/NAT con $NUM_L3_LINKS par(es) WAN/LAN..."
 
@@ -1065,14 +1176,26 @@ if [ "$TOPOLOGY_MODE" = "nat" ]; then
     IFS=';' read -r -a L3_LINKS <<< "$L3_LINKS_CSV"
     for link in "${L3_LINKS[@]}"; do
         [ -z "$link" ] && continue
-        IFS=':' read -r link_idx wan_iface lan_iface start_vlan base_octet_link segment_prefix_link <<< "$link"
+        IFS=':' read -r link_idx wan_iface lan_iface start_vlan base_octet_link segment_prefix_link wan_addr_mode wan_cidr wan_gateway <<< "$link"
         segment_prefix_link=${segment_prefix_link:-192.168}
+        wan_addr_mode=${wan_addr_mode:-dhcp}
         log_message "INFO" "Preparando L3#$link_idx WAN=$wan_iface LAN=$lan_iface VLAN_START=$start_vlan OCTETO=$base_octet_link..."
         ip link show "$wan_iface" >/dev/null 2>&1 || { log_message "ERROR" "WAN $wan_iface no existe."; exit 1; }
         ip link show "$lan_iface" >/dev/null 2>&1 || { log_message "ERROR" "LAN $lan_iface no existe."; exit 1; }
         sudo ip link set "$wan_iface" up >/dev/null 2>&1 || true
         sudo ip link set "$lan_iface" up >/dev/null 2>&1 || true
         reset_interface "$lan_iface"
+        if [ "$wan_addr_mode" = "manual" ]; then
+            if [ -z "$wan_cidr" ] || [ -z "$wan_gateway" ] || ! valid_ipv4 "$wan_gateway"; then
+                log_message "ERROR" "WAN $wan_iface esta en modo manual pero faltan CIDR o gateway validos."
+                exit 1
+            fi
+            if ! wan_cidr_overlaps_lan_range "$wan_cidr" "$segment_prefix_link" "$base_octet_link" "$NUM_VLANS"; then
+                log_message "ERROR" "La red WAN $wan_cidr se solapa con las VLAN LAN del par #$link_idx."
+                exit 1
+            fi
+        fi
+        configure_wan_addressing "$wan_iface" "$wan_addr_mode" "$wan_cidr" "$wan_gateway" "$link_idx"
         wan_private=$(iface_private_ip "$wan_iface"); wan_private=${wan_private:-N/D}
         wan_public=$(iface_public_ip "$wan_iface")
         wan_bw=$(iface_bw_probe "$wan_iface")
@@ -1098,9 +1221,9 @@ if [ "$TOPOLOGY_MODE" = "nat" ]; then
             DHCP_INTERFACES+=("$vlan_name")
             PYTHON_VLAN_LIST=$(append_json_item "$PYTHON_VLAN_LIST" "$vlan_name")
             subnet="${segment_prefix_link}.${subnet_octet}.0/24"
-            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
                 "$vlan_name" "VLAN $current_vlan_id ($lan_iface -> $wan_iface)" "" "L3/NAT" "$wan_iface" "$wan_mac" \
-                "$wan_iface" "$lan_iface" "$wan_private" "$wan_public" "$wan_bw" "$subnet" "$lan_mac" >> "$META_TSV"
+                "$wan_iface" "$lan_iface" "$wan_private" "$wan_public" "$wan_bw" "$subnet" "$lan_mac" "$wan_addr_mode" "$wan_cidr" "$wan_gateway" >> "$META_TSV"
             printf '%s\t%s\t%s\n' "$segment_prefix_link" "$subnet_octet" "$vlan_name" >> "$DHCP_TSV"
             printf '%s\t%s.%s.0/24\n' "$wan_iface" "$segment_prefix_link" "$subnet_octet" >> "$NAT_TSV"
             log_message "OK" "Creada $vlan_name VLAN=$current_vlan_id subnet=${segment_prefix_link}.${subnet_octet}.0/24 WAN=$wan_iface"
@@ -1177,10 +1300,14 @@ try:
                 continue
             iface,label,bridge,role,peer,mac,wan,lan,wan_private,wan_public,wan_bw,subnet=parts[:12]
             lan_mac=parts[12] if len(parts) > 12 else ""
+            wan_addr_mode=parts[13] if len(parts) > 13 else "dhcp"
+            wan_cidr=parts[14] if len(parts) > 14 else ""
+            wan_gateway=parts[15] if len(parts) > 15 else ""
             meta[iface]={
                 "label":label,"bridge":bridge,"role":role,"peer":peer,"mac":mac,
                 "wan":wan,"lan":lan,"wan_private":wan_private,"wan_public":wan_public,
-                "wan_bw":wan_bw,"subnet":subnet,"lan_mac":lan_mac
+                "wan_bw":wan_bw,"subnet":subnet,"lan_mac":lan_mac,
+                "wan_addr_mode":wan_addr_mode,"wan_cidr":wan_cidr,"wan_gateway":wan_gateway
             }
 except FileNotFoundError:
     pass
@@ -1618,7 +1745,10 @@ def collect():
             'wan_public':meta.get('wan_public',''),
             'wan_bw':meta.get('wan_bw',''),
             'subnet':meta.get('subnet',''),
-            'lan_mac':meta.get('lan_mac','')
+            'lan_mac':meta.get('lan_mac',''),
+            'wan_addr_mode':meta.get('wan_addr_mode',''),
+            'wan_cidr':meta.get('wan_cidr',''),
+            'wan_gateway':meta.get('wan_gateway','')
         })
     return s
 def to_number(value, name, min_value=0.0, max_value=None):
@@ -1888,6 +2018,62 @@ ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
 </script></body></html>
 """
 
+REACTUI_STAGE_TEMPLATE=r"""
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ReactUI pre-beta - Ryuz WAN Simulator</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    :root{--g:#01a982;--ink:#18212a;--cyan:#00c8ff;--purple:#614ad3;--pink:#ff5a7a}
+    body{background:radial-gradient(circle at 12% 0%,rgba(1,169,130,.24),transparent 28%),linear-gradient(135deg,#f7fffc,#edf7ff 60%,#fff7fb);color:var(--ink);min-height:100vh}
+    .panel{background:rgba(255,255,255,.96);border:1px solid rgba(1,169,130,.24);border-top:5px solid var(--g);border-radius:8px;padding:18px;box-shadow:0 18px 42px rgba(24,33,42,.12)}
+    .btn-primary{background:var(--g);border-color:var(--g);color:#071512;font-weight:700}.btn-outline-dark{border-color:var(--g)}
+    .pill{display:inline-flex;border-radius:999px;padding:4px 10px;background:#e9faf5;color:#0b645c;font-weight:700}
+    .diagram,.plan{background:#10251f;color:#dffcf3;border-radius:8px;padding:14px;white-space:pre-wrap;font-family:ui-monospace,Menlo,Consolas,monospace}
+    .ok{color:#078765;font-weight:700}.bad{color:#b42318;font-weight:700}.warn{color:#a15c00;font-weight:700}
+    .table{--bs-table-bg:transparent}
+  </style>
+</head>
+<body><div id="root"></div>
+<script type="text/babel">
+const {useEffect,useState}=React;
+const emptyDraft={topology:'nat',l3:{segment:'10.254',links:[{wan:'',lan:'',vlans:10,startVlan:100,baseOctet:10,wanMode:'dhcp',wanIp:'',wanMask:'24',wanGateway:''}]},bridge:{pairs:[{in:'',out:''},{in:'',out:''},{in:'',out:''}]},telegram:{bots:[{name:'principal',token:'',chatId:''}]}};
+function App(){
+  const [state,setState]=useState(null),[draft,setDraft]=useState(emptyDraft),[result,setResult]=useState(null);
+  const load=()=>fetch('/api/prebeta/state').then(r=>r.json()).then(d=>{setState(d); setDraft({...emptyDraft,...(d.draft||{})});});
+  useEffect(()=>{load();},[]);
+  const api=(url,body)=>fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json()).then(setResult);
+  const setL3=(i,k,v)=>{const links=[...(draft.l3?.links||[])]; links[i]={...links[i],[k]:v}; setDraft({...draft,l3:{...draft.l3,links}})};
+  const setBridge=(i,k,v)=>{const pairs=[...(draft.bridge?.pairs||[])]; pairs[i]={...pairs[i],[k]:v}; setDraft({...draft,bridge:{...draft.bridge,pairs}})};
+  const addL3=()=>setDraft({...draft,l3:{...draft.l3,links:[...(draft.l3?.links||[]),{wan:'',lan:'',vlans:10,startVlan:200,baseOctet:20,wanMode:'dhcp',wanIp:'',wanMask:'24',wanGateway:''}].slice(0,2)}});
+  if(!state)return <div className="container py-4">Cargando...</div>;
+  const ifaces=state.interfaces||[];
+  const diagram=draft.topology==='bridge'
+    ? (draft.bridge?.pairs||[]).filter(p=>p.in||p.out).map((p,i)=>`L2L #${i+1}: ${p.in||'entrada'} <== bridge ==> ${p.out||'salida'}`).join('\n')
+    : (draft.l3?.links||[]).map((l,i)=>`WAN ${i+1}: ${l.wan||'wan'} (${l.wanMode||'dhcp'}${l.wanMode==='manual'?`, ${l.wanIp}/${l.wanMask} gw ${l.wanGateway}`:''})\n  | NAT/DHCP VLAN ${l.startVlan||100}-${Number(l.startVlan||100)+Number(l.vlans||1)-1}\nLAN ${i+1}: ${l.lan||'lan'} -> ${draft.l3?.segment||'10.254'}.${l.baseOctet||10}.0/24`).join('\n\n');
+  return <div className="container-fluid py-4 px-4">
+    <div className="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2"><div><h1>ReactUI pre-beta</h1><span className="pill">V1 estable: 1.116-stable</span> <span className="pill">Etapa 2 draft</span></div><a className="btn btn-outline-dark" href="/">Volver a Stable</a></div>
+    {result&&<div className={'alert '+(result.ok?'alert-success':'alert-warning')}>{result.message||result.error||'Resultado recibido'}</div>}
+    <div className="row g-3">
+      <div className="col-xl-4"><div className="panel mb-3"><h4>Topologia editable</h4><select className="form-select mb-3" value={draft.topology} onChange={e=>setDraft({...draft,topology:e.target.value})}><option value="nat">L3 / NAT</option><option value="bridge">Bridge L2L</option></select>
+        {draft.topology==='nat'&&<div><label>Segmento VLAN recomendado</label><select className="form-select mb-3" value={draft.l3?.segment||'10.254'} onChange={e=>setDraft({...draft,l3:{...draft.l3,segment:e.target.value}})}><option>10.254</option><option>172.16</option><option>192.168</option></select>{(draft.l3?.links||[]).map((l,i)=><div className="border rounded p-2 mb-2" key={i}><strong>WAN/LAN #{i+1}</strong><select className="form-select my-1" value={l.wan||''} onChange={e=>setL3(i,'wan',e.target.value)}><option value="">WAN</option>{ifaces.map(x=><option key={x.name}>{x.name}</option>)}</select><select className="form-select my-1" value={l.lan||''} onChange={e=>setL3(i,'lan',e.target.value)}><option value="">LAN trunk</option>{ifaces.map(x=><option key={x.name}>{x.name}</option>)}</select><select className="form-select my-1" value={l.wanMode||'dhcp'} onChange={e=>setL3(i,'wanMode',e.target.value)}><option value="dhcp">WAN DHCP</option><option value="manual">WAN Manual</option></select>{l.wanMode==='manual'&&<div className="row g-2 mb-2"><div className="col"><input className="form-control" value={l.wanIp||''} onChange={e=>setL3(i,'wanIp',e.target.value)} placeholder="IP WAN"/></div><div className="col"><input className="form-control" value={l.wanMask||'24'} onChange={e=>setL3(i,'wanMask',e.target.value)} placeholder="Mascara/CIDR"/></div><div className="col"><input className="form-control" value={l.wanGateway||''} onChange={e=>setL3(i,'wanGateway',e.target.value)} placeholder="Gateway"/></div></div>}<div className="row g-2"><div className="col"><input className="form-control" type="number" value={l.vlans||1} onChange={e=>setL3(i,'vlans',e.target.value)} placeholder="VLANs"/></div><div className="col"><input className="form-control" type="number" value={l.startVlan||100} onChange={e=>setL3(i,'startVlan',e.target.value)} placeholder="VLAN inicial"/></div><div className="col"><input className="form-control" type="number" value={l.baseOctet||10} onChange={e=>setL3(i,'baseOctet',e.target.value)} placeholder="Octeto"/></div></div></div>)}<button className="btn btn-sm btn-outline-dark" onClick={addL3}>Agregar WAN/LAN</button></div>}
+        {draft.topology==='bridge'&&<div>{(draft.bridge?.pairs||[]).map((p,i)=><div className="border rounded p-2 mb-2" key={i}><strong>L2L #{i+1}</strong><select className="form-select my-1" value={p.in||''} onChange={e=>setBridge(i,'in',e.target.value)}><option value="">Entrada</option>{ifaces.map(x=><option key={x.name}>{x.name}</option>)}</select><select className="form-select my-1" value={p.out||''} onChange={e=>setBridge(i,'out',e.target.value)}><option value="">Salida</option>{ifaces.map(x=><option key={x.name}>{x.name}</option>)}</select></div>)}</div>}
+        <div className="d-flex flex-wrap gap-2 mt-3"><button className="btn btn-primary" onClick={()=>api('/api/prebeta/save',draft)}>Guardar draft</button><button className="btn btn-outline-dark" onClick={()=>api('/api/reactui/validate',draft)}>Validar</button><button className="btn btn-outline-dark" onClick={()=>api('/api/reactui/plan',draft)}>Plan de despliegue</button></div></div>
+        <div className="panel"><h4>Telegram multi-bot</h4>{(draft.telegram?.bots||[]).map((b,i)=><div className="border rounded p-2 mb-2" key={i}><input className="form-control my-1" value={b.name||''} onChange={e=>{const bots=[...(draft.telegram?.bots||[])]; bots[i]={...bots[i],name:e.target.value}; setDraft({...draft,telegram:{bots}})}} placeholder="Nombre"/><input className="form-control my-1" value={b.token||''} onChange={e=>{const bots=[...(draft.telegram?.bots||[])]; bots[i]={...bots[i],token:e.target.value}; setDraft({...draft,telegram:{bots}})}} placeholder="Bot token"/><input className="form-control my-1" value={b.chatId||''} onChange={e=>{const bots=[...(draft.telegram?.bots||[])]; bots[i]={...bots[i],chatId:e.target.value}; setDraft({...draft,telegram:{bots}})}} placeholder="Chat ID"/><button className="btn btn-sm btn-outline-dark" onClick={()=>api('/api/prebeta/telegram/validate',b)}>Validar sincronizacion</button></div>)}</div></div>
+      <div className="col-xl-4"><div className="panel mb-3"><h4>Diagrama conceptual</h4><div className="diagram">{diagram||'Define interfaces para generar el diagrama.'}</div></div><div className="panel"><h4>Resultado validacion/plan</h4><pre className="plan">{result?JSON.stringify(result,null,2):'Sin validacion todavia.'}</pre></div></div>
+      <div className="col-xl-4"><div className="panel mb-3"><h4>Daemons</h4>{(state.daemons||[]).map(s=><div className="d-flex justify-content-between align-items-center border-bottom py-2" key={s.name}><div><strong>{s.name}</strong><br/><span className={s.active==='active'?'ok':'bad'}>{s.active||'unknown'}</span> / {s.enabled||'unknown'}</div><button className="btn btn-sm btn-outline-dark" onClick={()=>api('/api/prebeta/daemon/restart',{service:s.name})}>Restart</button></div>)}</div><div className="panel"><h4>DHCP leases</h4><table className="table table-sm"><thead><tr><th>IP</th><th>Host</th><th>MAC</th><th>Estado</th></tr></thead><tbody>{(state.leases||[]).map((l,i)=><tr key={i}><td>{l.ip}</td><td>{l.host||'-'}</td><td>{l.mac||'-'}</td><td>{l.state||'-'}</td></tr>)}</tbody></table></div></div>
+    </div></div>
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script></body></html>
+"""
+
 def restart_service_later():
     def _restart():
         try:
@@ -2064,10 +2250,16 @@ def default_prebeta_draft():
         parts=link.split(':')
         if len(parts)>=6:
             _,wan,lan,start,octet,segment=parts[:6]
+            mode=parts[6] if len(parts)>6 and parts[6] else 'dhcp'
+            cidr=parts[7] if len(parts)>7 else ''
+            gateway=parts[8] if len(parts)>8 else ''
+            wan_ip,wan_mask='','24'
+            if cidr and '/' in cidr:
+                wan_ip,wan_mask=cidr.split('/',1)
             draft['l3']['segment']=segment
-            draft['l3']['links'].append({'wan':wan,'lan':lan,'vlans':cfg.get('NUM_VLANS','10'),'startVlan':start,'baseOctet':octet})
+            draft['l3']['links'].append({'wan':wan,'lan':lan,'vlans':cfg.get('NUM_VLANS','10'),'startVlan':start,'baseOctet':octet,'wanMode':mode,'wanIp':wan_ip,'wanMask':wan_mask,'wanGateway':gateway})
     if not draft['l3']['links']:
-        draft['l3']['links']=[{'wan':cfg.get('WAN_IF',''),'lan':cfg.get('LAN_IF',''),'vlans':cfg.get('NUM_VLANS','10'),'startVlan':cfg.get('START_VLAN','100'),'baseOctet':cfg.get('BASE_OCTET','10')}]
+        draft['l3']['links']=[{'wan':cfg.get('WAN_IF',''),'lan':cfg.get('LAN_IF',''),'vlans':cfg.get('NUM_VLANS','10'),'startVlan':cfg.get('START_VLAN','100'),'baseOctet':cfg.get('BASE_OCTET','10'),'wanMode':'dhcp','wanIp':'','wanMask':'24','wanGateway':''}]
     for pair in (cfg.get('BRIDGE_PAIRS_CSV') or '').split(';'):
         parts=pair.split(':')
         if len(parts)>=3: draft['bridge']['pairs'].append({'in':parts[1],'out':parts[2]})
@@ -2084,7 +2276,7 @@ def load_prebeta_draft():
 
 @app.route('/prebeta')
 def prebeta():
-    return render_template_string(PREBETA_TEMPLATE)
+    return render_template_string(REACTUI_STAGE_TEMPLATE)
 
 @app.route('/api/prebeta/state')
 def prebeta_state():
@@ -2101,6 +2293,88 @@ def prebeta_save():
     except Exception as e:
         logger.exception('No se pudo guardar prebeta')
         return jsonify({'ok':False,'error':str(e)}),400
+
+def validate_reactui_draft(draft):
+    import ipaddress
+    errors=[]; warnings=[]; actions=[]
+    interfaces={x['name'] for x in list_interfaces()}
+    used_ifaces=set()
+    if draft.get('topology')=='nat':
+        l3=draft.get('l3') or {}
+        segment=l3.get('segment') or '10.254'
+        vlan_ranges=[]; octet_ranges=[]
+        links=l3.get('links') or []
+        if not 1 <= len(links) <= 2:
+            errors.append('L3/NAT permite de 1 a 2 pares WAN/LAN.')
+        for idx,link in enumerate(links,1):
+            wan=link.get('wan') or ''
+            lan=link.get('lan') or ''
+            if wan not in interfaces: errors.append(f'Par #{idx}: WAN no existe o esta vacia.')
+            if lan not in interfaces: errors.append(f'Par #{idx}: LAN no existe o esta vacia.')
+            if wan and lan and wan==lan: errors.append(f'Par #{idx}: WAN y LAN no pueden ser la misma interfaz.')
+            for iface in (wan,lan):
+                if iface and iface in used_ifaces: errors.append(f'Par #{idx}: interfaz repetida: {iface}.')
+                if iface: used_ifaces.add(iface)
+            try:
+                vlans=int(link.get('vlans') or 0); start=int(link.get('startVlan') or 0); base=int(link.get('baseOctet') or 0)
+                if vlans < 1: errors.append(f'Par #{idx}: VLANs debe ser mayor a 0.')
+                if start < 1 or start+vlans-1 > 4094: errors.append(f'Par #{idx}: rango VLAN fuera de 1-4094.')
+                if base < 1 or base+vlans-1 > 254: errors.append(f'Par #{idx}: rango de octetos fuera de 1-254.')
+                vr=(start,start+vlans-1); orng=(base,base+vlans-1)
+                if any(vr[0] <= r[1] and vr[1] >= r[0] for r in vlan_ranges): errors.append(f'Par #{idx}: rango VLAN se solapa con otro par.')
+                if any(orng[0] <= r[1] and orng[1] >= r[0] for r in octet_ranges): errors.append(f'Par #{idx}: rango de octetos se solapa con otro par.')
+                vlan_ranges.append(vr); octet_ranges.append(orng)
+                if (link.get('wanMode') or 'dhcp') == 'manual':
+                    ip=link.get('wanIp') or ''; mask=str(link.get('wanMask') or ''); gw=link.get('wanGateway') or ''
+                    iface=ipaddress.ip_interface(f'{ip}/{mask.lstrip("/")}')
+                    ipaddress.ip_address(gw)
+                    wan_net=iface.network
+                    for octet in range(base,base+vlans):
+                        lan_net=ipaddress.ip_network(f'{segment}.{octet}.0/24')
+                        if wan_net.overlaps(lan_net): errors.append(f'Par #{idx}: WAN {wan_net} se solapa con LAN {lan_net}.')
+                    actions.append(f'Configurar {wan} manual {iface.with_prefixlen} gateway {gw}.')
+                else:
+                    actions.append(f'Configurar {wan} por DHCP o conservar lease vigente.')
+                actions.append(f'Crear {vlans} VLAN(s) desde ID {start} en {lan}, segmento {segment}.{base}.0/24 en adelante.')
+                actions.append(f'Aplicar NAT hacia {wan} para las subredes del par #{idx}.')
+            except Exception as e:
+                errors.append(f'Par #{idx}: parametros IP/VLAN invalidos: {e}')
+    else:
+        pairs=(draft.get('bridge') or {}).get('pairs') or []
+        active=[p for p in pairs if p.get('in') or p.get('out')]
+        if not 1 <= len(active) <= 3: errors.append('Bridge L2L requiere de 1 a 3 pares activos.')
+        for idx,pair in enumerate(active,1):
+            inn=pair.get('in') or ''; out=pair.get('out') or ''
+            if inn not in interfaces: errors.append(f'L2L #{idx}: entrada no existe o esta vacia.')
+            if out not in interfaces: errors.append(f'L2L #{idx}: salida no existe o esta vacia.')
+            if inn and out and inn==out: errors.append(f'L2L #{idx}: entrada y salida no pueden ser iguales.')
+            for iface in (inn,out):
+                if iface and iface in used_ifaces: errors.append(f'L2L #{idx}: interfaz repetida: {iface}.')
+                if iface: used_ifaces.add(iface)
+            actions.append(f'Crear bridge L2L #{idx}: {inn} <-> {out}.')
+    if (draft.get('telegram') or {}).get('bots'):
+        actions.append('Actualizar definicion multi-bot Telegram y validar getMe/getChat antes de activar.')
+    if errors:
+        warnings.append('No se debe aplicar hasta resolver los errores.')
+    else:
+        actions.insert(0,'Tomar snapshot de configuracion estable y preparar rollback.')
+        actions.append('Reiniciar servicios y validar dashboard, DHCP, NAT/bridge y Telegram.')
+    return {'ok':not errors,'errors':errors,'warnings':warnings,'actions':actions}
+
+@app.route('/api/reactui/validate',methods=['POST'])
+def reactui_validate():
+    draft=request.get_json(force=True,silent=True) or {}
+    result=validate_reactui_draft(draft)
+    result['message']='Validacion exitosa.' if result['ok'] else 'Validacion con errores.'
+    return jsonify(result), (200 if result['ok'] else 400)
+
+@app.route('/api/reactui/plan',methods=['POST'])
+def reactui_plan():
+    draft=request.get_json(force=True,silent=True) or {}
+    result=validate_reactui_draft(draft)
+    result['message']='Plan de despliegue generado.' if result['ok'] else 'Plan bloqueado por validacion.'
+    result['note']='Pre-beta: este endpoint enumera y valida cambios. La aplicacion destructiva queda bloqueada hasta estabilizar ReactUI.'
+    return jsonify(result), (200 if result['ok'] else 400)
 
 @app.route('/api/prebeta/daemon/restart',methods=['POST'])
 def prebeta_daemon_restart():
@@ -2238,7 +2512,7 @@ replacements = {
     "__DHCP_SERVICE_LITERAL__": json.dumps(os.environ.get("DHCP_SERVICE", "")),
     "__TOPOLOGY_MODE_LITERAL__": json.dumps(os.environ.get("TOPOLOGY_MODE", "")),
     "__NETEM_STATE_FILE__": os.environ.get("NETEM_STATE_FILE", os.path.expanduser("~/wansim_netem_state.json")),
-    "__WANSIM_VERSION__": os.environ.get("WANSIM_VERSION", "1.115"),
+    "__WANSIM_VERSION__": os.environ.get("WANSIM_VERSION", "1.116-stable"),
 }
 for key, value in replacements.items():
     text = text.replace(key, value)
