@@ -1,6 +1,6 @@
 # Ryuz WAN Simulator
 
-**Version 1.117-stable** | **Autor**: decameru@outlook.com
+**Version 1.118-prebeta** | **Autor**: decameru@outlook.com
 
 Ryuz WAN Simulator es una herramienta para simular condiciones WAN en Linux. Permite aplicar latencia, jitter y perdida de paquetes sobre interfaces fisicas, VLANs o bridges L2, con un dashboard Flask para control operativo.
 
@@ -22,7 +22,7 @@ Esta rama se mantiene como la base principal del simulador. La evolucion FastAPI
 
 ## Sistemas Soportados
 
-La version 1.117-stable detecta el gestor de paquetes y ajusta dependencias para:
+La version 1.118-prebeta detecta el gestor de paquetes y ajusta dependencias para:
 
 - Ubuntu Server 20.04 o superior.
 - Ubuntu Workstation 20.04 o superior.
@@ -119,14 +119,23 @@ En esa vista puedes:
 
 - Preparar cambios de topologia L3/NAT o Bridge L2L sin romper la configuracion estable.
 - Guardar un draft persistente en `~/.wansim/reactui_prebeta.json`.
-- Enviar parametros validados al backend pre-beta sin aplicar cambios destructivos.
+- Enviar parametros validados al backend pre-beta y aplicarlos en caliente para pruebas de ReactUI.
 - Validar si los cambios son permisibles antes de aplicarlos.
 - Generar un plan de despliegue con las acciones que se realizarian.
 - Ver interfaces detectadas con IP, estado y MAC.
 - Ver daemons relevantes y enviar restart controlado.
 - Ver leases DHCP con IP, host, MAC y estado.
+- Probar inyeccion `tc/netem` en vivo desde ReactUI sobre las interfaces activas.
 - Preparar multiples bots de Telegram, revelar token/chat id solo con password Linux y validar sincronizacion contra Telegram API.
 - Revisar un diagrama conceptual de los cambios propuestos para L2 o L3.
+
+Para probar la etapa ReactUI:
+
+1. Ejecuta `./WANsim2.sh` y entra al dashboard.
+2. Abre `ReactUI pre-beta`.
+3. Ajusta L3/NAT o Bridge L2L y presiona `Enviar parametros`.
+4. Revisa el bloque `Resultado validacion/plan`; cada accion aplicada aparece con `ok`, comando y salida.
+5. Usa `Inyeccion en vivo` para aplicar delay, jitter o perdida sobre las interfaces activas sin salir de ReactUI.
 
 ## Archivos Generados
 
@@ -183,6 +192,14 @@ Antes de ejecutar en un servidor compartido, revisa:
 Si una ejecucion falla, el script ejecuta rollback automatico de servicios, dashboard generado, virtualenv parcial, bridges/VLANs generadas y archivos temporales. El log principal se conserva en `~/emix_abundix.log`.
 
 ## Release Notes
+
+### Version 1.118-prebeta
+
+- `Enviar parametros` en ReactUI aplica la topologia validada en tiempo real, actualiza interfaces controladas y refresca metadata sin reiniciar Flask.
+- L3/NAT runtime crea VLANs, actualiza DHCP, configura NAT en cadena `WANSIM_POSTROUTING` y persiste la configuracion local.
+- Bridge runtime crea pares `br_wan#`, actualiza interfaces controladas y limpia objetos WAN_SIM previos.
+- Se agrega panel `Inyeccion en vivo` para aplicar o resetear delay, jitter y perdida desde ReactUI usando `tc/netem`.
+- Los resultados de submit devuelven acciones ejecutadas, comandos y salida corta para pruebas de laboratorio.
 
 ### Version 1.117-stable
 

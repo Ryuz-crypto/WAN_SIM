@@ -10,7 +10,7 @@ exec > >(tee -a /tmp/wansim_debug.log) 2>&1
 # -----------------------------------------------
 # Variables de configuración
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WANSIM_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "1.117-stable")"
+WANSIM_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "1.118-prebeta")"
 USER_HOME="${HOME:-$(getent passwd "$(whoami)" | cut -d: -f6)}"
 WANSIM_HOME="$USER_HOME/.wansim"
 PYTHON_VENV="$WANSIM_HOME/venv"
@@ -1413,7 +1413,7 @@ if [ "$INTERACTIVE" -eq 1 ]; then
     cat > "$CONFIG_FILE" <<EOF
 TOPOLOGY_MODE=$TOPOLOGY_MODE
 NUM_L3_LINKS=${NUM_L3_LINKS:-1}
-L3_LINKS_CSV=${L3_LINKS_CSV:-}
+L3_LINKS_CSV=$(printf '%q' "${L3_LINKS_CSV:-}")
 NUM_VLANS=${NUM_VLANS:-0}
 START_VLAN=${START_VLAN:-0}
 CONFIG_DHCP=${CONFIG_DHCP:-n}
@@ -1434,8 +1434,8 @@ CONFIG_TC=${CONFIG_TC:-n}
 IS_MGMT=${IS_MGMT:-n}
 NUM_BRIDGE_IFACES=${NUM_BRIDGE_IFACES:-0}
 NUM_BRIDGE_PAIRS=${NUM_BRIDGE_PAIRS:-0}
-BRIDGE_INTERFACES_CSV=${BRIDGE_INTERFACES_CSV:-}
-BRIDGE_PAIRS_CSV=${BRIDGE_PAIRS_CSV:-}
+BRIDGE_INTERFACES_CSV=$(printf '%q' "${BRIDGE_INTERFACES_CSV:-}")
+BRIDGE_PAIRS_CSV=$(printf '%q' "${BRIDGE_PAIRS_CSV:-}")
 EOF
     chmod 640 "$CONFIG_FILE"
     chown "$CURRENT_USER:$CURRENT_USER" "$CONFIG_FILE"
@@ -1652,7 +1652,7 @@ fi
 # Crear el archivo Python con el dashboard Flask
 cat > "$WANSIM_DASHBOARD" <<'EOF'
 #!/usr/bin/env python3
-import os, re, json, logging, subprocess, threading, sys, time
+import os, re, json, logging, subprocess, threading, sys, time, shlex, ipaddress
 import requests
 from flask import Flask, request, render_template_string, redirect, url_for, flash, jsonify
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
@@ -1686,6 +1686,8 @@ TLS_ENABLE_FILE=__TLS_ENABLE_FILE_LITERAL__
 CONFIG_FILE=__CONFIG_FILE_LITERAL__
 PREBETA_STATE_FILE=__PREBETA_STATE_FILE_LITERAL__
 DHCP_SERVICE=__DHCP_SERVICE_LITERAL__
+DHCP_DEFAULT_FILE=__DHCP_DEFAULT_FILE_LITERAL__
+IPTABLES_SAVE_FILE=__IPTABLES_SAVE_FILE_LITERAL__
 TOPOLOGY_MODE=__TOPOLOGY_MODE_LITERAL__
 CURRENT_USER_NAME=__CURRENT_USER_LITERAL__
 def tls_is_ready():
@@ -1710,6 +1712,21 @@ def run(cmd):
         r=subprocess.run(cmd,shell=True,capture_output=True,text=True,timeout=10)
         return r.returncode==0,(r.stdout or r.stderr or '')
     except Exception as e: return False,str(e)
+def q(value):
+    return shlex.quote(str(value))
+def run_shell(cmd, timeout=30):
+    try:
+        r=subprocess.run(cmd,shell=True,capture_output=True,text=True,timeout=timeout)
+        return r.returncode==0,(r.stdout or r.stderr or '')
+    except Exception as e:
+        return False,str(e)
+def action_step(actions, label, cmd, critical=True, timeout=30):
+    ok,out=run_shell(cmd,timeout=timeout)
+    item={'ok':ok,'label':label,'cmd':cmd,'output':(out or '').strip()[-700:]}
+    actions.append(item)
+    if critical and not ok:
+        raise RuntimeError(f'{label}: {item["output"] or "sin salida"}')
+    return ok,out
 def parse_qdisc(out):
     d=j=l=0.0
     m=re.search(r'delay\s+(\d+\.?\d*)ms\s*(\d+\.?\d*)ms',out,re.I)
@@ -2046,10 +2063,12 @@ REACTUI_STAGE_TEMPLATE=r"""
 const {useEffect,useState}=React;
 const emptyDraft={topology:'nat',l3:{segment:'10.254',links:[{wan:'',lan:'',vlans:10,startVlan:100,baseOctet:10,wanMode:'dhcp',wanIp:'',wanMask:'24',wanGateway:''}]},bridge:{pairs:[{in:'',out:''},{in:'',out:''},{in:'',out:''}]},telegram:{bots:[{name:'principal',token:'',chatId:''}]}};
 function App(){
-  const [state,setState]=useState(null),[draft,setDraft]=useState(emptyDraft),[result,setResult]=useState(null),[linuxPassword,setLinuxPassword]=useState('');
+  const [state,setState]=useState(null),[draft,setDraft]=useState(emptyDraft),[result,setResult]=useState(null),[linuxPassword,setLinuxPassword]=useState(''),[live,setLive]=useState({iface:'',delay:0,jitter:0,loss:0});
   const load=()=>fetch('/api/prebeta/state').then(r=>r.json()).then(d=>{setState(d); setDraft({...emptyDraft,...(d.draft||{})});});
   useEffect(()=>{load();},[]);
   const api=(url,body)=>fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json()).then(setResult);
+  const submit=()=>fetch('/api/reactui/submit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(draft)}).then(r=>r.json()).then(d=>{setResult(d); load();});
+  const applyLive=(reset=false)=>{const iface=live.iface||((state.controlInterfaces||[])[0]||''); const body=reset?{iface,delay:0,jitter:0,loss:0}:{...live,iface}; fetch('/api/reactui/netem',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json()).then(d=>{setResult(d); if(reset)setLive({...live,iface,delay:0,jitter:0,loss:0}); load();});};
   const revealTelegram=()=>fetch('/api/prebeta/telegram/reveal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:linuxPassword})}).then(r=>r.json()).then(d=>{setResult(d); if(d.ok){setDraft({...draft,telegram:{bots:d.bots||[]}}); setLinuxPassword('');}});
   const setL3=(i,k,v)=>{const links=[...(draft.l3?.links||[])]; links[i]={...links[i],[k]:v}; setDraft({...draft,l3:{...draft.l3,links}})};
   const setBridge=(i,k,v)=>{const pairs=[...(draft.bridge?.pairs||[])]; pairs[i]={...pairs[i],[k]:v}; setDraft({...draft,bridge:{...draft.bridge,pairs}})};
@@ -2060,16 +2079,16 @@ function App(){
     ? (draft.bridge?.pairs||[]).filter(p=>p.in||p.out).map((p,i)=>`L2L #${i+1}: ${p.in||'entrada'} <== bridge ==> ${p.out||'salida'}`).join('\n')
     : (draft.l3?.links||[]).map((l,i)=>`WAN ${i+1}: ${l.wan||'wan'} (${l.wanMode||'dhcp'}${l.wanMode==='manual'?`, ${l.wanIp}/${l.wanMask} gw ${l.wanGateway}`:''})\n  | NAT/DHCP VLAN ${l.startVlan||100}-${Number(l.startVlan||100)+Number(l.vlans||1)-1}\nLAN ${i+1}: ${l.lan||'lan'} -> ${draft.l3?.segment||'10.254'}.${l.baseOctet||10}.0/24`).join('\n\n');
   return <div className="container-fluid py-4 px-4">
-    <div className="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2"><div><h1>ReactUI pre-beta</h1><span className="pill">V1 estable: __WANSIM_VERSION__</span> <span className="pill">Etapa 2 draft</span></div><a className="btn btn-outline-dark" href="/">Volver a Stable</a></div>
+    <div className="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2"><div><h1>ReactUI pre-beta</h1><span className="pill">Build ReactUI: __WANSIM_VERSION__</span> <span className="pill">V1 estable: v1.117-stable</span></div><a className="btn btn-outline-dark" href="/">Volver a Stable</a></div>
     {result&&<div className={'alert '+(result.ok?'alert-success':'alert-warning')}>{result.message||result.error||'Resultado recibido'}</div>}
     <div className="row g-3">
       <div className="col-xl-4"><div className="panel mb-3"><h4>Topologia editable</h4><select className="form-select mb-3" value={draft.topology} onChange={e=>setDraft({...draft,topology:e.target.value})}><option value="nat">L3 / NAT</option><option value="bridge">Bridge L2L</option></select>
         {draft.topology==='nat'&&<div><label className="form-label">Segmento base para VLANs LAN</label><select className="form-select mb-3" value={draft.l3?.segment||'10.254'} onChange={e=>setDraft({...draft,l3:{...draft.l3,segment:e.target.value}})}><option value="10.254">10.254.X.0/24 recomendado para laboratorio aislado</option><option value="172.16">172.16.X.0/24 recomendado para redes privadas medianas</option><option value="192.168">192.168.X.0/24 recomendado para pruebas pequenas</option></select>{(draft.l3?.links||[]).map((l,i)=><div className="border rounded p-3 mb-3" key={i}><strong>WAN/LAN #{i+1}</strong><label className="form-label mt-2 mb-1">Interfaz WAN - salida a Internet</label><select className="form-select" value={l.wan||''} onChange={e=>setL3(i,'wan',e.target.value)}><option value="">Selecciona WAN</option>{ifaces.map(x=><option key={x.name}>{x.name}</option>)}</select><label className="form-label mt-2 mb-1">Interfaz LAN trunk para VLANs</label><select className="form-select" value={l.lan||''} onChange={e=>setL3(i,'lan',e.target.value)}><option value="">Selecciona LAN trunk</option>{ifaces.map(x=><option key={x.name}>{x.name}</option>)}</select><label className="form-label mt-2 mb-1">Direccionamiento de la WAN</label><select className="form-select" value={l.wanMode||'dhcp'} onChange={e=>setL3(i,'wanMode',e.target.value)}><option value="dhcp">DHCP - tomar IP, mascara y gateway automaticamente</option><option value="manual">Manual - definir IP, mascara y gateway</option></select>{l.wanMode==='manual'&&<div className="row g-2 mt-1 mb-2"><div className="col-md-4"><label className="form-label mb-1">IP WAN</label><input className="form-control" value={l.wanIp||''} onChange={e=>setL3(i,'wanIp',e.target.value)} placeholder="192.168.1.204"/></div><div className="col-md-4"><label className="form-label mb-1">Mascara/CIDR</label><input className="form-control" value={l.wanMask||'24'} onChange={e=>setL3(i,'wanMask',e.target.value)} placeholder="24 o 255.255.255.0"/></div><div className="col-md-4"><label className="form-label mb-1">Gateway WAN</label><input className="form-control" value={l.wanGateway||''} onChange={e=>setL3(i,'wanGateway',e.target.value)} placeholder="192.168.1.254"/></div></div>}<div className="row g-2 mt-1"><div className="col-md-4"><label className="form-label mb-1">Numero de VLANs</label><input className="form-control" type="number" min="1" value={l.vlans||1} onChange={e=>setL3(i,'vlans',e.target.value)} placeholder="2"/></div><div className="col-md-4"><label className="form-label mb-1">ID VLAN inicial</label><input className="form-control" type="number" min="1" max="4094" value={l.startVlan||100} onChange={e=>setL3(i,'startVlan',e.target.value)} placeholder="100"/></div><div className="col-md-4"><label className="form-label mb-1">Tercer octeto inicial</label><input className="form-control" type="number" min="1" max="254" value={l.baseOctet||10} onChange={e=>setL3(i,'baseOctet',e.target.value)} placeholder="10"/></div></div></div>)}<button className="btn btn-sm btn-outline-dark" onClick={addL3}>Agregar WAN/LAN</button></div>}
         {draft.topology==='bridge'&&<div>{(draft.bridge?.pairs||[]).map((p,i)=><div className="border rounded p-2 mb-2" key={i}><strong>L2L #{i+1}</strong><select className="form-select my-1" value={p.in||''} onChange={e=>setBridge(i,'in',e.target.value)}><option value="">Entrada</option>{ifaces.map(x=><option key={x.name}>{x.name}</option>)}</select><select className="form-select my-1" value={p.out||''} onChange={e=>setBridge(i,'out',e.target.value)}><option value="">Salida</option>{ifaces.map(x=><option key={x.name}>{x.name}</option>)}</select></div>)}</div>}
-        <div className="d-flex flex-wrap gap-2 mt-3"><button className="btn btn-primary" onClick={()=>api('/api/reactui/submit',draft)}>Enviar parametros</button><button className="btn btn-outline-dark" onClick={()=>api('/api/prebeta/save',draft)}>Guardar draft</button><button className="btn btn-outline-dark" onClick={()=>api('/api/reactui/validate',draft)}>Validar</button><button className="btn btn-outline-dark" onClick={()=>api('/api/reactui/plan',draft)}>Plan de despliegue</button></div></div>
+        <div className="d-flex flex-wrap gap-2 mt-3"><button className="btn btn-primary" onClick={submit}>Enviar parametros</button><button className="btn btn-outline-dark" onClick={()=>api('/api/prebeta/save',draft)}>Guardar draft</button><button className="btn btn-outline-dark" onClick={()=>api('/api/reactui/validate',draft)}>Validar</button><button className="btn btn-outline-dark" onClick={()=>api('/api/reactui/plan',draft)}>Plan de despliegue</button></div></div>
         <div className="panel"><h4>Telegram multi-bot</h4><div className="input-group mb-2"><input className="form-control" type="password" value={linuxPassword} onChange={e=>setLinuxPassword(e.target.value)} placeholder="Password Linux para revelar token/chat id"/><button className="btn btn-outline-dark" onClick={revealTelegram}>Revelar</button></div>{(draft.telegram?.bots||[]).map((b,i)=><div className="border rounded p-2 mb-2" key={i}><label className="form-label mb-1">Nombre del bot</label><input className="form-control mb-2" value={b.name||''} onChange={e=>{const bots=[...(draft.telegram?.bots||[])]; bots[i]={...bots[i],name:e.target.value}; setDraft({...draft,telegram:{bots}})}} placeholder="principal"/><label className="form-label mb-1">Bot token</label><input className="form-control mb-2" value={b.token||''} onChange={e=>{const bots=[...(draft.telegram?.bots||[])]; bots[i]={...bots[i],token:e.target.value}; setDraft({...draft,telegram:{bots}})}} placeholder="__hidden__ hasta revelar"/><label className="form-label mb-1">Chat ID</label><input className="form-control mb-2" value={b.chatId||''} onChange={e=>{const bots=[...(draft.telegram?.bots||[])]; bots[i]={...bots[i],chatId:e.target.value}; setDraft({...draft,telegram:{bots}})}} placeholder="__hidden__ hasta revelar"/><button className="btn btn-sm btn-outline-dark" onClick={()=>api('/api/prebeta/telegram/validate',{...b,index:i})}>Validar sincronizacion</button></div>)}<button className="btn btn-sm btn-outline-dark" onClick={()=>setDraft({...draft,telegram:{bots:[...(draft.telegram?.bots||[]),{name:'bot',token:'',chatId:''}]}})}>Agregar bot</button></div></div>
       <div className="col-xl-4"><div className="panel mb-3"><h4>Diagrama conceptual</h4><div className="diagram">{diagram||'Define interfaces para generar el diagrama.'}</div></div><div className="panel"><h4>Resultado validacion/plan</h4><pre className="plan">{result?JSON.stringify(result,null,2):'Sin validacion todavia.'}</pre></div></div>
-      <div className="col-xl-4"><div className="panel mb-3"><h4>Daemons</h4>{(state.daemons||[]).map(s=><div className="d-flex justify-content-between align-items-center border-bottom py-2" key={s.name}><div><strong>{s.name}</strong><br/><span className={s.active==='active'?'ok':'bad'}>{s.active||'unknown'}</span> / {s.enabled||'unknown'}</div><button className="btn btn-sm btn-outline-dark" onClick={()=>api('/api/prebeta/daemon/restart',{service:s.name})}>Restart</button></div>)}</div><div className="panel"><h4>DHCP leases</h4><table className="table table-sm"><thead><tr><th>IP</th><th>Host</th><th>MAC</th><th>Estado</th></tr></thead><tbody>{(state.leases||[]).map((l,i)=><tr key={i}><td>{l.ip}</td><td>{l.host||'-'}</td><td>{l.mac||'-'}</td><td>{l.state||'-'}</td></tr>)}</tbody></table></div></div>
+      <div className="col-xl-4"><div className="panel mb-3"><h4>Inyeccion en vivo</h4><label className="form-label">Interfaz activa</label><select className="form-select mb-2" value={live.iface||((state.controlInterfaces||[])[0]||'')} onChange={e=>setLive({...live,iface:e.target.value})}>{(state.controlInterfaces||[]).map(i=><option key={i} value={i}>{state.meta?.[i]?.label||i}</option>)}</select><div className="row g-2"><div className="col"><label className="form-label mb-1">Delay ms</label><input className="form-control" type="number" min="0" value={live.delay} onChange={e=>setLive({...live,delay:e.target.value})}/></div><div className="col"><label className="form-label mb-1">Jitter ms</label><input className="form-control" type="number" min="0" value={live.jitter} onChange={e=>setLive({...live,jitter:e.target.value})}/></div><div className="col"><label className="form-label mb-1">Perdida %</label><input className="form-control" type="number" min="0" max="100" value={live.loss} onChange={e=>setLive({...live,loss:e.target.value})}/></div></div><div className="d-flex gap-2 mt-3"><button className="btn btn-primary" onClick={()=>applyLive(false)}>Aplicar ahora</button><button className="btn btn-outline-dark" onClick={()=>applyLive(true)}>Reset</button></div></div><div className="panel mb-3"><h4>Daemons</h4>{(state.daemons||[]).map(s=><div className="d-flex justify-content-between align-items-center border-bottom py-2" key={s.name}><div><strong>{s.name}</strong><br/><span className={s.active==='active'?'ok':'bad'}>{s.active||'unknown'}</span> / {s.enabled||'unknown'}</div><button className="btn btn-sm btn-outline-dark" onClick={()=>api('/api/prebeta/daemon/restart',{service:s.name})}>Restart</button></div>)}</div><div className="panel"><h4>DHCP leases</h4><table className="table table-sm"><thead><tr><th>IP</th><th>Host</th><th>MAC</th><th>Estado</th></tr></thead><tbody>{(state.leases||[]).map((l,i)=><tr key={i}><td>{l.ip}</td><td>{l.host||'-'}</td><td>{l.mac||'-'}</td><td>{l.state||'-'}</td></tr>)}</tbody></table></div></div>
     </div></div>
 }
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
@@ -2179,7 +2198,14 @@ def read_config_file():
             for line in f:
                 line=line.strip()
                 if not line or line.startswith('#') or '=' not in line: continue
-                k,v=line.split('=',1); data[k]=v
+                try:
+                    parsed=shlex.split(line,comments=False,posix=True)
+                    if parsed and '=' in parsed[0]:
+                        k,v=parsed[0].split('=',1); data[k]=v
+                        continue
+                except Exception:
+                    pass
+                k,v=line.split('=',1); data[k]=v.strip('"').strip("'")
     except Exception:
         pass
     return data
@@ -2323,16 +2349,13 @@ def prebeta_save():
     try:
         data=request.get_json(force=True,silent=False)
         data=merge_hidden_telegram_secrets(data, load_prebeta_draft())
-        os.makedirs(os.path.dirname(PREBETA_STATE_FILE),exist_ok=True)
-        with open(PREBETA_STATE_FILE,'w',encoding='utf-8') as f:
-            json.dump(data,f,ensure_ascii=False,indent=2)
+        write_prebeta_draft(data)
         return jsonify({'ok':True,'message':'Draft pre-beta guardado y disponible para la siguiente evolucion.'})
     except Exception as e:
         logger.exception('No se pudo guardar prebeta')
         return jsonify({'ok':False,'error':str(e)}),400
 
 def validate_reactui_draft(draft):
-    import ipaddress
     errors=[]; warnings=[]; actions=[]
     interfaces={x['name'] for x in list_interfaces()}
     used_ifaces=set()
@@ -2398,6 +2421,268 @@ def validate_reactui_draft(draft):
         actions.append('Reiniciar servicios y validar dashboard, DHCP, NAT/bridge y Telegram.')
     return {'ok':not errors,'errors':errors,'warnings':warnings,'actions':actions}
 
+def write_prebeta_draft(draft):
+    os.makedirs(os.path.dirname(PREBETA_STATE_FILE),exist_ok=True)
+    with open(PREBETA_STATE_FILE,'w',encoding='utf-8') as f:
+        json.dump(draft,f,ensure_ascii=False,indent=2)
+
+def normalize_l3_link(idx, link, segment):
+    vlans=int(link.get('vlans') or 1)
+    start=int(link.get('startVlan') or 100)
+    base=int(link.get('baseOctet') or 10)
+    mode=(link.get('wanMode') or 'dhcp').lower()
+    cidr=''
+    gateway=''
+    if mode == 'manual':
+        mask=str(link.get('wanMask') or '24').lstrip('/')
+        cidr=ipaddress.ip_interface(f"{link.get('wanIp')}/{mask}").with_prefixlen
+        gateway=str(ipaddress.ip_address(link.get('wanGateway') or ''))
+    else:
+        mode='dhcp'
+    return {
+        'idx':idx,'wan':link.get('wan') or '','lan':link.get('lan') or '',
+        'vlans':vlans,'start':start,'base':base,'segment':segment,
+        'mode':mode,'cidr':cidr,'gateway':gateway
+    }
+
+def runtime_iface_ip(iface):
+    ok,out=run_shell(f"ip -o -4 addr show dev {q(iface)} scope global",timeout=5)
+    if not ok:
+        ok,out=run_shell(f"ip -o -4 addr show dev {q(iface)}",timeout=5)
+    for line in out.splitlines():
+        parts=line.split()
+        if len(parts) >= 4 and '/' in parts[3]:
+            return parts[3].split('/')[0]
+    return 'N/D'
+
+def runtime_iface_public_ip(iface):
+    for endpoint in ('https://api.ipify.org','https://ifconfig.me/ip','https://icanhazip.com'):
+        ok,out=run_shell(f"curl --interface {q(iface)} -fsS --max-time 5 {q(endpoint)}",timeout=8)
+        value=(out or '').strip()
+        if ok and re.match(r'^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$',value):
+            return value
+    return 'N/D'
+
+def runtime_iface_bw(iface):
+    ok,out=run_shell(f"curl --interface {q(iface)} -LfsS --max-time 8 -o /dev/null -w '%{{speed_download}}' https://speed.cloudflare.com/__down?bytes=3000000",timeout=10)
+    try:
+        bps=float((out or '').strip())
+        return f'{(bps*8)/1000000:.2f} Mbps'
+    except Exception:
+        return 'N/D'
+
+def cleanup_runtime_topology(actions):
+    for iface in list(CONTROL_INTERFACES):
+        if re.match(r'^v\d+_\d+$',iface or ''):
+            action_step(actions,f'Eliminar VLAN administrada {iface}',f'sudo ip link del {q(iface)}',critical=False,timeout=10)
+            remove_netem_state(iface)
+        else:
+            action_step(actions,f'Limpiar qdisc {iface}',f'sudo tc qdisc del dev {q(iface)} root 2>/dev/null || true',critical=False,timeout=5)
+            action_step(actions,f'Sacar {iface} de bridge previo',f'sudo ip link set {q(iface)} nomaster 2>/dev/null || true',critical=False,timeout=5)
+            remove_netem_state(iface)
+    try:
+        names=sorted(os.listdir('/sys/class/net'))
+    except Exception:
+        names=[]
+    for name in names:
+        if re.match(r'^br_wan\d+$',name or '') and os.path.isdir(f'/sys/class/net/{name}/bridge'):
+            action_step(actions,f'Eliminar bridge administrado {name}',f'sudo ip link del {q(name)}',critical=False,timeout=10)
+
+def remove_direct_nat_rules(actions):
+    removed=0
+    if isinstance(INTERFACE_META,dict):
+        for meta in INTERFACE_META.values():
+            wan=meta.get('wan','') if isinstance(meta,dict) else ''
+            subnet=meta.get('subnet','') if isinstance(meta,dict) else ''
+            if not wan or not subnet:
+                continue
+            while True:
+                ok,_=run_shell(f'sudo iptables -t nat -D POSTROUTING -o {q(wan)} -s {q(subnet)} -j MASQUERADE',timeout=5)
+                if not ok:
+                    break
+                removed+=1
+    actions.append({'ok':True,'label':'Limpiar NAT directo previo','cmd':'iptables -D POSTROUTING ...','output':f'{removed} regla(s) removidas'})
+
+def configure_runtime_nat(nat_rules, actions):
+    remove_direct_nat_rules(actions)
+    action_step(actions,'Crear cadena NAT WAN_SIM', 'sudo iptables -t nat -N WANSIM_POSTROUTING 2>/dev/null || true', critical=False, timeout=5)
+    action_step(actions,'Limpiar cadena NAT WAN_SIM', 'sudo iptables -t nat -F WANSIM_POSTROUTING', timeout=5)
+    ok,_=run_shell('sudo iptables -t nat -C POSTROUTING -j WANSIM_POSTROUTING',timeout=5)
+    if not ok:
+        action_step(actions,'Anclar cadena NAT WAN_SIM', 'sudo iptables -t nat -A POSTROUTING -j WANSIM_POSTROUTING', timeout=5)
+    for wan,subnet in nat_rules:
+        action_step(actions,f'NAT {subnet} -> {wan}',f'sudo iptables -t nat -A WANSIM_POSTROUTING -o {q(wan)} -s {q(subnet)} -j MASQUERADE',timeout=5)
+    action_step(actions,'Persistir reglas iptables',f'sudo iptables-save | sudo tee {q(IPTABLES_SAVE_FILE)} >/dev/null',critical=False,timeout=10)
+
+def configure_runtime_dhcp(dhcp_rows, actions):
+    if not dhcp_rows:
+        action_step(actions,'Detener DHCP sin VLANs',f'sudo systemctl stop {q(DHCP_SERVICE)}',critical=False,timeout=12)
+        return
+    conf=['default-lease-time 600;','max-lease-time 7200;','authoritative;','']
+    ifaces=[]
+    for segment,octet,iface in dhcp_rows:
+        ifaces.append(iface)
+        conf.extend([
+            f'subnet {segment}.{octet}.0 netmask 255.255.255.0 {{',
+            f'    range {segment}.{octet}.100 {segment}.{octet}.200;',
+            f'    option routers {segment}.{octet}.1;',
+            '}',
+            ''
+        ])
+    tmp='/tmp/wansim_reactui_dhcpd.conf'
+    with open(tmp,'w',encoding='utf-8') as f:
+        f.write('\n'.join(conf))
+    defaults=f'INTERFACESv4="{" ".join(ifaces)}"\nDHCPDARGS="{" ".join(ifaces)}"\n'
+    tmp_defaults='/tmp/wansim_reactui_dhcp_defaults'
+    with open(tmp_defaults,'w',encoding='utf-8') as f:
+        f.write(defaults)
+    action_step(actions,'Publicar dhcpd.conf',f'cat {q(tmp)} | sudo tee /etc/dhcp/dhcpd.conf >/dev/null',timeout=10)
+    action_step(actions,'Publicar interfaces DHCP',f'cat {q(tmp_defaults)} | sudo tee {q(DHCP_DEFAULT_FILE)} >/dev/null',critical=False,timeout=10)
+    action_step(actions,'Validar DHCP', 'sudo dhcpd -t -cf /etc/dhcp/dhcpd.conf', timeout=12)
+    action_step(actions,'Reiniciar DHCP',f'sudo systemctl enable {q(DHCP_SERVICE)} >/dev/null 2>&1; sudo systemctl restart {q(DHCP_SERVICE)}',timeout=20)
+
+def write_runtime_config(draft, runtime):
+    cfg=read_config_file()
+    lines=[]
+    topology=draft.get('topology') or 'nat'
+    lines.append(f'TOPOLOGY_MODE={topology}')
+    if topology == 'nat':
+        links=runtime.get('links',[])
+        l3_csv=';'.join(f"{x['idx']}:{x['wan']}:{x['lan']}:{x['start']}:{x['base']}:{x['segment']}:{x['mode']}:{x['cidr']}:{x['gateway']}" for x in links)
+        first=links[0] if links else {}
+        lines.extend([
+            f'NUM_L3_LINKS={len(links)}',
+            f'L3_LINKS_CSV={l3_csv}',
+            f"NUM_VLANS={first.get('vlans',0)}",
+            f"START_VLAN={first.get('start',0)}",
+            'CONFIG_DHCP=s',
+            f"SEGMENT_PREFIX={first.get('segment',draft.get('l3',{}).get('segment','10.254'))}",
+            f"BASE_OCTET={first.get('base',0)}",
+            f"WAN_IF={first.get('wan','')}",
+            f"LAN_IF={first.get('lan','')}",
+            'DEST_IF=',
+            'CONFIG_TC=s',
+            'IS_MGMT=n',
+            'NUM_BRIDGE_IFACES=0',
+            'NUM_BRIDGE_PAIRS=0',
+            'BRIDGE_INTERFACES_CSV=',
+            'BRIDGE_PAIRS_CSV='
+        ])
+    else:
+        pairs=runtime.get('pairs',[])
+        csv=';'.join(f"{p['bridge']}:{p['in']}:{p['out']}" for p in pairs)
+        control=','.join(runtime.get('control',[]))
+        first=pairs[0] if pairs else {}
+        lines.extend([
+            'NUM_L3_LINKS=0','L3_LINKS_CSV=','NUM_VLANS=0','START_VLAN=0',
+            'CONFIG_DHCP=n','SEGMENT_PREFIX=','BASE_OCTET=0',
+            'WAN_IF=','LAN_IF=','DEST_IF=',
+            'CONFIG_TC=s','IS_MGMT=n',
+            f"NUM_BRIDGE_IFACES={len(runtime.get('control',[]))}",
+            f"NUM_BRIDGE_PAIRS={len(pairs)}",
+            f'BRIDGE_INTERFACES_CSV={control}',
+            f'BRIDGE_PAIRS_CSV={csv}'
+        ])
+    for key,default in (
+        ('INTEGRATE_TELEGRAM','n'),('TELEGRAM_TOKEN',''),('TELEGRAM_CHAT_ID',''),
+        ('ENABLE_HTTPS','n'),('TLS_MODE','none'),('TLS_CERT_FILE',TLS_CERT_FILE),
+        ('TLS_KEY_FILE',TLS_KEY_FILE),('TLS_ENABLE_FILE',TLS_ENABLE_FILE)
+    ):
+        lines.append(f'{key}={cfg.get(key,default)}')
+    rendered=[]
+    for line in lines:
+        key,value=line.split('=',1)
+        rendered.append(f'{key}={shlex.quote(str(value))}')
+    with open(CONFIG_FILE,'w',encoding='utf-8') as f:
+        f.write('\n'.join(rendered)+'\n')
+
+def apply_runtime_nat(draft, actions):
+    segment=((draft.get('l3') or {}).get('segment') or '10.254').strip()
+    links=[normalize_l3_link(i,link,segment) for i,link in enumerate((draft.get('l3') or {}).get('links') or [],1)]
+    cleanup_runtime_topology(actions)
+    control=[]; meta={}; nat_rules=[]; dhcp_rows=[]
+    action_step(actions,'Habilitar forwarding IPv4','sudo sysctl -w net.ipv4.ip_forward=1 >/dev/null',timeout=5)
+    for link in links:
+        action_step(actions,f"Activar WAN {link['wan']}",f"sudo ip link set {q(link['wan'])} up",critical=False,timeout=5)
+        action_step(actions,f"Activar LAN {link['lan']}",f"sudo ip link set {q(link['lan'])} up",critical=False,timeout=5)
+        if link['mode'] == 'manual':
+            metric=200+link['idx']
+            action_step(actions,f"WAN manual {link['wan']}",f"sudo ip addr flush dev {q(link['wan'])}; sudo ip addr add {q(link['cidr'])} dev {q(link['wan'])}; sudo ip route replace default via {q(link['gateway'])} dev {q(link['wan'])} metric {metric}",timeout=15)
+        else:
+            action_step(actions,f"WAN DHCP {link['wan']}",f"sudo dhclient -r {q(link['wan'])} >/dev/null 2>&1 || true; sudo dhclient {q(link['wan'])}",critical=False,timeout=25)
+        wan_private=runtime_iface_ip(link['wan'])
+        wan_public=runtime_iface_public_ip(link['wan'])
+        wan_bw=runtime_iface_bw(link['wan'])
+        wan_mac=open(f"/sys/class/net/{link['wan']}/address",encoding='utf-8').read().strip() if os.path.exists(f"/sys/class/net/{link['wan']}/address") else 'N/D'
+        lan_mac=open(f"/sys/class/net/{link['lan']}/address",encoding='utf-8').read().strip() if os.path.exists(f"/sys/class/net/{link['lan']}/address") else 'N/D'
+        for offset in range(link['vlans']):
+            vlan_id=link['start']+offset
+            octet=link['base']+offset
+            vlan=f"v{link['idx']}_{vlan_id}"
+            subnet=f"{link['segment']}.{octet}.0/24"
+            action_step(actions,f'Eliminar {vlan} si existe',f'sudo ip link del {q(vlan)} 2>/dev/null || true',critical=False,timeout=5)
+            action_step(actions,f'Crear {vlan}',f"sudo ip link add link {q(link['lan'])} name {q(vlan)} type vlan id {vlan_id}",timeout=10)
+            action_step(actions,f'Asignar IP {vlan}',f"sudo ip addr add {q(f'{link['segment']}.{octet}.1/24')} dev {q(vlan)}; sudo ip link set {q(vlan)} up",timeout=10)
+            control.append(vlan)
+            meta[vlan]={
+                'label':f"VLAN {vlan_id} ({link['lan']} -> {link['wan']})",
+                'bridge':'','role':'L3/NAT','peer':link['wan'],'mac':wan_mac,
+                'wan':link['wan'],'lan':link['lan'],'wan_private':wan_private,
+                'wan_public':wan_public,'wan_bw':wan_bw,'subnet':subnet,
+                'lan_mac':lan_mac,'wan_addr_mode':link['mode'],
+                'wan_cidr':link['cidr'],'wan_gateway':link['gateway']
+            }
+            nat_rules.append((link['wan'],subnet))
+            dhcp_rows.append((link['segment'],octet,vlan))
+    configure_runtime_dhcp(dhcp_rows,actions)
+    configure_runtime_nat(nat_rules,actions)
+    return {'control':control,'meta':meta,'links':links}
+
+def apply_runtime_bridge(draft, actions):
+    cleanup_runtime_topology(actions)
+    configure_runtime_nat([],actions)
+    action_step(actions,'Detener DHCP para bridge',f'sudo systemctl stop {q(DHCP_SERVICE)}',critical=False,timeout=12)
+    control=[]; meta={}; pairs=[]
+    active=[p for p in ((draft.get('bridge') or {}).get('pairs') or []) if p.get('in') or p.get('out')]
+    for idx,pair in enumerate(active,1):
+        br=f'br_wan{idx}'; inn=pair.get('in'); out=pair.get('out')
+        action_step(actions,f'Crear {br}',f'sudo ip link add name {q(br)} type bridge',timeout=10)
+        for iface,role,peer in ((inn,'entrada',out),(out,'salida',inn)):
+            action_step(actions,f'Preparar {iface}',f'sudo tc qdisc del dev {q(iface)} root 2>/dev/null || true; sudo ip link set {q(iface)} nomaster 2>/dev/null || true; sudo ip link set {q(iface)} up',critical=False,timeout=8)
+            action_step(actions,f'Agregar {iface} a {br}',f'sudo ip link set {q(iface)} master {q(br)}',timeout=8)
+            mac=open(f'/sys/class/net/{iface}/address',encoding='utf-8').read().strip() if os.path.exists(f'/sys/class/net/{iface}/address') else 'N/D'
+            control.append(iface)
+            meta[iface]={'label':f'Bridge {idx} - {role} ({iface})','bridge':br,'role':role,'peer':peer,'mac':mac}
+        action_step(actions,f'Levantar {br}',f'sudo ip link set {q(br)} up',timeout=5)
+        pairs.append({'bridge':br,'in':inn,'out':out})
+    return {'control':control,'meta':meta,'pairs':pairs}
+
+def apply_reactui_runtime(draft):
+    global CONTROL_INTERFACES,VLAN_INTERFACES,INTERFACE_META,TOPOLOGY_MODE
+    actions=[]
+    result=validate_reactui_draft(draft)
+    if not result['ok']:
+        result['message']='Parametros rechazados por validacion.'
+        return result
+    draft=merge_hidden_telegram_secrets(draft, load_prebeta_draft())
+    try:
+        if draft.get('topology') == 'bridge':
+            runtime=apply_runtime_bridge(draft,actions)
+            TOPOLOGY_MODE='bridge'
+        else:
+            runtime=apply_runtime_nat(draft,actions)
+            TOPOLOGY_MODE='nat'
+        CONTROL_INTERFACES=runtime.get('control',[])
+        VLAN_INTERFACES=CONTROL_INTERFACES
+        INTERFACE_META=runtime.get('meta',{})
+        write_prebeta_draft(draft)
+        write_runtime_config(draft,runtime)
+        result.update({'ok':True,'applied':True,'actions':actions,'controlInterfaces':CONTROL_INTERFACES,'meta':INTERFACE_META,'message':'Parametros aplicados en tiempo real.'})
+    except Exception as e:
+        logger.exception('Aplicacion runtime ReactUI fallo')
+        result.update({'ok':False,'applied':False,'actions':actions,'message':'La aplicacion runtime fallo; revisa la accion marcada en rojo.','error':str(e)})
+    return result
+
 @app.route('/api/reactui/validate',methods=['POST'])
 def reactui_validate():
     draft=request.get_json(force=True,silent=True) or {}
@@ -2416,18 +2701,23 @@ def reactui_plan():
 @app.route('/api/reactui/submit',methods=['POST'])
 def reactui_submit():
     draft=request.get_json(force=True,silent=True) or {}
-    result=validate_reactui_draft(draft)
-    if not result['ok']:
-        result['message']='Parametros rechazados por validacion.'
-        return jsonify(result),400
-    draft=merge_hidden_telegram_secrets(draft, load_prebeta_draft())
-    os.makedirs(os.path.dirname(PREBETA_STATE_FILE),exist_ok=True)
-    with open(PREBETA_STATE_FILE,'w',encoding='utf-8') as f:
-        json.dump(draft,f,ensure_ascii=False,indent=2)
-    result['message']='Parametros recibidos y guardados en ReactUI pre-beta.'
-    result['applied']=False
-    result['note']='Pre-beta: guardado validado; la aplicacion real de topologia queda bloqueada hasta marcar esta etapa como estable.'
-    return jsonify(result)
+    try:
+        result=apply_reactui_runtime(draft)
+        return jsonify(result), (200 if result.get('ok') else 400)
+    except Exception as e:
+        logger.exception('Submit ReactUI fallo')
+        return jsonify({'ok':False,'applied':False,'message':'Submit ReactUI fallo durante aplicacion runtime.','error':str(e)}),500
+
+@app.route('/api/reactui/netem',methods=['POST'])
+def reactui_netem():
+    data=request.get_json(force=True,silent=True) or {}
+    iface=data.get('iface') or ''
+    if iface not in CONTROL_INTERFACES:
+        return jsonify({'ok':False,'error':f'Interfaz no controlada por ReactUI: {iface}'}),400
+    ok,out=apply_netem(iface,data.get('delay',0),data.get('jitter',0),data.get('loss',0))
+    label=INTERFACE_META.get(iface,{}).get('label',iface) if isinstance(INTERFACE_META,dict) else iface
+    payload={'ok':ok,'iface':iface,'message':f'Inyeccion aplicada en {label}.' if ok else f'Error aplicando en {label}.','verification':out,'stats':collect().get(iface,{})}
+    return jsonify(payload), (200 if ok else 400)
 
 @app.route('/api/prebeta/daemon/restart',methods=['POST'])
 def prebeta_daemon_restart():
@@ -2539,7 +2829,7 @@ HTTPS_ENABLED=0
 if [ "${ENABLE_HTTPS:-n}" = "s" ] && [ -n "${TLS_CERT_FILE:-}" ] && [ -n "${TLS_KEY_FILE:-}" ]; then
     HTTPS_ENABLED=1
 fi
-export TELEGRAM_TOKEN TELEGRAM_CHAT_ID TELEGRAM_ENABLED PYTHON_VLAN_LIST PYTHON_INTERFACE_META DASHBOARD_PORT WANSIM_VERSION NETEM_STATE_FILE HTTPS_ENABLED TLS_CERT_FILE TLS_KEY_FILE TLS_DIR TLS_ENABLE_FILE CONFIG_FILE PREBETA_STATE_FILE DHCP_SERVICE TOPOLOGY_MODE CURRENT_USER
+export TELEGRAM_TOKEN TELEGRAM_CHAT_ID TELEGRAM_ENABLED PYTHON_VLAN_LIST PYTHON_INTERFACE_META DASHBOARD_PORT WANSIM_VERSION NETEM_STATE_FILE HTTPS_ENABLED TLS_CERT_FILE TLS_KEY_FILE TLS_DIR TLS_ENABLE_FILE CONFIG_FILE PREBETA_STATE_FILE DHCP_SERVICE DHCP_DEFAULT_FILE IPTABLES_SAVE_FILE TOPOLOGY_MODE CURRENT_USER
 if ! "$PYTHON_BIN" - "$WANSIM_DASHBOARD" <<'PYREPLACE'
 import json
 import os
@@ -2582,10 +2872,12 @@ replacements = {
     "__CONFIG_FILE_LITERAL__": json.dumps(os.environ.get("CONFIG_FILE", "")),
     "__PREBETA_STATE_FILE_LITERAL__": json.dumps(os.environ.get("PREBETA_STATE_FILE", "")),
     "__DHCP_SERVICE_LITERAL__": json.dumps(os.environ.get("DHCP_SERVICE", "")),
+    "__DHCP_DEFAULT_FILE_LITERAL__": json.dumps(os.environ.get("DHCP_DEFAULT_FILE", "")),
+    "__IPTABLES_SAVE_FILE_LITERAL__": json.dumps(os.environ.get("IPTABLES_SAVE_FILE", "")),
     "__TOPOLOGY_MODE_LITERAL__": json.dumps(os.environ.get("TOPOLOGY_MODE", "")),
     "__CURRENT_USER_LITERAL__": json.dumps(os.environ.get("CURRENT_USER", "")),
     "__NETEM_STATE_FILE__": os.environ.get("NETEM_STATE_FILE", os.path.expanduser("~/wansim_netem_state.json")),
-    "__WANSIM_VERSION__": os.environ.get("WANSIM_VERSION", "1.117-stable"),
+    "__WANSIM_VERSION__": os.environ.get("WANSIM_VERSION", "1.118-prebeta"),
 }
 for key, value in replacements.items():
     text = text.replace(key, value)
