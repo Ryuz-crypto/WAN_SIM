@@ -10,7 +10,7 @@ exec > >(tee -a /tmp/wansim_debug.log) 2>&1
 # -----------------------------------------------
 # Variables de configuración
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WANSIM_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "1.118-prebeta")"
+WANSIM_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "1.119-prebeta")"
 USER_HOME="${HOME:-$(getent passwd "$(whoami)" | cut -d: -f6)}"
 WANSIM_HOME="$USER_HOME/.wansim"
 PYTHON_VENV="$WANSIM_HOME/venv"
@@ -856,11 +856,7 @@ if [ "$INTERACTIVE" -eq 1 ]; then
             NUM_L3_LINKS=${NUM_L3_LINKS:-1}
             if [[ "$NUM_L3_LINKS" =~ ^[1-2]$ ]]; then break; else log_message "ERROR" "Ingresa 1 o 2."; fi
         done
-        while true; do
-            read -p "${COLOR_INFO}[ENTRADA] ¿Cuántas VLANs simular por par WAN/LAN? [predeterminado 10]: ${COLOR_RESET}" NUM_VLANS
-            NUM_VLANS=${NUM_VLANS:-10}
-            if [[ "$NUM_VLANS" =~ ^[1-9][0-9]*$ ]]; then break; else log_message "ERROR" "Ingresa un número válido."; fi
-        done
+        NUM_VLANS=10
         while true; do
             read -p "${COLOR_INFO}[ENTRADA] ¿Configurar DHCP? (s/n) [predeterminado s]: ${COLOR_RESET}" CONFIG_DHCP
             CONFIG_DHCP=${CONFIG_DHCP:-s}
@@ -884,6 +880,7 @@ if [ "$INTERACTIVE" -eq 1 ]; then
             BASE_OCTET=10
         fi
         L3_LINKS_CSV=""; USED_INTERFACES=""; USED_VLAN_RANGES=""; USED_OCTET_RANGES=""
+        next_octet=$BASE_OCTET
         for (( link_idx=1; link_idx<=NUM_L3_LINKS; link_idx++ )); do
             echo "${COLOR_CYAN}--- Par L3 #$link_idx ---${COLOR_RESET}"
             while true; do
@@ -891,30 +888,44 @@ if [ "$INTERACTIVE" -eq 1 ]; then
                 if [[ -n "$wan_iface" && " ${VALID_INTERFACES[*]} " =~ " $wan_iface " && ! " $USED_INTERFACES " =~ " $wan_iface " ]]; then log_message "OK" "WAN $wan_iface válida."; break; else log_message "ERROR" "WAN inválida o ya seleccionada."; fi
             done
             while true; do
-                read -p "${COLOR_INFO}[ENTRADA] Par #$link_idx - interfaz LAN/trunk VLAN: ${COLOR_RESET}" lan_iface
+                read -p "${COLOR_INFO}[ENTRADA] Par #$link_idx - interfaz LAN: ${COLOR_RESET}" lan_iface
                 if [[ -n "$lan_iface" && " ${VALID_INTERFACES[*]} " =~ " $lan_iface " && "$lan_iface" != "$wan_iface" && ! " $USED_INTERFACES " =~ " $lan_iface " ]]; then log_message "OK" "LAN $lan_iface válida."; break; else log_message "ERROR" "LAN inválida, duplicada o igual a WAN."; fi
             done
             while true; do
-                read -p "${COLOR_INFO}[ENTRADA] Par #$link_idx - ID inicial VLAN (1-4094): ${COLOR_RESET}" start_vlan
-                if [[ "$start_vlan" =~ ^[0-9]+$ && "$start_vlan" -ge 1 && "$start_vlan" -le 4094 && $((start_vlan + NUM_VLANS - 1)) -le 4094 ]]; then
-                    overlap=0
-                    for range in $USED_VLAN_RANGES; do
-                        IFS='-' read -r r_start r_end <<< "$range"
-                        if [ "$start_vlan" -le "$r_end" ] && [ $((start_vlan + NUM_VLANS - 1)) -ge "$r_start" ]; then overlap=1; fi
-                    done
-                    [ "$overlap" -eq 0 ] && break
-                fi
-                log_message "ERROR" "Rango VLAN inválido o repetido. Debe caber en 1-4094 y no solaparse."
+                read -p "${COLOR_INFO}[ENTRADA] Par #$link_idx - modo LAN (vlan/access) [vlan=etiquetada, access=sin etiqueta; predeterminado vlan]: ${COLOR_RESET}" lan_mode
+                lan_mode=${lan_mode:-vlan}
+                case "$lan_mode" in vlan|access) break ;; *) log_message "ERROR" "Ingresa vlan o access." ;; esac
             done
+            link_count=1; start_vlan=0
+            if [ "$lan_mode" = "vlan" ]; then
+                while true; do
+                    read -p "${COLOR_INFO}[ENTRADA] Par #$link_idx - numero de VLANs [predeterminado 10]: ${COLOR_RESET}" link_count
+                    link_count=${link_count:-10}
+                    if [[ "$link_count" =~ ^[1-9][0-9]*$ && "$link_count" -le 254 ]]; then break; fi
+                    log_message "ERROR" "Ingresa un numero entre 1 y 254."
+                done
+                while true; do
+                    read -p "${COLOR_INFO}[ENTRADA] Par #$link_idx - ID inicial VLAN (1-4094): ${COLOR_RESET}" start_vlan
+                    if [[ "$start_vlan" =~ ^[0-9]+$ && "$start_vlan" -ge 1 && "$start_vlan" -le 4094 && $((start_vlan + link_count - 1)) -le 4094 ]]; then
+                        overlap=0
+                        for range in $USED_VLAN_RANGES; do
+                            IFS='-' read -r r_start r_end <<< "$range"
+                            if [ "$start_vlan" -le "$r_end" ] && [ $((start_vlan + link_count - 1)) -ge "$r_start" ]; then overlap=1; fi
+                        done
+                        [ "$overlap" -eq 0 ] && break
+                    fi
+                    log_message "ERROR" "Rango VLAN inválido o repetido. Debe caber en 1-4094 y no solaparse."
+                done
+            fi
             while true; do
-                default_octet=$(( BASE_OCTET + (link_idx - 1) * NUM_VLANS ))
+                default_octet=$next_octet
                 read -p "${COLOR_INFO}[ENTRADA] Par #$link_idx - tercer octeto inicial [predeterminado $default_octet]: ${COLOR_RESET}" base_octet_link
                 base_octet_link=${base_octet_link:-$default_octet}
-                if [[ "$base_octet_link" =~ ^[0-9]+$ && "$base_octet_link" -ge 1 && $((base_octet_link + NUM_VLANS - 1)) -le 254 ]]; then
+                if [[ "$base_octet_link" =~ ^[0-9]+$ && "$base_octet_link" -ge 1 && $((base_octet_link + link_count - 1)) -le 254 ]]; then
                     overlap=0
                     for range in $USED_OCTET_RANGES; do
                         IFS='-' read -r r_start r_end <<< "$range"
-                        if [ "$base_octet_link" -le "$r_end" ] && [ $((base_octet_link + NUM_VLANS - 1)) -ge "$r_start" ]; then overlap=1; fi
+                        if [ "$base_octet_link" -le "$r_end" ] && [ $((base_octet_link + link_count - 1)) -ge "$r_start" ]; then overlap=1; fi
                     done
                     [ "$overlap" -eq 0 ] && break
                 fi
@@ -948,7 +959,7 @@ if [ "$INTERACTIVE" -eq 1 ]; then
                             valid_ipv4 "$wan_gateway" && break
                             log_message "ERROR" "Gateway invalido."
                         done
-                        if ! wan_cidr_overlaps_lan_range "$wan_cidr" "$SEGMENT_PREFIX" "$base_octet_link" "$NUM_VLANS"; then
+                        if ! wan_cidr_overlaps_lan_range "$wan_cidr" "$SEGMENT_PREFIX" "$base_octet_link" "$link_count"; then
                             log_message "ERROR" "La red WAN $wan_cidr se solapa con las VLAN LAN ${SEGMENT_PREFIX}.${base_octet_link}.0/24..."
                             continue
                         fi
@@ -960,12 +971,15 @@ if [ "$INTERACTIVE" -eq 1 ]; then
                 esac
             done
             USED_INTERFACES="$USED_INTERFACES $wan_iface $lan_iface"
-            USED_VLAN_RANGES="$USED_VLAN_RANGES $start_vlan-$((start_vlan + NUM_VLANS - 1))"
-            USED_OCTET_RANGES="$USED_OCTET_RANGES $base_octet_link-$((base_octet_link + NUM_VLANS - 1))"
+            if [ "$lan_mode" = "vlan" ]; then
+                USED_VLAN_RANGES="$USED_VLAN_RANGES $start_vlan-$((start_vlan + link_count - 1))"
+            fi
+            USED_OCTET_RANGES="$USED_OCTET_RANGES $base_octet_link-$((base_octet_link + link_count - 1))"
+            next_octet=$((base_octet_link + link_count))
             [ -n "$L3_LINKS_CSV" ] && L3_LINKS_CSV+=";"
-            L3_LINKS_CSV+="$link_idx:$wan_iface:$lan_iface:$start_vlan:$base_octet_link:$SEGMENT_PREFIX:$wan_addr_mode:$wan_cidr:$wan_gateway"
+            L3_LINKS_CSV+="$link_idx:$wan_iface:$lan_iface:$start_vlan:$base_octet_link:$SEGMENT_PREFIX:$wan_addr_mode:$wan_cidr:$wan_gateway:$lan_mode:$link_count"
         done
-        IFS=':' read -r __idx WAN_IF LAN_IF START_VLAN BASE_OCTET SEGMENT_PREFIX WAN_ADDR_MODE WAN_CIDR WAN_GATEWAY <<< "${L3_LINKS_CSV%%;*}"
+        IFS=':' read -r __idx WAN_IF LAN_IF START_VLAN BASE_OCTET SEGMENT_PREFIX WAN_ADDR_MODE WAN_CIDR WAN_GATEWAY LAN_MODE NUM_VLANS <<< "${L3_LINKS_CSV%%;*}"
         BRIDGE_INTERFACES=(); BRIDGE_IN_IFS=(); BRIDGE_OUT_IFS=()
         NUM_BRIDGE_IFACES=0; NUM_BRIDGE_PAIRS=0; BRIDGE_PAIRS_CSV=""
     fi
@@ -1176,7 +1190,14 @@ if [ "$TOPOLOGY_MODE" = "nat" ]; then
     IFS=';' read -r -a L3_LINKS <<< "$L3_LINKS_CSV"
     for link in "${L3_LINKS[@]}"; do
         [ -z "$link" ] && continue
-        IFS=':' read -r link_idx wan_iface lan_iface start_vlan base_octet_link segment_prefix_link wan_addr_mode wan_cidr wan_gateway <<< "$link"
+        IFS=':' read -r link_idx wan_iface lan_iface start_vlan base_octet_link segment_prefix_link wan_addr_mode wan_cidr wan_gateway lan_mode link_count <<< "$link"
+        lan_mode=${lan_mode:-vlan}
+        link_count=${link_count:-${NUM_VLANS:-10}}
+        case "$lan_mode" in
+            access) link_count=1 ;;
+            vlan) ;;
+            *) log_message "ERROR" "Modo LAN invalido: $lan_mode"; exit 1 ;;
+        esac
         segment_prefix_link=${segment_prefix_link:-192.168}
         wan_addr_mode=${wan_addr_mode:-dhcp}
         log_message "INFO" "Preparando L3#$link_idx WAN=$wan_iface LAN=$lan_iface VLAN_START=$start_vlan OCTETO=$base_octet_link..."
@@ -1190,7 +1211,7 @@ if [ "$TOPOLOGY_MODE" = "nat" ]; then
                 log_message "ERROR" "WAN $wan_iface esta en modo manual pero faltan CIDR o gateway validos."
                 exit 1
             fi
-            if ! wan_cidr_overlaps_lan_range "$wan_cidr" "$segment_prefix_link" "$base_octet_link" "$NUM_VLANS"; then
+            if ! wan_cidr_overlaps_lan_range "$wan_cidr" "$segment_prefix_link" "$base_octet_link" "$link_count"; then
                 log_message "ERROR" "La red WAN $wan_cidr se solapa con las VLAN LAN del par #$link_idx."
                 exit 1
             fi
@@ -1203,15 +1224,21 @@ if [ "$TOPOLOGY_MODE" = "nat" ]; then
         lan_mac=$(cat "/sys/class/net/$lan_iface/address" 2>/dev/null || echo "N/D")
         log_message "OK" "L3#$link_idx WAN $wan_iface privada=$wan_private publica=$wan_public bw=$wan_bw"
 
-        for (( i=0; i<${NUM_VLANS:-0}; i++ )); do
+        for (( i=0; i<link_count; i++ )); do
             current_vlan_id=$(( start_vlan + i ))
             subnet_octet=$(( base_octet_link + i ))
-            vlan_name="v${link_idx}_${current_vlan_id}"
-            [ ${#vlan_name} -le 15 ] || { log_message "ERROR" "Nombre VLAN $vlan_name excede 15 caracteres."; exit 1; }
-            sudo ip link add link "$lan_iface" name "$vlan_name" type vlan id "$current_vlan_id" >/tmp/vlan_error.log 2>&1 || {
-                log_message "ERROR" "No se pudo crear $vlan_name: $(cat /tmp/vlan_error.log)"
-                exit 1
-            }
+            if [ "$lan_mode" = "access" ]; then
+                vlan_name="$lan_iface"
+                lan_label="Acceso sin etiqueta ($lan_iface -> $wan_iface)"
+            else
+                vlan_name="v${link_idx}_${current_vlan_id}"
+                lan_label="VLAN $current_vlan_id ($lan_iface -> $wan_iface)"
+                [ ${#vlan_name} -le 15 ] || { log_message "ERROR" "Nombre VLAN $vlan_name excede 15 caracteres."; exit 1; }
+                sudo ip link add link "$lan_iface" name "$vlan_name" type vlan id "$current_vlan_id" >/tmp/vlan_error.log 2>&1 || {
+                    log_message "ERROR" "No se pudo crear $vlan_name: $(cat /tmp/vlan_error.log)"
+                    exit 1
+                }
+            fi
             sudo ip addr add "${segment_prefix_link}.${subnet_octet}.1/24" dev "$vlan_name" >/tmp/ip_error.log 2>&1 || {
                 log_message "ERROR" "No se pudo asignar IP a $vlan_name: $(cat /tmp/ip_error.log)"
                 exit 1
@@ -1222,22 +1249,22 @@ if [ "$TOPOLOGY_MODE" = "nat" ]; then
             PYTHON_VLAN_LIST=$(append_json_item "$PYTHON_VLAN_LIST" "$vlan_name")
             subnet="${segment_prefix_link}.${subnet_octet}.0/24"
             printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-                "$vlan_name" "VLAN $current_vlan_id ($lan_iface -> $wan_iface)" "" "L3/NAT" "$wan_iface" "$wan_mac" \
+                "$vlan_name" "$lan_label" "" "L3/NAT" "$wan_iface" "$wan_mac" \
                 "$wan_iface" "$lan_iface" "$wan_private" "$wan_public" "$wan_bw" "$subnet" "$lan_mac" "$wan_addr_mode" "$wan_cidr" "$wan_gateway" >> "$META_TSV"
             printf '%s\t%s\t%s\n' "$segment_prefix_link" "$subnet_octet" "$vlan_name" >> "$DHCP_TSV"
             printf '%s\t%s.%s.0/24\n' "$wan_iface" "$segment_prefix_link" "$subnet_octet" >> "$NAT_TSV"
-            log_message "OK" "Creada $vlan_name VLAN=$current_vlan_id subnet=${segment_prefix_link}.${subnet_octet}.0/24 WAN=$wan_iface"
+            log_message "OK" "Configurada $vlan_name modo=$lan_mode subnet=${segment_prefix_link}.${subnet_octet}.0/24 WAN=$wan_iface"
         done
     done
     PYTHON_VLAN_LIST+="]"
 
     if [ ${#VALID_VLANS[@]} -eq 0 ]; then
-        log_message "ERROR" "No se creó ninguna VLAN válida en modo L3."
+        log_message "ERROR" "No se configuro ninguna LAN valida en modo L3."
         exit 1
     fi
 
     if [ "$CONFIG_DHCP" = "s" ]; then
-        log_message "INFO" "Configurando DHCP para ${#DHCP_INTERFACES[@]} VLAN(s)..."
+        log_message "INFO" "Configurando DHCP para ${#DHCP_INTERFACES[@]} red(es) LAN..."
         [ -f /etc/dhcp/dhcpd.conf ] && sudo cp /etc/dhcp/dhcpd.conf /etc/dhcp/dhcpd.conf.bak
         sudo tee /etc/dhcp/dhcpd.conf > /dev/null <<EOL
 default-lease-time 600;
@@ -2061,7 +2088,7 @@ REACTUI_STAGE_TEMPLATE=r"""
 <body><div id="root"></div>
 <script type="text/babel">
 const {useEffect,useState}=React;
-const emptyDraft={topology:'nat',l3:{segment:'10.254',links:[{wan:'',lan:'',vlans:10,startVlan:100,baseOctet:10,wanMode:'dhcp',wanIp:'',wanMask:'24',wanGateway:''}]},bridge:{pairs:[{in:'',out:''},{in:'',out:''},{in:'',out:''}]},telegram:{bots:[{name:'principal',token:'',chatId:''}]}};
+const emptyDraft={topology:'nat',l3:{segment:'10.254',links:[{wan:'',lan:'',lanMode:'vlan',vlans:10,startVlan:100,baseOctet:10,wanMode:'dhcp',wanIp:'',wanMask:'24',wanGateway:''}]},bridge:{pairs:[{in:'',out:''},{in:'',out:''},{in:'',out:''}]},telegram:{bots:[{name:'principal',token:'',chatId:''}]}};
 function App(){
   const [state,setState]=useState(null),[draft,setDraft]=useState(emptyDraft),[result,setResult]=useState(null),[linuxPassword,setLinuxPassword]=useState(''),[live,setLive]=useState({iface:'',delay:0,jitter:0,loss:0});
   const load=()=>fetch('/api/prebeta/state').then(r=>r.json()).then(d=>{setState(d); setDraft({...emptyDraft,...(d.draft||{})});});
@@ -2072,18 +2099,18 @@ function App(){
   const revealTelegram=()=>fetch('/api/prebeta/telegram/reveal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:linuxPassword})}).then(r=>r.json()).then(d=>{setResult(d); if(d.ok){setDraft({...draft,telegram:{bots:d.bots||[]}}); setLinuxPassword('');}});
   const setL3=(i,k,v)=>{const links=[...(draft.l3?.links||[])]; links[i]={...links[i],[k]:v}; setDraft({...draft,l3:{...draft.l3,links}})};
   const setBridge=(i,k,v)=>{const pairs=[...(draft.bridge?.pairs||[])]; pairs[i]={...pairs[i],[k]:v}; setDraft({...draft,bridge:{...draft.bridge,pairs}})};
-  const addL3=()=>setDraft({...draft,l3:{...draft.l3,links:[...(draft.l3?.links||[]),{wan:'',lan:'',vlans:10,startVlan:200,baseOctet:20,wanMode:'dhcp',wanIp:'',wanMask:'24',wanGateway:''}].slice(0,2)}});
+  const addL3=()=>setDraft({...draft,l3:{...draft.l3,links:[...(draft.l3?.links||[]),{wan:'',lan:'',lanMode:'vlan',vlans:10,startVlan:200,baseOctet:20,wanMode:'dhcp',wanIp:'',wanMask:'24',wanGateway:''}].slice(0,2)}});
   if(!state)return <div className="container py-4">Cargando...</div>;
   const ifaces=state.interfaces||[];
   const diagram=draft.topology==='bridge'
     ? (draft.bridge?.pairs||[]).filter(p=>p.in||p.out).map((p,i)=>`L2L #${i+1}: ${p.in||'entrada'} <== bridge ==> ${p.out||'salida'}`).join('\n')
-    : (draft.l3?.links||[]).map((l,i)=>`WAN ${i+1}: ${l.wan||'wan'} (${l.wanMode||'dhcp'}${l.wanMode==='manual'?`, ${l.wanIp}/${l.wanMask} gw ${l.wanGateway}`:''})\n  | NAT/DHCP VLAN ${l.startVlan||100}-${Number(l.startVlan||100)+Number(l.vlans||1)-1}\nLAN ${i+1}: ${l.lan||'lan'} -> ${draft.l3?.segment||'10.254'}.${l.baseOctet||10}.0/24`).join('\n\n');
+    : (draft.l3?.links||[]).map((l,i)=>`WAN ${i+1}: ${l.wan||'wan'} (${l.wanMode||'dhcp'}${l.wanMode==='manual'?`, ${l.wanIp}/${l.wanMask} gw ${l.wanGateway}`:''})\n  | NAT/DHCP ${l.lanMode==='access'?'Acceso sin etiqueta':`VLAN ${l.startVlan||100}-${Number(l.startVlan||100)+Number(l.vlans||1)-1}`}\nLAN ${i+1}: ${l.lan||'lan'} -> ${draft.l3?.segment||'10.254'}.${l.baseOctet||10}.0/24`).join('\n\n');
   return <div className="container-fluid py-4 px-4">
     <div className="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2"><div><h1>ReactUI pre-beta</h1><span className="pill">Build ReactUI: __WANSIM_VERSION__</span> <span className="pill">V1 estable: v1.117-stable</span></div><a className="btn btn-outline-dark" href="/">Volver a Stable</a></div>
     {result&&<div className={'alert '+(result.ok?'alert-success':'alert-warning')}>{result.message||result.error||'Resultado recibido'}</div>}
     <div className="row g-3">
       <div className="col-xl-4"><div className="panel mb-3"><h4>Topologia editable</h4><select className="form-select mb-3" value={draft.topology} onChange={e=>setDraft({...draft,topology:e.target.value})}><option value="nat">L3 / NAT</option><option value="bridge">Bridge L2L</option></select>
-        {draft.topology==='nat'&&<div><label className="form-label">Segmento base para VLANs LAN</label><select className="form-select mb-3" value={draft.l3?.segment||'10.254'} onChange={e=>setDraft({...draft,l3:{...draft.l3,segment:e.target.value}})}><option value="10.254">10.254.X.0/24 recomendado para laboratorio aislado</option><option value="172.16">172.16.X.0/24 recomendado para redes privadas medianas</option><option value="192.168">192.168.X.0/24 recomendado para pruebas pequenas</option></select>{(draft.l3?.links||[]).map((l,i)=><div className="border rounded p-3 mb-3" key={i}><strong>WAN/LAN #{i+1}</strong><label className="form-label mt-2 mb-1">Interfaz WAN - salida a Internet</label><select className="form-select" value={l.wan||''} onChange={e=>setL3(i,'wan',e.target.value)}><option value="">Selecciona WAN</option>{ifaces.map(x=><option key={x.name}>{x.name}</option>)}</select><label className="form-label mt-2 mb-1">Interfaz LAN trunk para VLANs</label><select className="form-select" value={l.lan||''} onChange={e=>setL3(i,'lan',e.target.value)}><option value="">Selecciona LAN trunk</option>{ifaces.map(x=><option key={x.name}>{x.name}</option>)}</select><label className="form-label mt-2 mb-1">Direccionamiento de la WAN</label><select className="form-select" value={l.wanMode||'dhcp'} onChange={e=>setL3(i,'wanMode',e.target.value)}><option value="dhcp">DHCP - tomar IP, mascara y gateway automaticamente</option><option value="manual">Manual - definir IP, mascara y gateway</option></select>{l.wanMode==='manual'&&<div className="row g-2 mt-1 mb-2"><div className="col-md-4"><label className="form-label mb-1">IP WAN</label><input className="form-control" value={l.wanIp||''} onChange={e=>setL3(i,'wanIp',e.target.value)} placeholder="192.168.1.204"/></div><div className="col-md-4"><label className="form-label mb-1">Mascara/CIDR</label><input className="form-control" value={l.wanMask||'24'} onChange={e=>setL3(i,'wanMask',e.target.value)} placeholder="24 o 255.255.255.0"/></div><div className="col-md-4"><label className="form-label mb-1">Gateway WAN</label><input className="form-control" value={l.wanGateway||''} onChange={e=>setL3(i,'wanGateway',e.target.value)} placeholder="192.168.1.254"/></div></div>}<div className="row g-2 mt-1"><div className="col-md-4"><label className="form-label mb-1">Numero de VLANs</label><input className="form-control" type="number" min="1" value={l.vlans||1} onChange={e=>setL3(i,'vlans',e.target.value)} placeholder="2"/></div><div className="col-md-4"><label className="form-label mb-1">ID VLAN inicial</label><input className="form-control" type="number" min="1" max="4094" value={l.startVlan||100} onChange={e=>setL3(i,'startVlan',e.target.value)} placeholder="100"/></div><div className="col-md-4"><label className="form-label mb-1">Tercer octeto inicial</label><input className="form-control" type="number" min="1" max="254" value={l.baseOctet||10} onChange={e=>setL3(i,'baseOctet',e.target.value)} placeholder="10"/></div></div></div>)}<button className="btn btn-sm btn-outline-dark" onClick={addL3}>Agregar WAN/LAN</button></div>}
+        {draft.topology==='nat'&&<div><label className="form-label">Segmento base para redes LAN</label><select className="form-select mb-3" value={draft.l3?.segment||'10.254'} onChange={e=>setDraft({...draft,l3:{...draft.l3,segment:e.target.value}})}><option value="10.254">10.254.X.0/24 recomendado para laboratorio aislado</option><option value="172.16">172.16.X.0/24 recomendado para redes privadas medianas</option><option value="192.168">192.168.X.0/24 recomendado para pruebas pequenas</option></select>{(draft.l3?.links||[]).map((l,i)=><div className="border rounded p-3 mb-3" key={i}><strong>WAN/LAN #{i+1}</strong><label className="form-label mt-2 mb-1">Interfaz WAN - salida a Internet</label><select className="form-select" value={l.wan||''} onChange={e=>setL3(i,'wan',e.target.value)}><option value="">Selecciona WAN</option>{ifaces.map(x=><option key={x.name}>{x.name}</option>)}</select><label className="form-label mt-2 mb-1">Interfaz LAN</label><select className="form-select" value={l.lan||''} onChange={e=>setL3(i,'lan',e.target.value)}><option value="">Selecciona LAN</option>{ifaces.map(x=><option key={x.name}>{x.name}</option>)}</select><label className="form-label mt-2 mb-1" htmlFor={`lan-mode-${i}`}>Modo del puerto LAN</label><select id={`lan-mode-${i}`} className="form-select" value={l.lanMode||'vlan'} onChange={e=>setL3(i,'lanMode',e.target.value)}><option value="vlan">VLAN etiquetada (trunk)</option><option value="access">Acceso sin etiqueta (sin VLAN)</option></select><label className="form-label mt-2 mb-1">Direccionamiento de la WAN</label><select className="form-select" value={l.wanMode||'dhcp'} onChange={e=>setL3(i,'wanMode',e.target.value)}><option value="dhcp">DHCP - tomar IP, mascara y gateway automaticamente</option><option value="manual">Manual - definir IP, mascara y gateway</option></select>{l.wanMode==='manual'&&<div className="row g-2 mt-1 mb-2"><div className="col-md-4"><label className="form-label mb-1">IP WAN</label><input className="form-control" value={l.wanIp||''} onChange={e=>setL3(i,'wanIp',e.target.value)} placeholder="192.168.1.204"/></div><div className="col-md-4"><label className="form-label mb-1">Mascara/CIDR</label><input className="form-control" value={l.wanMask||'24'} onChange={e=>setL3(i,'wanMask',e.target.value)} placeholder="24 o 255.255.255.0"/></div><div className="col-md-4"><label className="form-label mb-1">Gateway WAN</label><input className="form-control" value={l.wanGateway||''} onChange={e=>setL3(i,'wanGateway',e.target.value)} placeholder="192.168.1.254"/></div></div>}<div className="row g-2 mt-1">{l.lanMode!=='access'&&<><div className="col-md-4"><label className="form-label mb-1">Numero de VLANs</label><input className="form-control" type="number" min="1" value={l.vlans||1} onChange={e=>setL3(i,'vlans',e.target.value)} placeholder="2"/></div><div className="col-md-4"><label className="form-label mb-1">ID VLAN inicial</label><input className="form-control" type="number" min="1" max="4094" value={l.startVlan||100} onChange={e=>setL3(i,'startVlan',e.target.value)} placeholder="100"/></div></>}<div className={l.lanMode==='access'?'col-12':'col-md-4'}><label className="form-label mb-1">{l.lanMode==='access'?'Tercer octeto de la subred LAN':'Tercer octeto inicial'}</label><input className="form-control" type="number" min="1" max="254" value={l.baseOctet||10} onChange={e=>setL3(i,'baseOctet',e.target.value)} placeholder="10"/></div></div></div>)}<button className="btn btn-sm btn-outline-dark" onClick={addL3}>Agregar WAN/LAN</button></div>}
         {draft.topology==='bridge'&&<div>{(draft.bridge?.pairs||[]).map((p,i)=><div className="border rounded p-2 mb-2" key={i}><strong>L2L #{i+1}</strong><select className="form-select my-1" value={p.in||''} onChange={e=>setBridge(i,'in',e.target.value)}><option value="">Entrada</option>{ifaces.map(x=><option key={x.name}>{x.name}</option>)}</select><select className="form-select my-1" value={p.out||''} onChange={e=>setBridge(i,'out',e.target.value)}><option value="">Salida</option>{ifaces.map(x=><option key={x.name}>{x.name}</option>)}</select></div>)}</div>}
         <div className="d-flex flex-wrap gap-2 mt-3"><button className="btn btn-primary" onClick={submit}>Enviar parametros</button><button className="btn btn-outline-dark" onClick={()=>api('/api/prebeta/save',draft)}>Guardar draft</button><button className="btn btn-outline-dark" onClick={()=>api('/api/reactui/validate',draft)}>Validar</button><button className="btn btn-outline-dark" onClick={()=>api('/api/reactui/plan',draft)}>Plan de despliegue</button></div></div>
         <div className="panel"><h4>Telegram multi-bot</h4><div className="input-group mb-2"><input className="form-control" type="password" value={linuxPassword} onChange={e=>setLinuxPassword(e.target.value)} placeholder="Password Linux para revelar token/chat id"/><button className="btn btn-outline-dark" onClick={revealTelegram}>Revelar</button></div>{(draft.telegram?.bots||[]).map((b,i)=><div className="border rounded p-2 mb-2" key={i}><label className="form-label mb-1">Nombre del bot</label><input className="form-control mb-2" value={b.name||''} onChange={e=>{const bots=[...(draft.telegram?.bots||[])]; bots[i]={...bots[i],name:e.target.value}; setDraft({...draft,telegram:{bots}})}} placeholder="principal"/><label className="form-label mb-1">Bot token</label><input className="form-control mb-2" value={b.token||''} onChange={e=>{const bots=[...(draft.telegram?.bots||[])]; bots[i]={...bots[i],token:e.target.value}; setDraft({...draft,telegram:{bots}})}} placeholder="__hidden__ hasta revelar"/><label className="form-label mb-1">Chat ID</label><input className="form-control mb-2" value={b.chatId||''} onChange={e=>{const bots=[...(draft.telegram?.bots||[])]; bots[i]={...bots[i],chatId:e.target.value}; setDraft({...draft,telegram:{bots}})}} placeholder="__hidden__ hasta revelar"/><button className="btn btn-sm btn-outline-dark" onClick={()=>api('/api/prebeta/telegram/validate',{...b,index:i})}>Validar sincronizacion</button></div>)}<button className="btn btn-sm btn-outline-dark" onClick={()=>setDraft({...draft,telegram:{bots:[...(draft.telegram?.bots||[]),{name:'bot',token:'',chatId:''}]}})}>Agregar bot</button></div></div>
@@ -2281,11 +2308,13 @@ def default_prebeta_draft():
             mode=parts[6] if len(parts)>6 and parts[6] else 'dhcp'
             cidr=parts[7] if len(parts)>7 else ''
             gateway=parts[8] if len(parts)>8 else ''
+            lan_mode=parts[9] if len(parts)>9 and parts[9] else 'vlan'
+            count=parts[10] if len(parts)>10 and parts[10] else cfg.get('NUM_VLANS','10')
             wan_ip,wan_mask='','24'
             if cidr and '/' in cidr:
                 wan_ip,wan_mask=cidr.split('/',1)
             draft['l3']['segment']=segment
-            draft['l3']['links'].append({'wan':wan,'lan':lan,'vlans':cfg.get('NUM_VLANS','10'),'startVlan':start,'baseOctet':octet,'wanMode':mode,'wanIp':wan_ip,'wanMask':wan_mask,'wanGateway':gateway})
+            draft['l3']['links'].append({'wan':wan,'lan':lan,'lanMode':lan_mode,'vlans':1 if lan_mode=='access' else count,'startVlan':start,'baseOctet':octet,'wanMode':mode,'wanIp':wan_ip,'wanMask':wan_mask,'wanGateway':gateway})
     if not draft['l3']['links']:
         draft['l3']['links']=[{'wan':cfg.get('WAN_IF',''),'lan':cfg.get('LAN_IF',''),'vlans':cfg.get('NUM_VLANS','10'),'startVlan':cfg.get('START_VLAN','100'),'baseOctet':cfg.get('BASE_OCTET','10'),'wanMode':'dhcp','wanIp':'','wanMask':'24','wanGateway':''}]
     for pair in (cfg.get('BRIDGE_PAIRS_CSV') or '').split(';'):
@@ -2355,6 +2384,19 @@ def prebeta_save():
         logger.exception('No se pudo guardar prebeta')
         return jsonify({'ok':False,'error':str(e)}),400
 
+def l3_lan_settings(link):
+    mode=link.get('lanMode') or 'vlan'
+    if mode not in ('vlan','access'):
+        raise ValueError('Modo LAN debe ser vlan o access.')
+    count=1 if mode=='access' else int(link.get('vlans') or 0)
+    start=0 if mode=='access' else int(link.get('startVlan') or 0)
+    base=int(link.get('baseOctet') or 0)
+    if count < 1 or base < 1 or base+count-1 > 254:
+        raise ValueError('La cantidad de redes y sus octetos deben caber en 1-254.')
+    if mode=='vlan' and (start < 1 or start+count-1 > 4094):
+        raise ValueError('Rango VLAN fuera de 1-4094.')
+    return mode,count,start,base
+
 def validate_reactui_draft(draft):
     errors=[]; warnings=[]; actions=[]
     interfaces={x['name'] for x in list_interfaces()}
@@ -2376,14 +2418,14 @@ def validate_reactui_draft(draft):
                 if iface and iface in used_ifaces: errors.append(f'Par #{idx}: interfaz repetida: {iface}.')
                 if iface: used_ifaces.add(iface)
             try:
-                vlans=int(link.get('vlans') or 0); start=int(link.get('startVlan') or 0); base=int(link.get('baseOctet') or 0)
-                if vlans < 1: errors.append(f'Par #{idx}: VLANs debe ser mayor a 0.')
-                if start < 1 or start+vlans-1 > 4094: errors.append(f'Par #{idx}: rango VLAN fuera de 1-4094.')
-                if base < 1 or base+vlans-1 > 254: errors.append(f'Par #{idx}: rango de octetos fuera de 1-254.')
+                lan_mode,vlans,start,base=l3_lan_settings(link)
+                ipaddress.IPv4Network(f'{segment}.{base}.0/24')
                 vr=(start,start+vlans-1); orng=(base,base+vlans-1)
-                if any(vr[0] <= r[1] and vr[1] >= r[0] for r in vlan_ranges): errors.append(f'Par #{idx}: rango VLAN se solapa con otro par.')
+                if lan_mode=='vlan':
+                    if any(vr[0] <= r[1] and vr[1] >= r[0] for r in vlan_ranges): errors.append(f'Par #{idx}: rango VLAN se solapa con otro par.')
+                    vlan_ranges.append(vr)
                 if any(orng[0] <= r[1] and orng[1] >= r[0] for r in octet_ranges): errors.append(f'Par #{idx}: rango de octetos se solapa con otro par.')
-                vlan_ranges.append(vr); octet_ranges.append(orng)
+                octet_ranges.append(orng)
                 if (link.get('wanMode') or 'dhcp') == 'manual':
                     ip=link.get('wanIp') or ''; mask=str(link.get('wanMask') or ''); gw=link.get('wanGateway') or ''
                     iface=ipaddress.ip_interface(f'{ip}/{mask.lstrip("/")}')
@@ -2395,7 +2437,10 @@ def validate_reactui_draft(draft):
                     actions.append(f'Configurar {wan} manual {iface.with_prefixlen} gateway {gw}.')
                 else:
                     actions.append(f'Configurar {wan} por DHCP o conservar lease vigente.')
-                actions.append(f'Crear {vlans} VLAN(s) desde ID {start} en {lan}, segmento {segment}.{base}.0/24 en adelante.')
+                if lan_mode=='access':
+                    actions.append(f'Configurar LAN {lan} en acceso sin etiqueta: IP {segment}.{base}.1/24, DHCP en la interfaz fisica; sin ID VLAN.')
+                else:
+                    actions.append(f'Crear {vlans} VLAN(s) desde ID {start} en {lan}, segmento {segment}.{base}.0/24 en adelante.')
                 actions.append(f'Aplicar NAT hacia {wan} para las subredes del par #{idx}.')
             except Exception as e:
                 errors.append(f'Par #{idx}: parametros IP/VLAN invalidos: {e}')
@@ -2427,9 +2472,7 @@ def write_prebeta_draft(draft):
         json.dump(draft,f,ensure_ascii=False,indent=2)
 
 def normalize_l3_link(idx, link, segment):
-    vlans=int(link.get('vlans') or 1)
-    start=int(link.get('startVlan') or 100)
-    base=int(link.get('baseOctet') or 10)
+    lan_mode,vlans,start,base=l3_lan_settings(link)
     mode=(link.get('wanMode') or 'dhcp').lower()
     cidr=''
     gateway=''
@@ -2442,7 +2485,7 @@ def normalize_l3_link(idx, link, segment):
     return {
         'idx':idx,'wan':link.get('wan') or '','lan':link.get('lan') or '',
         'vlans':vlans,'start':start,'base':base,'segment':segment,
-        'mode':mode,'cidr':cidr,'gateway':gateway
+        'mode':mode,'cidr':cidr,'gateway':gateway,'lan_mode':lan_mode
     }
 
 def runtime_iface_ip(iface):
@@ -2477,6 +2520,11 @@ def cleanup_runtime_topology(actions):
             action_step(actions,f'Eliminar VLAN administrada {iface}',f'sudo ip link del {q(iface)}',critical=False,timeout=10)
             remove_netem_state(iface)
         else:
+            meta=INTERFACE_META.get(iface,{})
+            if meta.get('role')=='L3/NAT' and meta.get('lan')==iface and meta.get('subnet'):
+                network=ipaddress.IPv4Network(meta['subnet'])
+                address=f'{network.network_address+1}/{network.prefixlen}'
+                action_step(actions,f'Retirar IP LAN de acceso {iface}',f'sudo ip addr del {q(address)} dev {q(iface)}',critical=False,timeout=5)
             action_step(actions,f'Limpiar qdisc {iface}',f'sudo tc qdisc del dev {q(iface)} root 2>/dev/null || true',critical=False,timeout=5)
             action_step(actions,f'Sacar {iface} de bridge previo',f'sudo ip link set {q(iface)} nomaster 2>/dev/null || true',critical=False,timeout=5)
             remove_netem_state(iface)
@@ -2516,7 +2564,7 @@ def configure_runtime_nat(nat_rules, actions):
 
 def configure_runtime_dhcp(dhcp_rows, actions):
     if not dhcp_rows:
-        action_step(actions,'Detener DHCP sin VLANs',f'sudo systemctl stop {q(DHCP_SERVICE)}',critical=False,timeout=12)
+        action_step(actions,'Detener DHCP sin redes LAN',f'sudo systemctl stop {q(DHCP_SERVICE)}',critical=False,timeout=12)
         return
     conf=['default-lease-time 600;','max-lease-time 7200;','authoritative;','']
     ifaces=[]
@@ -2548,7 +2596,7 @@ def write_runtime_config(draft, runtime):
     lines.append(f'TOPOLOGY_MODE={topology}')
     if topology == 'nat':
         links=runtime.get('links',[])
-        l3_csv=';'.join(f"{x['idx']}:{x['wan']}:{x['lan']}:{x['start']}:{x['base']}:{x['segment']}:{x['mode']}:{x['cidr']}:{x['gateway']}" for x in links)
+        l3_csv=';'.join(f"{x['idx']}:{x['wan']}:{x['lan']}:{x['start']}:{x['base']}:{x['segment']}:{x['mode']}:{x['cidr']}:{x['gateway']}:{x['lan_mode']}:{x['vlans']}" for x in links)
         first=links[0] if links else {}
         lines.extend([
             f'NUM_L3_LINKS={len(links)}',
@@ -2618,14 +2666,19 @@ def apply_runtime_nat(draft, actions):
         for offset in range(link['vlans']):
             vlan_id=link['start']+offset
             octet=link['base']+offset
-            vlan=f"v{link['idx']}_{vlan_id}"
+            access=link['lan_mode']=='access'
+            vlan=link['lan'] if access else f"v{link['idx']}_{vlan_id}"
             subnet=f"{link['segment']}.{octet}.0/24"
-            action_step(actions,f'Eliminar {vlan} si existe',f'sudo ip link del {q(vlan)} 2>/dev/null || true',critical=False,timeout=5)
-            action_step(actions,f'Crear {vlan}',f"sudo ip link add link {q(link['lan'])} name {q(vlan)} type vlan id {vlan_id}",timeout=10)
-            action_step(actions,f'Asignar IP {vlan}',f"sudo ip addr add {q(f'{link['segment']}.{octet}.1/24')} dev {q(vlan)}; sudo ip link set {q(vlan)} up",timeout=10)
+            if not access:
+                action_step(actions,f'Eliminar {vlan} si existe',f'sudo ip link del {q(vlan)} 2>/dev/null || true',critical=False,timeout=5)
+                action_step(actions,f'Crear {vlan}',f"sudo ip link add link {q(link['lan'])} name {q(vlan)} type vlan id {vlan_id}",timeout=10)
+            address=f"{link['segment']}.{octet}.1/24"
+            action_step(actions,f'Asignar IP {vlan}',f"sudo ip addr replace {q(address)} dev {q(vlan)}",timeout=10)
+            action_step(actions,f'Activar {vlan}',f'sudo ip link set {q(vlan)} up',timeout=5)
             control.append(vlan)
             meta[vlan]={
-                'label':f"VLAN {vlan_id} ({link['lan']} -> {link['wan']})",
+                'label':f"{'Acceso sin etiqueta' if access else f'VLAN {vlan_id}'} ({link['lan']} -> {link['wan']})",
+                'lan_mode':link['lan_mode'],
                 'bridge':'','role':'L3/NAT','peer':link['wan'],'mac':wan_mac,
                 'wan':link['wan'],'lan':link['lan'],'wan_private':wan_private,
                 'wan_public':wan_public,'wan_bw':wan_bw,'subnet':subnet,
@@ -2877,7 +2930,7 @@ replacements = {
     "__TOPOLOGY_MODE_LITERAL__": json.dumps(os.environ.get("TOPOLOGY_MODE", "")),
     "__CURRENT_USER_LITERAL__": json.dumps(os.environ.get("CURRENT_USER", "")),
     "__NETEM_STATE_FILE__": os.environ.get("NETEM_STATE_FILE", os.path.expanduser("~/wansim_netem_state.json")),
-    "__WANSIM_VERSION__": os.environ.get("WANSIM_VERSION", "1.118-prebeta"),
+    "__WANSIM_VERSION__": os.environ.get("WANSIM_VERSION", "1.119-prebeta"),
 }
 for key, value in replacements.items():
     text = text.replace(key, value)
@@ -3026,20 +3079,25 @@ else
         SUMMARY_L3_LINKS=("1:${WAN_IF}:${LAN_IF}:${START_VLAN:-100}:${BASE_OCTET:-10}:${SEGMENT_PREFIX:-192.168}")
     fi
     for summary_link in "${SUMMARY_L3_LINKS[@]}"; do
-        IFS=':' read -r summary_idx summary_wan summary_lan summary_start_vlan summary_base_octet summary_segment summary_wan_mode summary_wan_cidr summary_wan_gateway <<< "$summary_link"
+        IFS=':' read -r summary_idx summary_wan summary_lan summary_start_vlan summary_base_octet summary_segment summary_wan_mode summary_wan_cidr summary_wan_gateway summary_lan_mode summary_count <<< "$summary_link"
+        summary_count=${summary_count:-${NUM_VLANS:-0}}
         echo "${COLOR_CYAN}│ ${COLOR_GREEN}Par #$summary_idx:${COLOR_RESET} LAN $summary_lan -> WAN $summary_wan${COLOR_CYAN}                  │${COLOR_RESET}"
         if [ "${summary_wan_mode:-dhcp}" = "manual" ]; then
             echo "${COLOR_CYAN}│   ${COLOR_CYAN}WAN manual:${COLOR_RESET} ${summary_wan_cidr:-N/D} gw ${summary_wan_gateway:-N/D}${COLOR_CYAN}        │${COLOR_RESET}"
         else
             echo "${COLOR_CYAN}│   ${COLOR_CYAN}WAN DHCP:${COLOR_RESET} lease dinamico${COLOR_CYAN}                         │${COLOR_RESET}"
         fi
-        for (( i=0; i<${NUM_VLANS:-0} && i<3; i++ )); do
+        if [ "${summary_lan_mode:-vlan}" = "access" ]; then
+            echo "${COLOR_CYAN}│   Acceso sin etiqueta: ${summary_segment}.${summary_base_octet}.0/24${COLOR_RESET}"
+            continue
+        fi
+        for (( i=0; i<summary_count && i<3; i++ )); do
             current_vlan_id=$(( summary_start_vlan + i ))
             subnet_octet=$(( summary_base_octet + i ))
             printf "${COLOR_CYAN}│   ${COLOR_CYAN}VLAN %-4s${COLOR_RESET} %-18s ${COLOR_CYAN}│${COLOR_RESET}\n" "$current_vlan_id" "${summary_segment}.${subnet_octet}.0/24"
         done
-        if [ ${NUM_VLANS:-0} -gt 3 ]; then
-            echo "${COLOR_CYAN}│   ${COLOR_CYAN}... total ${NUM_VLANS:-0} VLANs para este par${COLOR_CYAN}                  │${COLOR_RESET}"
+        if [ "$summary_count" -gt 3 ]; then
+            echo "${COLOR_CYAN}│   ${COLOR_CYAN}... total $summary_count VLANs para este par${COLOR_CYAN}                  │${COLOR_RESET}"
         fi
     done
 fi
@@ -3051,7 +3109,7 @@ if [ "$TOPOLOGY_MODE" = "bridge" ]; then
     echo "${COLOR_CYAN}│ ${COLOR_CYAN}Control de Tráfico:${COLOR_RESET} $( [ "$CONFIG_TC" = "s" ] && echo "Habilitado" || echo "Deshabilitado")${COLOR_CYAN}               │${COLOR_RESET}"
     echo "${COLOR_CYAN}│ ${COLOR_CYAN}Gestión con Salida a Internet:${COLOR_RESET} $( [ "$IS_MGMT" = "s" ] && echo "Sí" || echo "No")${COLOR_CYAN}          │${COLOR_RESET}"
 else
-    echo "${COLOR_CYAN}│ ${COLOR_CYAN}Pares L3:${COLOR_RESET} ${NUM_L3_LINKS:-1} / VLANs por par: ${NUM_VLANS:-0}${COLOR_CYAN}             │${COLOR_RESET}"
+    echo "${COLOR_CYAN}│ Pares L3: ${NUM_L3_LINKS:-1} / modo LAN independiente por par${COLOR_RESET}"
     if [ "$CONFIG_DHCP" = "s" ]; then
         echo "${COLOR_CYAN}│ ${COLOR_CYAN}DHCP:${COLOR_RESET} Sí (segmento base: ${SEGMENT_PREFIX:-192.168}.X.0/24)${COLOR_CYAN} │${COLOR_RESET}"
     else

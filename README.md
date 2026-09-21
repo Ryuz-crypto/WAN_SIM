@@ -1,6 +1,6 @@
 # Ryuz WAN Simulator
 
-**Version 1.118-prebeta** | **Autor**: decameru@outlook.com
+**Version 1.119-prebeta** | **Autor**: decameru@outlook.com
 
 Ryuz WAN Simulator es una herramienta para simular condiciones WAN en Linux. Permite aplicar latencia, jitter y perdida de paquetes sobre interfaces fisicas, VLANs o bridges L2, con un dashboard Flask para control operativo.
 
@@ -8,21 +8,21 @@ Esta rama se mantiene como la base principal del simulador. La evolucion FastAPI
 
 ## Funcionalidades
 
-- Modo L3/NAT con hasta dos pares WAN/LAN y multiples VLANs por LAN.
+- Modo L3/NAT con hasta dos pares WAN/LAN: cada LAN puede usar VLANs etiquetadas o acceso sin etiqueta.
 - Cada WAN L3 puede configurarse por DHCP o manualmente con IP, mascara/CIDR y gateway.
 - Deteccion por WAN de IP privada, IP publica y estimacion de ancho de banda disponible.
 - Modo Bridge L2 con 1 a 3 pares de interfaces entrada/salida.
 - Control de latencia, jitter y perdida por interfaz usando `tc/netem`.
 - Dashboard web Flask en el puerto `5000`, con administracion HTTPS desde la interfaz web.
 - Seccion `ReactUI pre-beta` para preparar la evolucion grafica de configuracion L3/L2, Telegram multi-bot, daemons y leases DHCP.
-- DHCP automatico para VLANs.
+- DHCP automatico para VLANs y puertos LAN de acceso sin etiqueta.
 - Persistencia L2 mediante `wansim-l2-persist.service`.
 - Integracion opcional con Telegram, botones de presets y fallback HTTP API si falla la libreria legacy.
 - Configuracion persistente en el home del usuario que ejecuta el script.
 
 ## Sistemas Soportados
 
-La version 1.118-prebeta detecta el gestor de paquetes y ajusta dependencias para:
+La version 1.119-prebeta detecta el gestor de paquetes y ajusta dependencias para:
 
 - Ubuntu Server 20.04 o superior.
 - Ubuntu Workstation 20.04 o superior.
@@ -93,7 +93,8 @@ No lo ejecutes directamente como `root`. El script usa `sudo` para las operacion
 
 Durante el asistente interactivo podras elegir:
 
-- `L3 / NAT`: uno o dos pares WAN/LAN, cada LAN con VLANs + DHCP + NAT hacia su WAN.
+- `L3 / NAT`: uno o dos pares WAN/LAN, con DHCP y NAT hacia su WAN.
+- Modo LAN por par: `vlan` para multiples redes etiquetadas o `access` para una subred /24 sin etiqueta sobre el puerto fisico. Puedes combinar ambos modos entre pares.
 - Direccionamiento WAN por par: DHCP o manual con IP, mascara/CIDR y gateway.
 - `Bridge L2`: bridges entre pares de interfaces fisicas.
 - Integracion opcional con Telegram.
@@ -136,6 +137,25 @@ Para probar la etapa ReactUI:
 3. Ajusta L3/NAT o Bridge L2L y presiona `Enviar parametros`.
 4. Revisa el bloque `Resultado validacion/plan`; cada accion aplicada aparece con `ok`, comando y salida.
 5. Usa `Inyeccion en vivo` para aplicar delay, jitter o perdida sobre las interfaces activas sin salir de ReactUI.
+
+### LAN L3 Sin Etiqueta
+
+En el asistente, selecciona `access` en la pregunta `modo LAN` del par deseado. Solo debes indicar el tercer octeto de su subred; no se pide cantidad ni ID de VLAN.
+
+En `ReactUI pre-beta`, selecciona `Acceso sin etiqueta (sin VLAN)` en `Modo del puerto LAN` de cualquier par WAN/LAN. Los campos de cantidad e ID VLAN se ocultan. Define la subred, revisa `Validar` y `Plan de despliegue`, y pulsa `Enviar parametros` para aplicar el cambio.
+
+Ejemplo: WAN `ens160`, LAN `ens192`, segmento `10.254` y octeto `10` asignan `10.254.10.1/24` directamente a `ens192`. DHCP entrega `10.254.10.100-200` con gateway `10.254.10.1`; los clientes usan trafico sin etiqueta. En el segundo par puedes usar otra LAN en acceso o mantener sus VLANs, siempre con subredes diferentes.
+
+El dashboard principal y la inyeccion en vivo muestran `Acceso sin etiqueta (ens192 -> ens160)` y controlan `ens192`. No se crea una VLAN 0. El modo y la cantidad de redes se guardan por par; las configuraciones anteriores siguen usando VLANs por defecto. Al cambiar de acceso a VLAN o Bridge se retira la IP de acceso administrada por WAN_SIM.
+
+Para actualizar una instalacion existente:
+
+```bash
+git pull --ff-only
+./WANsim2.sh
+```
+
+El script regenera el dashboard; recarga el navegador despues. ReactUI continua en pre-beta; la referencia estable sigue siendo `v1.117-stable`.
 
 ## Archivos Generados
 
@@ -192,6 +212,14 @@ Antes de ejecutar en un servidor compartido, revisa:
 Si una ejecucion falla, el script ejecuta rollback automatico de servicios, dashboard generado, virtualenv parcial, bridges/VLANs generadas y archivos temporales. El log principal se conserva en `~/emix_abundix.log`.
 
 ## Release Notes
+
+### Version 1.119-prebeta
+
+- LAN L3 configurable por par como trunk con VLANs o acceso sin etiqueta, desde el asistente y ReactUI.
+- En acceso, IP, DHCP, NAT y `tc/netem` usan directamente la interfaz fisica, con una sola subred /24.
+- Resumen y diagrama distinguen los modos; la validacion evita interfaces y subredes repetidas en pares mixtos.
+- Persistencia de modo LAN y cantidad de redes por par, compatible con configuraciones previas.
+- Pruebas automatizadas de configuracion, comandos runtime simulados y transiciones VLAN/acceso. El trafico real y DHCP requieren comprobacion en una VM Linux.
 
 ### Version 1.118-prebeta
 

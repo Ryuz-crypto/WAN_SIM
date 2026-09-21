@@ -1,0 +1,30 @@
+name: WAN_SIM checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  l3-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Bash syntax
+        run: bash -n WANsim2.sh
+      - name: L3 access and VLAN regression tests
+        run: python -m unittest discover -s tests -v
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Browser test dependencies
+        run: |
+          npm install --prefix "$RUNNER_TEMP/wansim-ui" --no-save --package-lock=false playwright@1.58.2
+          "$RUNNER_TEMP/wansim-ui/node_modules/.bin/playwright" install --with-deps chromium
+      - name: ReactUI controls and submit
+        run: NODE_PATH="$RUNNER_TEMP/wansim-ui/node_modules" node tests/check_reactui.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reactui-screenshots
+          path: test-results/
