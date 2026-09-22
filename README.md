@@ -65,6 +65,67 @@ git switch --detach v1.119-stable
 
 La etiqueta es inmutable y apunta al commit validado con L3/NAT multi-WAN, DHCP o WAN manual, LAN VLAN o acceso sin etiqueta, Bridge L2, HTTPS, Telegram y el dashboard principal. Para probar el desarrollo 2.0 sólo en un entorno dedicado: `git switch main && git pull --ff-only`.
 
+## Instalación V2 Pre-Beta
+
+WAN_SIM 2.0 es una plataforma separada de la instalación estable: incluye FastAPI como plano de control y ReactUI como consola de operación. Está disponible solamente en `main`, inicia en `dry-run` y debe instalarse en una VM o host de laboratorio dedicado.
+
+No reemplaza `v1.119-stable`, no instala ni modifica la configuración creada por V1 y todavía no incluye un despliegue Docker Compose para producción.
+
+### 1. Obtener La Rama De Desarrollo
+
+```bash
+git clone --branch main https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
+cd WAN_SIM-v2
+```
+
+### 2. Iniciar La API FastAPI
+
+En Ubuntu/Debian, instala los prerrequisitos si aún no están disponibles:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y python3 python3-venv python3-pip nodejs npm
+```
+
+En Fedora, CentOS Stream o Rocky Linux:
+
+```bash
+sudo dnf install -y python3 python3-pip nodejs npm
+```
+
+Después inicia el backend. Mantén esta terminal abierta:
+
+```bash
+cd v2/backend
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
+uvicorn wansim_v2.api:app --host 0.0.0.0 --port 8080
+```
+
+Comprueba que responde en `http://<IP_DEL_SERVIDOR>:8080/health` y consulta el contrato en `http://<IP_DEL_SERVIDOR>:8080/docs`.
+
+### 3. Iniciar ReactUI
+
+En otra terminal, desde la raíz del mismo clon:
+
+```bash
+cd v2/frontend
+npm install
+npm run dev -- --host 0.0.0.0
+```
+
+Abre `http://<IP_DEL_SERVIDOR>:5173`. La consola se comunica con FastAPI en el puerto `8080` mediante el proxy de Vite. Para validar su compilación sin abrir el servidor: `npm run build`.
+
+Por seguridad, V2 simula los despliegues hasta que se habiliten explícitamente ambas variables en el host dedicado:
+
+```bash
+export WANSIM_V2_EXECUTION_MODE=host
+export WANSIM_V2_ALLOW_HOST_APPLY=1
+```
+
+No actives ese modo en un servidor compartido: permite ejecutar cambios de red planificados por el agente V2.
+
 ### Ubuntu Server / Ubuntu Workstation / Debian
 
 ```bash
