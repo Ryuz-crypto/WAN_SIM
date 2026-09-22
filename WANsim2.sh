@@ -10,7 +10,7 @@ exec > >(tee -a /tmp/wansim_debug.log) 2>&1
 # -----------------------------------------------
 # Variables de configuración
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WANSIM_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "1.119-prebeta")"
+WANSIM_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "2.0.0-prebeta")"
 USER_HOME="${HOME:-$(getent passwd "$(whoami)" | cut -d: -f6)}"
 WANSIM_HOME="$USER_HOME/.wansim"
 PYTHON_VENV="$WANSIM_HOME/venv"
@@ -2106,7 +2106,7 @@ function App(){
     ? (draft.bridge?.pairs||[]).filter(p=>p.in||p.out).map((p,i)=>`L2L #${i+1}: ${p.in||'entrada'} <== bridge ==> ${p.out||'salida'}`).join('\n')
     : (draft.l3?.links||[]).map((l,i)=>`WAN ${i+1}: ${l.wan||'wan'} (${l.wanMode||'dhcp'}${l.wanMode==='manual'?`, ${l.wanIp}/${l.wanMask} gw ${l.wanGateway}`:''})\n  | NAT/DHCP ${l.lanMode==='access'?'Acceso sin etiqueta':`VLAN ${l.startVlan||100}-${Number(l.startVlan||100)+Number(l.vlans||1)-1}`}\nLAN ${i+1}: ${l.lan||'lan'} -> ${draft.l3?.segment||'10.254'}.${l.baseOctet||10}.0/24`).join('\n\n');
   return <div className="container-fluid py-4 px-4">
-    <div className="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2"><div><h1>ReactUI pre-beta</h1><span className="pill">Build ReactUI: __WANSIM_VERSION__</span> <span className="pill">V1 estable: v1.117-stable</span></div><a className="btn btn-outline-dark" href="/">Volver a Stable</a></div>
+    <div className="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2"><div><h1>ReactUI 2.0 pre-beta</h1><span className="pill">Build ReactUI: __WANSIM_VERSION__</span> <span className="pill">V1 estable: v1.119-stable</span></div><a className="btn btn-outline-dark" href="/">Volver a Stable</a></div>
     {result&&<div className={'alert '+(result.ok?'alert-success':'alert-warning')}>{result.message||result.error||'Resultado recibido'}</div>}
     <div className="row g-3">
       <div className="col-xl-4"><div className="panel mb-3"><h4>Topologia editable</h4><select className="form-select mb-3" value={draft.topology} onChange={e=>setDraft({...draft,topology:e.target.value})}><option value="nat">L3 / NAT</option><option value="bridge">Bridge L2L</option></select>
@@ -2930,7 +2930,7 @@ replacements = {
     "__TOPOLOGY_MODE_LITERAL__": json.dumps(os.environ.get("TOPOLOGY_MODE", "")),
     "__CURRENT_USER_LITERAL__": json.dumps(os.environ.get("CURRENT_USER", "")),
     "__NETEM_STATE_FILE__": os.environ.get("NETEM_STATE_FILE", os.path.expanduser("~/wansim_netem_state.json")),
-    "__WANSIM_VERSION__": os.environ.get("WANSIM_VERSION", "1.119-prebeta"),
+    "__WANSIM_VERSION__": os.environ.get("WANSIM_VERSION", "2.0.0-prebeta"),
 }
 for key, value in replacements.items():
     text = text.replace(key, value)

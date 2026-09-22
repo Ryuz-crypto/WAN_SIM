@@ -1,10 +1,10 @@
 # Ryuz WAN Simulator
 
-**Version 1.119-prebeta** | **Autor**: decameru@outlook.com
+**Version 2.0.0-prebeta** | **Autor**: decameru@outlook.com
 
 Ryuz WAN Simulator es una herramienta para simular condiciones WAN en Linux. Permite aplicar latencia, jitter y perdida de paquetes sobre interfaces fisicas, VLANs o bridges L2, con un dashboard Flask para control operativo.
 
-Esta rama se mantiene como la base principal del simulador. La evolucion FastAPI + React + Docker Compose queda reservada para una segunda base futura, despues de estabilizar esta version.
+La última versión estable es [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable). La rama `main` inicia ahora el trabajo de WAN_SIM 2.0 y debe considerarse pre-beta hasta una nueva marca estable.
 
 ## Funcionalidades
 
@@ -22,7 +22,7 @@ Esta rama se mantiene como la base principal del simulador. La evolucion FastAPI
 
 ## Sistemas Soportados
 
-La version 1.119-prebeta detecta el gestor de paquetes y ajusta dependencias para:
+La version 2.0.0-prebeta detecta el gestor de paquetes y ajusta dependencias para:
 
 - Ubuntu Server 20.04 o superior.
 - Ubuntu Workstation 20.04 o superior.
@@ -40,12 +40,33 @@ Notas por familia:
 
 ## Instalacion Rapida
 
+## Version Estable V1.119
+
+Para un laboratorio operativo, instala exactamente la versión estable. No uses `main` si necesitas una configuración que no cambie mientras avanza WAN_SIM 2.0:
+
+```bash
+git clone --branch v1.119-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git
+cd WAN_SIM
+chmod +x WANsim2.sh
+./WANsim2.sh
+```
+
+Si ya tienes el repositorio, cambia a la etiqueta estable antes de ejecutar el instalador:
+
+```bash
+git fetch --tags
+git checkout v1.119-stable
+./WANsim2.sh
+```
+
+La etiqueta es inmutable y apunta al commit que valida L3/NAT multi-WAN, DHCP o WAN manual, LAN VLAN o acceso sin etiqueta, Bridge L2, HTTPS, Telegram y el dashboard principal. Para volver al desarrollo 2.0: `git switch main && git pull --ff-only`.
+
 ### Ubuntu Server / Ubuntu Workstation / Debian
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y git sudo
-git clone https://github.com/Ryuz-crypto/WAN_SIM.git
+git clone --branch v1.119-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git
 cd WAN_SIM
 chmod +x WANsim2.sh
 sudo modprobe 8021q
@@ -58,7 +79,7 @@ echo "8021q" | sudo tee -a /etc/modules
 ```bash
 sudo dnf makecache -y
 sudo dnf install -y git sudo
-git clone https://github.com/Ryuz-crypto/WAN_SIM.git
+git clone --branch v1.119-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git
 cd WAN_SIM
 chmod +x WANsim2.sh
 sudo modprobe 8021q
@@ -71,7 +92,7 @@ echo "8021q" | sudo tee /etc/modules-load.d/8021q.conf
 ```bash
 sudo dnf makecache -y || sudo yum makecache -y
 sudo dnf install -y git sudo || sudo yum install -y git sudo
-git clone https://github.com/Ryuz-crypto/WAN_SIM.git
+git clone --branch v1.119-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git
 cd WAN_SIM
 chmod +x WANsim2.sh
 sudo modprobe 8021q
@@ -112,9 +133,9 @@ Desde el boton `HTTPS` del dashboard puedes cargar un certificado PEM, PEM bundl
 https://<IP_DEL_SERVIDOR>:5000
 ```
 
-## ReactUI Pre-Beta
+## ReactUI 2.0 Pre-Beta
 
-La version estable sigue siendo el dashboard principal. Para revisar la evolucion, abre el dashboard y usa el boton `ReactUI pre-beta`.
+La versión estable sigue siendo el dashboard principal. La rama `main` inicia la evolución 2.0; abre el dashboard y usa el botón `ReactUI pre-beta` para probarla.
 
 En esa vista puedes:
 
@@ -155,7 +176,7 @@ git pull --ff-only
 ./WANsim2.sh
 ```
 
-El script regenera el dashboard; recarga el navegador despues. ReactUI continua en pre-beta; la referencia estable sigue siendo `v1.117-stable`.
+El script regenera el dashboard; recarga el navegador después. ReactUI 2.0 continúa en pre-beta; la referencia estable es `v1.119-stable`.
 
 ## Archivos Generados
 
@@ -213,7 +234,13 @@ Si una ejecucion falla, el script ejecuta rollback automatico de servicios, dash
 
 ## Release Notes
 
-### Version 1.119-prebeta
+### Version 2.0.0-prebeta
+
+- La rama `main` inicia WAN_SIM 2.0 y ReactUI 2.0 en estado pre-beta.
+- `v1.119-stable` queda marcada como la última versión estable, con guía de instalación y retorno a la rama de desarrollo.
+- La etiqueta estable conserva L3/NAT, Bridge L2, HTTPS, Telegram, DHCP y LAN en VLAN o acceso sin etiqueta.
+
+### Version 1.119-stable
 
 - LAN L3 configurable por par como trunk con VLANs o acceso sin etiqueta, desde el asistente y ReactUI.
 - En acceso, IP, DHCP, NAT y `tc/netem` usan directamente la interfaz fisica, con una sola subred /24.
