@@ -99,8 +99,8 @@ class NetworkAgent:
                 actions.append(self._action(f"wan-up-{link_index}", "prepare", f"Activar WAN {link.wan}", ["ip", "link", "set", link.wan, "up"]))
                 actions.append(self._action(f"lan-up-{link_index}", "prepare", f"Activar LAN {link.lan}", ["ip", "link", "set", link.lan, "up"]))
                 if link.wan_mode == WanAddressing.MANUAL:
-                    actions.append(self._action(f"wan-address-{link_index}", "apply", f"Configurar WAN manual {link.wan}", ["ip", "addr", "replace", link.wan_cidr or "", "dev", link.wan]))
-                    actions.append(self._action(f"wan-route-{link_index}", "apply", f"Configurar gateway WAN {link.wan}", ["ip", "route", "replace", "default", "via", link.wan_gateway or "", "dev", link.wan, "metric", str(200 + link_index)]))
+                    actions.append(self._action(f"wan-address-{link_index}", "apply", f"Configurar WAN manual {link.wan}", ["ip", "addr", "replace", link.wan_cidr or "", "dev", link.wan], ["ip", "addr", "del", link.wan_cidr or "", "dev", link.wan]))
+                    actions.append(self._action(f"wan-route-{link_index}", "apply", f"Configurar gateway WAN {link.wan}", ["ip", "route", "replace", "default", "via", link.wan_gateway or "", "dev", link.wan, "metric", str(200 + link_index)], ["ip", "route", "del", "default", "via", link.wan_gateway or "", "dev", link.wan, "metric", str(200 + link_index)]))
                 else:
                     actions.append(self._action(f"wan-dhcp-{link_index}", "apply", f"Renovar DHCP de WAN {link.wan}", ["dhclient", link.wan]))
                 for offset in range(link.vlans):

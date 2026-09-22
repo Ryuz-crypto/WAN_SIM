@@ -3,22 +3,30 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, Header, HTTPException, status
 
 from . import __version__
-from .models import ConfigurationCreate, ConfigurationRecord, DeploymentRecord, DeploymentRequest, NetemRequest, ServiceRestartRequest
+from .models import (ConfigurationCreate, ConfigurationRecord, DeploymentRecord, DeploymentRequest, NetemRequest,
+                     ServiceRestartRequest, TelegramBotCreate, TelegramBotCreated, TelegramBotRecord,
+                     TelegramBotUpdate, TelegramDeliveryRequest, TelegramWebhookSyncRequest)
 from .network import CommandRunner, NetworkAgent
+from .operations import OperationsService
 from .repository import ConfigRepository
 from .service import DeploymentService
+from .telegram import TelegramGateway, TelegramService
 
 
-def create_app(data_dir: Path | None = None, agent: NetworkAgent | None = None) -> FastAPI:
+def create_app(data_dir: Path | None = None, agent: NetworkAgent | None = None, telegram_gateway: TelegramGateway | None = None) -> FastAPI:
     root = data_dir or Path(os.getenv("WANSIM_V2_DATA_DIR", "~/.wansim-v2")).expanduser()
     repository = ConfigRepository(root / "state.db")
     service = DeploymentService(repository, agent or NetworkAgent(CommandRunner()))
+    operations = OperationsService(repository, service.agent)
+    telegram = TelegramService(repository, operations, telegram_gateway or TelegramGateway())
     app = FastAPI(title="WAN_SIM 2.0 API", version=__version__)
     app.state.repository = repository
     app.state.service = service
+    app.state.operations = operations
+    app.state.telegram = telegram
 
     @app.get("/health")
     def health() -> dict:
@@ -30,18 +38,18 @@ def create_app(data_dir: Path | None = None, agent: NetworkAgent | None = None) 
 
     @app.get("/api/v2/operations/overview")
     def operations_overview() -> dict:
-        return {**service.agent.overview(), "active_configuration": repository.active_configuration(), "deployments": repository.list_deployments(20)}
+        return operations.overview()
 
     @app.post("/api/v2/operations/netem")
     def apply_netem(request: NetemRequest) -> dict:
-        result = service.agent.apply_netem(request.interface, request.delay_ms, request.jitter_ms, request.loss_percent)
+        result = operations.netem(request.interface, request.delay_ms, request.jitter_ms, request.loss_percent)
         if not result.get("ok"):
             raise HTTPException(status_code=400, detail=result.get("error", result.get("output", "No se pudo aplicar netem.")))
         return result
 
     @app.post("/api/v2/operations/services/restart")
     def restart_service(request: ServiceRestartRequest) -> dict:
-        result = service.agent.restart_service(request.service)
+        result = operations.restart(request.service)
         if not result.get("ok"):
             raise HTTPException(status_code=400, detail=result.get("error", result.get("output", "No se pudo reiniciar servicio.")))
         return result
@@ -86,6 +94,51 @@ def create_app(data_dir: Path | None = None, agent: NetworkAgent | None = None) 
     def rollback_deployment(deployment_id: str) -> DeploymentRecord:
         deployment = get_deployment(deployment_id)
         return service.rollback(deployment)
+
+    @app.get("/api/v2/telegram/bots", response_model=list[TelegramBotRecord])
+    def list_telegram_bots() -> list[TelegramBotRecord]:
+        return repository.list_telegram_bots()
+
+    @app.post("/api/v2/telegram/bots", response_model=TelegramBotCreated, status_code=status.HTTP_201_CREATED)
+    def create_telegram_bot(request: TelegramBotCreate) -> TelegramBotCreated:
+        created = telegram.create(request.name, request.token, request.allowed_chat_ids, request.permission, request.webhook_secret)
+        return TelegramBotCreated.model_validate(created)
+
+    @app.patch("/api/v2/telegram/bots/{bot_id}", response_model=TelegramBotRecord)
+    def update_telegram_bot(bot_id: str, request: TelegramBotUpdate) -> TelegramBotRecord:
+        bot = repository.update_telegram_bot(bot_id, request)
+        if not bot:
+            raise HTTPException(status_code=404, detail="Bot no encontrado.")
+        return bot
+
+    @app.post("/api/v2/telegram/bots/{bot_id}/test")
+    def test_telegram_bot(bot_id: str, request: TelegramDeliveryRequest) -> dict:
+        try:
+            return telegram.test_delivery(bot_id, request.chat_id)
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+
+    @app.post("/api/v2/telegram/bots/{bot_id}/sync")
+    def sync_telegram_bot(bot_id: str, request: TelegramWebhookSyncRequest) -> dict:
+        try:
+            return telegram.synchronize(bot_id, request.public_base_url)
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (ValueError, RuntimeError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @app.post("/api/v2/telegram/bots/{bot_id}/webhook")
+    def telegram_webhook(bot_id: str, update: dict, x_telegram_bot_api_secret_token: str | None = Header(default=None)) -> dict:
+        try:
+            return telegram.process_update(bot_id, x_telegram_bot_api_secret_token, update)
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+        except (ValueError, RuntimeError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
 
     return app
 

@@ -7,7 +7,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from .models import ConfigurationRecord, DeploymentRecord, TopologyConfig
+from .models import ConfigurationRecord, DeploymentRecord, TelegramBotRecord, TelegramBotUpdate, TopologyConfig
+from .security import SecretBox
 
 
 def now() -> str:
@@ -20,6 +21,7 @@ class ConfigRepository:
     def __init__(self, database: Path):
         self.database = database
         self.database.parent.mkdir(parents=True, exist_ok=True)
+        self.secrets = SecretBox(database.parent)
         self._initialize()
 
     @contextmanager
@@ -53,8 +55,17 @@ class ConfigRepository:
                   status TEXT NOT NULL, plan TEXT NOT NULL, result TEXT NOT NULL,
                   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS telegram_bots (
+                  id TEXT PRIMARY KEY, name TEXT NOT NULL, token_ciphertext TEXT NOT NULL,
+                  webhook_secret TEXT NOT NULL, allowed_chat_ids TEXT NOT NULL,
+                  permission TEXT NOT NULL, enabled INTEGER NOT NULL,
+                  webhook_url TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
                 """
             )
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(telegram_bots)")}
+            if "webhook_url" not in columns:
+                connection.execute("ALTER TABLE telegram_bots ADD COLUMN webhook_url TEXT")
 
     def create_configuration(self, name: str, config: TopologyConfig) -> ConfigurationRecord:
         config_id, timestamp = str(uuid4()), now()
@@ -143,3 +154,59 @@ class ConfigRepository:
     def deactivate(self, configuration_id: str) -> None:
         with self.connection() as connection:
             connection.execute("UPDATE configurations SET state='ARCHIVED', updated_at=? WHERE id=?", (now(), configuration_id))
+
+    def create_telegram_bot(self, name: str, token: str, webhook_secret: str, allowed_chat_ids: list[int], permission: str) -> TelegramBotRecord:
+        bot_id, timestamp = str(uuid4()), now()
+        with self.connection() as connection:
+            connection.execute(
+                "INSERT INTO telegram_bots (id, name, token_ciphertext, webhook_secret, allowed_chat_ids, permission, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
+                (bot_id, name, self.secrets.seal(token), webhook_secret, json.dumps(allowed_chat_ids), permission, timestamp, timestamp),
+            )
+        return self.get_telegram_bot(bot_id)  # type: ignore[return-value]
+
+    def get_telegram_bot(self, bot_id: str) -> TelegramBotRecord | None:
+        with self.connection() as connection:
+            row = connection.execute("SELECT * FROM telegram_bots WHERE id=?", (bot_id,)).fetchone()
+        return self._to_telegram_bot(row) if row else None
+
+    def list_telegram_bots(self) -> list[TelegramBotRecord]:
+        with self.connection() as connection:
+            rows = connection.execute("SELECT * FROM telegram_bots ORDER BY created_at DESC").fetchall()
+        return [self._to_telegram_bot(row) for row in rows]
+
+    def update_telegram_bot(self, bot_id: str, update: TelegramBotUpdate) -> TelegramBotRecord | None:
+        current = self.get_telegram_bot(bot_id)
+        if not current:
+            return None
+        enabled = current.enabled if update.enabled is None else update.enabled
+        allowed = current.allowed_chat_ids if update.allowed_chat_ids is None else update.allowed_chat_ids
+        permission = current.permission.value if update.permission is None else update.permission.value
+        with self.connection() as connection:
+            connection.execute(
+                "UPDATE telegram_bots SET enabled=?, allowed_chat_ids=?, permission=?, updated_at=? WHERE id=?",
+                (int(enabled), json.dumps(allowed), permission, now(), bot_id),
+            )
+        return self.get_telegram_bot(bot_id)
+
+    def get_telegram_bot_secret(self, bot_id: str) -> dict | None:
+        with self.connection() as connection:
+            row = connection.execute("SELECT * FROM telegram_bots WHERE id=?", (bot_id,)).fetchone()
+        if not row:
+            return None
+        return {
+            "id": row["id"], "token": self.secrets.open(row["token_ciphertext"]), "webhook_secret": row["webhook_secret"],
+            "allowed_chat_ids": json.loads(row["allowed_chat_ids"]), "permission": row["permission"], "enabled": bool(row["enabled"]),
+        }
+
+    def set_telegram_webhook(self, bot_id: str, webhook_url: str) -> TelegramBotRecord | None:
+        with self.connection() as connection:
+            connection.execute("UPDATE telegram_bots SET webhook_url=?, updated_at=? WHERE id=?", (webhook_url, now(), bot_id))
+        return self.get_telegram_bot(bot_id)
+
+    @staticmethod
+    def _to_telegram_bot(row: sqlite3.Row) -> TelegramBotRecord:
+        return TelegramBotRecord(
+            id=row["id"], name=row["name"], token_hint="cifrado",
+            allowed_chat_ids=json.loads(row["allowed_chat_ids"]), permission=row["permission"], enabled=bool(row["enabled"]), webhook_url=row["webhook_url"],
+            created_at=row["created_at"], updated_at=row["updated_at"],
+        )

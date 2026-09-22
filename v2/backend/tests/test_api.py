@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from wansim_v2.api import create_app
 from wansim_v2.network import CommandRunner, NetworkAgent
+from wansim_v2.telegram import TelegramGateway
 
 
 class FailingRunner(CommandRunner):
@@ -32,6 +33,20 @@ class FailingRunner(CommandRunner):
         if command == ["ip", "-j", "addr", "show"]:
             return CommandResult(True, command, '[]')
         return CommandResult(True, command, "ok")
+
+
+class RecordingTelegramGateway(TelegramGateway):
+    def __init__(self) -> None:
+        self.messages: list[dict] = []
+        self.webhooks: list[dict] = []
+
+    def send_message(self, token: str, chat_id: int, text: str, keyboard=None) -> dict:
+        self.messages.append({"token": token, "chat_id": chat_id, "text": text, "keyboard": keyboard})
+        return {"ok": True}
+
+    def set_webhook(self, token: str, url: str, secret: str) -> dict:
+        self.webhooks.append({"token": token, "url": url, "secret": secret})
+        return {"ok": True}
 
 
 class ApiTests(unittest.TestCase):
@@ -134,6 +149,41 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(restart.status_code, 200)
         blocked = self.client.post("/api/v2/operations/services/restart", json={"service": "ssh"})
         self.assertEqual(blocked.status_code, 400)
+
+    def test_telegram_bots_mask_tokens_and_enforce_permissions(self) -> None:
+        gateway = RecordingTelegramGateway()
+        client = TestClient(create_app(Path(self.directory.name) / "telegram", NetworkAgent(CommandRunner("dry-run")), gateway))
+        created = client.post("/api/v2/telegram/bots", json={
+            "name": "Monitor", "token": "123456:telegram-token-for-tests", "allowedChatIds": [1001], "permission": "read",
+        })
+        self.assertEqual(created.status_code, 201)
+        body = created.json()
+        self.assertNotIn("token", body["bot"])
+        self.assertTrue(body["webhook_secret"])
+        bot_id = body["bot"]["id"]
+        denied = client.post(f"/api/v2/telegram/bots/{bot_id}/webhook", json={"message": {"chat": {"id": 1001}, "text": "/status"}})
+        self.assertEqual(denied.status_code, 403)
+        status = client.post(
+            f"/api/v2/telegram/bots/{bot_id}/webhook",
+            headers={"X-Telegram-Bot-Api-Secret-Token": body["webhook_secret"]},
+            json={"message": {"chat": {"id": 1001}, "text": "/status"}},
+        )
+        self.assertEqual(status.status_code, 200)
+        self.assertEqual(status.json()["action"], "status")
+        self.assertEqual(gateway.messages[-1]["chat_id"], 1001)
+        synced = client.post(f"/api/v2/telegram/bots/{bot_id}/sync", json={"publicBaseUrl": "https://wansim.example.test"})
+        self.assertEqual(synced.status_code, 200)
+        self.assertEqual(gateway.webhooks[-1]["url"], f"https://wansim.example.test/api/v2/telegram/bots/{bot_id}/webhook")
+        denied_netem = client.post(
+            f"/api/v2/telegram/bots/{bot_id}/webhook",
+            headers={"X-Telegram-Bot-Api-Secret-Token": body["webhook_secret"]},
+            json={"callback_query": {"data": "netem|lan0|40|5|0", "message": {"chat": {"id": 1001}}}},
+        )
+        self.assertEqual(denied_netem.status_code, 403)
+        listed = client.get("/api/v2/telegram/bots")
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(listed.json()[0]["permission"], "read")
+        self.assertTrue(listed.json()[0]["webhook_url"].startswith("https://"))
 
 
 if __name__ == "__main__":

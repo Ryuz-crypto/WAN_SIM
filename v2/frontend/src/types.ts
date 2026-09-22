@@ -17,3 +17,6 @@ export type NetworkInterface = { name: string; mac: string; state: string; ips: 
 export type Service = { name: string; active: string; enabled: string }
 export type Lease = { ip: string; mac: string; host: string; state: string }
 export type Overview = { execution_mode: string; interfaces: NetworkInterface[]; services: Service[]; leases: Lease[]; active_configuration: Configuration | null; deployments: Deployment[] }
+export type TelegramPermission = 'read' | 'operate' | 'admin'
+export type TelegramBot = { id: string; name: string; token_hint: string; allowed_chat_ids: number[]; permission: TelegramPermission; enabled: boolean; webhook_url?: string; created_at: string; updated_at: string }
+export type TelegramBotCreated = { bot: TelegramBot; webhook_secret: string }

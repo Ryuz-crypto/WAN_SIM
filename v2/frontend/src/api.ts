@@ -1,4 +1,4 @@
-import type { Config, Configuration, Deployment, Overview } from './types'
+import type { Config, Configuration, Deployment, Overview, TelegramBot, TelegramBotCreated, TelegramPermission } from './types'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...init })
@@ -19,4 +19,9 @@ export const api = {
   rollback: (id: string) => request<Deployment>(`/api/v2/deployments/${id}/rollback`, { method: 'POST' }),
   netem: (payload: { interface: string; delayMs: number; jitterMs: number; lossPercent: number }) => request('/api/v2/operations/netem', { method: 'POST', body: JSON.stringify(payload) }),
   restart: (service: string) => request('/api/v2/operations/services/restart', { method: 'POST', body: JSON.stringify({ service }) }),
+  bots: () => request<TelegramBot[]>('/api/v2/telegram/bots'),
+  createBot: (payload: { name: string; token: string; allowed_chat_ids: number[]; permission: TelegramPermission }) => request<TelegramBotCreated>('/api/v2/telegram/bots', { method: 'POST', body: JSON.stringify(payload) }),
+  updateBot: (id: string, payload: { enabled?: boolean; permission?: TelegramPermission; allowed_chat_ids?: number[] }) => request<TelegramBot>(`/api/v2/telegram/bots/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  testBot: (id: string, chatId: number) => request(`/api/v2/telegram/bots/${id}/test`, { method: 'POST', body: JSON.stringify({ chat_id: chatId }) }),
+  syncBot: (id: string, publicBaseUrl: string) => request<{ ok: boolean; webhook_url: string }>(`/api/v2/telegram/bots/${id}/sync`, { method: 'POST', body: JSON.stringify({ publicBaseUrl }) }),
 }

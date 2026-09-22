@@ -141,6 +141,57 @@ class ServiceRestartRequest(BaseModel):
     service: str = Field(min_length=1, max_length=80, pattern=r"^[a-zA-Z0-9_.@-]+$")
 
 
+class TelegramPermission(str, Enum):
+    READ = "read"
+    OPERATE = "operate"
+    ADMIN = "admin"
+
+
+class TelegramBotCreate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str = Field(min_length=1, max_length=80)
+    token: str = Field(min_length=20, max_length=200)
+    allowed_chat_ids: list[int] = Field(min_length=1, max_length=50, alias="allowedChatIds")
+    permission: TelegramPermission = TelegramPermission.READ
+    webhook_secret: str | None = Field(default=None, min_length=16, max_length=128, alias="webhookSecret")
+
+
+class TelegramBotUpdate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    enabled: bool | None = None
+    allowed_chat_ids: list[int] | None = Field(default=None, min_length=1, max_length=50, alias="allowedChatIds")
+    permission: TelegramPermission | None = None
+
+
+class TelegramWebhookSyncRequest(BaseModel):
+    public_base_url: str = Field(min_length=12, max_length=240, alias="publicBaseUrl")
+
+
+class TelegramBotRecord(BaseModel):
+    id: str
+    name: str
+    token_hint: str
+    allowed_chat_ids: list[int]
+    permission: TelegramPermission
+    enabled: bool
+    webhook_url: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class TelegramBotCreated(BaseModel):
+    bot: TelegramBotRecord
+    webhook_secret: str
+
+
+class TelegramDeliveryRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    chat_id: int = Field(alias="chatId")
+
+
 class ConfigurationRecord(BaseModel):
     id: str
     name: str

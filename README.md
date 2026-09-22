@@ -1,6 +1,6 @@
 # Ryuz WAN Simulator
 
-**Instalación recomendada: [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable)** | **Desarrollo actual: `2.0.2-prebeta`** | **Autor**: decameru@outlook.com
+**Instalación recomendada: [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable)** | **Desarrollo actual: `2.0.3-prebeta`** | **Autor**: decameru@outlook.com
 
 Ryuz WAN Simulator es una herramienta para simular condiciones WAN en Linux. Permite aplicar latencia, jitter y perdida de paquetes sobre interfaces fisicas, VLANs o bridges L2, con un dashboard Flask para control operativo.
 
@@ -69,7 +69,7 @@ La etiqueta es inmutable y apunta al commit validado con L3/NAT multi-WAN, DHCP 
 
 WAN_SIM 2.0 es una plataforma separada de la instalación estable: incluye FastAPI como plano de control y ReactUI como consola de operación. Está disponible solamente en `main`, inicia en `dry-run` y debe instalarse en una VM o host de laboratorio dedicado.
 
-No reemplaza `v1.119-stable`, no instala ni modifica la configuración creada por V1 y todavía no incluye un despliegue Docker Compose para producción.
+No reemplaza `v1.119-stable`, no instala ni modifica la configuración creada por V1. Compose está disponible para el plano de control en `dry-run`; el agente que cambia la red sigue siendo nativo del host Linux y no se considera producción durante la pre-beta.
 
 ### 1. Obtener La Rama De Desarrollo
 
@@ -125,6 +125,20 @@ export WANSIM_V2_ALLOW_HOST_APPLY=1
 ```
 
 No actives ese modo en un servidor compartido: permite ejecutar cambios de red planificados por el agente V2.
+
+### 4. Ejecutar V2 Con Docker Compose
+
+Para empaquetar ReactUI, FastAPI, SQLite y el proxy Nginx sin conceder privilegios de red al contenedor:
+
+```bash
+cd v2/deploy
+cp .env.example .env
+python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# Copia el valor generado en WANSIM_V2_SECRET_KEY dentro de .env
+docker compose up --build -d
+```
+
+El proxy queda en `http://<IP_DEL_SERVIDOR>:8080`. Consulta [v2/deploy/README.md](v2/deploy/README.md) para habilitar HTTPS con `docker-compose.https.yml`. Compose queda en `dry-run`; las operaciones de red se validan desde el host Linux y nunca desde un contenedor privilegiado.
 
 ### Ubuntu Server / Ubuntu Workstation / Debian
 
@@ -256,6 +270,18 @@ Abre `http://<IP_DEL_SERVIDOR>:5173`. Vite redirige `/api` al backend en el puer
 
 Para generar los archivos estáticos de la interfaz: `npm run build`. Sigue siendo una pre-beta: en modo predeterminado los despliegues se simulan mediante `dry-run` y no modifican la red del host.
 
+### Telegram Desde FastAPI
+
+V2 administra varios bots desde `/api/v2/telegram/bots`. Cada token queda cifrado en el estado local, sólo se muestra una pista enmascarada y cada bot limita chats autorizados y permiso `read`, `operate` o `admin`. El webhook exige el secreto devuelto una única vez al crear el bot, en el header `X-Telegram-Bot-Api-Secret-Token`.
+
+En la pestaña **Telegram** de ReactUI indica la URL pública HTTPS del proxy, crea el bot y pulsa **Sincronizar**. El sistema registra `https://<HOST>/api/v2/telegram/bots/<ID>/webhook` con Telegram. **Probar** envía un mensaje al primer chat autorizado. Los botones de Telegram usan la misma capa de operaciones que ReactUI: estado, presets `netem` y, para administradores, reinicios permitidos. No publiques el webhook sin HTTPS.
+
+## Migración Y Estabilidad V2
+
+- [Migración desde V1.119](docs/MIGRATION_V1_TO_V2.md)
+- [Criterios para declarar V2 estable](docs/V2_STABILITY.md)
+- [Matriz de VMs Ubuntu/Debian/Fedora/Rocky](v2/integration/README.md)
+
 ## Archivos Generados
 
 Los archivos operativos se crean en el home del usuario que ejecuta el script:
@@ -311,6 +337,14 @@ Antes de ejecutar en un servidor compartido, revisa:
 Si una ejecucion falla, el script ejecuta rollback automatico de servicios, dashboard generado, virtualenv parcial, bridges/VLANs generadas y archivos temporales. El log principal se conserva en `~/emix_abundix.log`.
 
 ## Release Notes
+
+### Version 2.0.3-prebeta
+
+- Telegram se convierte en cliente de FastAPI con múltiples bots, tokens cifrados, chats autorizados, roles y webhook con secreto.
+- Los botones de Telegram reutilizan la capa operacional de ReactUI para estado, `netem` y reinicios permitidos.
+- Se agrega Docker Compose para ReactUI, API, SQLite y proxy Nginx, con override HTTPS y modo `dry-run` forzado.
+- Se incorpora matriz Vagrant para Ubuntu, Debian, Fedora y Rocky, con pruebas aisladas de dos WAN, VLAN, acceso y rollback.
+- Se documentan la migración desde V1.119 y los criterios explícitos para una futura etiqueta `v2.0.0-stable`.
 
 ### Version 2.0.2-prebeta
 
