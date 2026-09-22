@@ -1,10 +1,15 @@
 # Ryuz WAN Simulator
 
-**Version 2.0.2-prebeta** | **Autor**: decameru@outlook.com
+**Instalación recomendada: [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable)** | **Desarrollo actual: `2.0.2-prebeta`** | **Autor**: decameru@outlook.com
 
 Ryuz WAN Simulator es una herramienta para simular condiciones WAN en Linux. Permite aplicar latencia, jitter y perdida de paquetes sobre interfaces fisicas, VLANs o bridges L2, con un dashboard Flask para control operativo.
 
-La última versión estable es [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable). La rama `main` inicia ahora el trabajo de WAN_SIM 2.0 y debe considerarse pre-beta hasta una nueva marca estable.
+La última versión estable es [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable). Es la versión que debe instalarse en laboratorios y entornos operativos. La rama `main` contiene WAN_SIM 2.0 en estado pre-beta y no sustituye la instalación estable.
+
+| Necesidad | Qué usar | Estado |
+| --- | --- | --- |
+| Simular WAN en un laboratorio | [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable) con `./WANsim2.sh` | Estable |
+| Evaluar FastAPI y ReactUI | Rama `main`, directorios `v2/backend` y `v2/frontend` | Pre-beta, `dry-run` por defecto |
 
 ## Funcionalidades
 
@@ -23,7 +28,7 @@ La última versión estable es [`v1.119-stable`](https://github.com/Ryuz-crypto/
 
 ## Sistemas Soportados
 
-La version 2.0.2-prebeta detecta el gestor de paquetes y ajusta dependencias para:
+La instalación estable detecta el gestor de paquetes y ajusta dependencias para:
 
 - Ubuntu Server 20.04 o superior.
 - Ubuntu Workstation 20.04 o superior.
@@ -39,11 +44,9 @@ Notas por familia:
 - En todos los casos se requiere `systemd`, `iproute`, `tc`, `iptables`, `python3` y permisos `sudo`.
 - Las dependencias Python se instalan en `~/.wansim/venv`; no se modifica el Python del sistema.
 
-## Instalacion Rapida
+## Instalación Estable
 
-## Version Estable V1.119
-
-Para un laboratorio operativo, instala exactamente la versión estable. No uses `main` si necesitas una configuración que no cambie mientras avanza WAN_SIM 2.0:
+Para un laboratorio operativo, instala siempre la última etiqueta estable. No uses `main` para instalar el simulador mientras WAN_SIM 2.0 permanezca en pre-beta:
 
 ```bash
 git clone --branch v1.119-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git
@@ -52,15 +55,15 @@ chmod +x WANsim2.sh
 ./WANsim2.sh
 ```
 
-Si ya tienes el repositorio, cambia a la etiqueta estable antes de ejecutar el instalador:
+Si ya tienes el repositorio, actualiza las etiquetas y cambia a la versión estable antes de ejecutar el instalador:
 
 ```bash
 git fetch --tags
-git checkout v1.119-stable
+git switch --detach v1.119-stable
 ./WANsim2.sh
 ```
 
-La etiqueta es inmutable y apunta al commit que valida L3/NAT multi-WAN, DHCP o WAN manual, LAN VLAN o acceso sin etiqueta, Bridge L2, HTTPS, Telegram y el dashboard principal. Para volver al desarrollo 2.0: `git switch main && git pull --ff-only`.
+La etiqueta es inmutable y apunta al commit validado con L3/NAT multi-WAN, DHCP o WAN manual, LAN VLAN o acceso sin etiqueta, Bridge L2, HTTPS, Telegram y el dashboard principal. Para probar el desarrollo 2.0 sólo en un entorno dedicado: `git switch main && git pull --ff-only`.
 
 ### Ubuntu Server / Ubuntu Workstation / Debian
 
@@ -134,50 +137,31 @@ Desde el boton `HTTPS` del dashboard puedes cargar un certificado PEM, PEM bundl
 https://<IP_DEL_SERVIDOR>:5000
 ```
 
-## ReactUI 2.0 Pre-Beta
+## Desarrollo ReactUI 2.0 Pre-Beta
 
-La versión estable sigue siendo el dashboard principal. La rama `main` inicia la evolución 2.0; abre el dashboard y usa el botón `ReactUI pre-beta` para probarla.
+Esta sección no forma parte de la instalación estable. Usa una copia de laboratorio en la rama `main`; la consola ReactUI actual se ejecuta por separado desde `v2/frontend` y consume la API FastAPI en `v2/backend`.
 
-En esa vista puedes:
-
-- Preparar cambios de topologia L3/NAT o Bridge L2L sin romper la configuracion estable.
-- Guardar un draft persistente en `~/.wansim/reactui_prebeta.json`.
-- Enviar parametros validados al backend pre-beta y aplicarlos en caliente para pruebas de ReactUI.
-- Validar si los cambios son permisibles antes de aplicarlos.
-- Generar un plan de despliegue con las acciones que se realizarian.
-- Ver interfaces detectadas con IP, estado y MAC.
-- Ver daemons relevantes y enviar restart controlado.
-- Ver leases DHCP con IP, host, MAC y estado.
-- Probar inyeccion `tc/netem` en vivo desde ReactUI sobre las interfaces activas.
-- Preparar multiples bots de Telegram, revelar token/chat id solo con password Linux y validar sincronizacion contra Telegram API.
-- Revisar un diagrama conceptual de los cambios propuestos para L2 o L3.
-
-Para probar la etapa ReactUI:
-
-1. Ejecuta `./WANsim2.sh` y entra al dashboard.
-2. Abre `ReactUI pre-beta`.
-3. Ajusta L3/NAT o Bridge L2L y presiona `Enviar parametros`.
-4. Revisa el bloque `Resultado validacion/plan`; cada accion aplicada aparece con `ok`, comando y salida.
-5. Usa `Inyeccion en vivo` para aplicar delay, jitter o perdida sobre las interfaces activas sin salir de ReactUI.
+La pre-beta permite preparar L3/NAT o Bridge L2, validar las restricciones, revisar un plan de despliegue, consultar interfaces, tráfico, leases DHCP y daemons, y probar perfiles `tc/netem`. El modo predeterminado es `dry-run`: no cambia interfaces ni servicios del host.
 
 ### LAN L3 Sin Etiqueta
 
 En el asistente, selecciona `access` en la pregunta `modo LAN` del par deseado. Solo debes indicar el tercer octeto de su subred; no se pide cantidad ni ID de VLAN.
 
-En `ReactUI pre-beta`, selecciona `Acceso sin etiqueta (sin VLAN)` en `Modo del puerto LAN` de cualquier par WAN/LAN. Los campos de cantidad e ID VLAN se ocultan. Define la subred, revisa `Validar` y `Plan de despliegue`, y pulsa `Enviar parametros` para aplicar el cambio.
+En la configuración L3, selecciona `Acceso sin etiqueta (sin VLAN)` en `Modo del puerto LAN` de cualquier par WAN/LAN. Los campos de cantidad e ID VLAN se ocultan. Define la subred, revisa el plan de despliegue y aplica el cambio únicamente en un host de laboratorio.
 
 Ejemplo: WAN `ens160`, LAN `ens192`, segmento `10.254` y octeto `10` asignan `10.254.10.1/24` directamente a `ens192`. DHCP entrega `10.254.10.100-200` con gateway `10.254.10.1`; los clientes usan trafico sin etiqueta. En el segundo par puedes usar otra LAN en acceso o mantener sus VLANs, siempre con subredes diferentes.
 
 El dashboard principal y la inyeccion en vivo muestran `Acceso sin etiqueta (ens192 -> ens160)` y controlan `ens192`. No se crea una VLAN 0. El modo y la cantidad de redes se guardan por par; las configuraciones anteriores siguen usando VLANs por defecto. Al cambiar de acceso a VLAN o Bridge se retira la IP de acceso administrada por WAN_SIM.
 
-Para actualizar una instalacion existente:
+Para actualizar una instalación estable existente, conserva la rama estable:
 
 ```bash
-git pull --ff-only
+git fetch --tags
+git switch --detach v1.119-stable
 ./WANsim2.sh
 ```
 
-El script regenera el dashboard; recarga el navegador después. ReactUI 2.0 continúa en pre-beta; la referencia estable es `v1.119-stable`.
+El script regenera el dashboard; recarga el navegador después. ReactUI 2.0 continúa en pre-beta; la referencia de instalación es `v1.119-stable`.
 
 ## API 2.0: Configuracion Y Despliegue
 
