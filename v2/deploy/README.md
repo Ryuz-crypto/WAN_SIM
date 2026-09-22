@@ -8,9 +8,10 @@ Genera el secreto y prepara el archivo de entorno:
 cd v2/deploy
 cp .env.example .env
 python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-Coloca el valor generado en `WANSIM_V2_SECRET_KEY` dentro de `.env`, luego inicia HTTP:
+Coloca los valores generados en `WANSIM_V2_SECRET_KEY` y `WANSIM_V2_API_KEY` dentro de `.env`, luego inicia HTTP. ReactUI solicitará la segunda clave al operador y la mantendrá únicamente en `sessionStorage`:
 
 ```bash
 docker compose up --build -d

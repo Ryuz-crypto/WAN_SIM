@@ -31,6 +31,7 @@ jobs:
       - name: Validate Docker Compose definition
         env:
           WANSIM_V2_SECRET_KEY: YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=
+          WANSIM_V2_API_KEY: test-compose-api-key-1234567890
         run: docker compose -f v2/deploy/docker-compose.yml config --quiet
       - name: Browser test dependencies
         run: |

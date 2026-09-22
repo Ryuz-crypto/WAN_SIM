@@ -19,6 +19,18 @@ class CommandResult:
     output: str
 
 
+@dataclass
+class ApplyOutcome:
+    results: list[dict]
+    applied_actions: list[CommandAction]
+
+
+class ApplyError(RuntimeError):
+    def __init__(self, message: str, outcome: ApplyOutcome):
+        super().__init__(message)
+        self.outcome = outcome
+
+
 class CommandRunner:
     """Runs only argument-vector commands and defaults to a harmless simulation."""
 
@@ -88,12 +100,20 @@ class NetworkAgent:
         }
         network = {key: self.runner.probe(command).output for key, command in probes.items()}
         iptables = self.runner.probe(["iptables-save"]).output
-        return {"captured_at": captured_at, "mode": self.runner.mode, "network": network, "iptables": iptables}
+        forwarding = self.runner.probe(["sysctl", "-n", "net.ipv4.ip_forward"]).output
+        dhcp_path = Path("/etc/dhcp/dhcpd.conf")
+        try:
+            dhcp_config = {"exists": True, "content": dhcp_path.read_text(encoding="utf-8")}
+        except OSError:
+            dhcp_config = {"exists": False, "content": ""}
+        dhcp_active = next((service for service in ("isc-dhcp-server", "dhcpd") if self.runner.probe(["systemctl", "is-active", service]).ok), "")
+        return {"captured_at": captured_at, "mode": self.runner.mode, "network": network, "iptables": iptables, "forwarding": forwarding, "dhcp_config": dhcp_config, "dhcp_active": dhcp_active}
 
     def plan(self, config: TopologyConfig) -> list[CommandAction]:
         actions: list[CommandAction] = []
         if config.topology == Topology.NAT:
             assert config.l3 is not None
+            actions.append(self._action("nat-prepare", "prepare", "Preparar cadena NAT administrada", ["wansim-agent", "nat", "prepare"]))
             actions.append(self._action("forwarding", "prepare", "Habilitar IPv4 forwarding", ["sysctl", "-w", "net.ipv4.ip_forward=1"]))
             for link_index, link in enumerate(config.l3.links, start=1):
                 actions.append(self._action(f"wan-up-{link_index}", "prepare", f"Activar WAN {link.wan}", ["ip", "link", "set", link.wan, "up"]))
@@ -119,45 +139,238 @@ class NetworkAgent:
                     actions.append(self._action(f"nat-{link_index}-{offset}", "apply", f"NAT {subnet} por {link.wan}", ["iptables", "-t", "nat", "-A", "WANSIM_POSTROUTING", "-s", subnet, "-o", link.wan, "-j", "MASQUERADE"], ["iptables", "-t", "nat", "-D", "WANSIM_POSTROUTING", "-s", subnet, "-o", link.wan, "-j", "MASQUERADE"]))
             if config.dhcp_enabled:
                 actions.append(self._action("dhcp", "apply", "Regenerar y reiniciar DHCP desde el agente", ["wansim-agent", "dhcp", "apply"]))
+            else:
+                actions.append(self._action("dhcp-disable", "apply", "Detener DHCP administrado", ["wansim-agent", "dhcp", "disable"]))
         else:
             assert config.bridge is not None
+            actions.append(self._action("forwarding-disable", "prepare", "Deshabilitar IPv4 forwarding en Bridge L2", ["sysctl", "-w", "net.ipv4.ip_forward=0"]))
+            actions.append(self._action("dhcp-disable", "apply", "Detener DHCP administrado", ["wansim-agent", "dhcp", "disable"]))
             for index, pair in enumerate(config.bridge.pairs, start=1):
                 bridge = f"br_wan{index}"
                 actions.extend([
                     self._action(f"bridge-create-{index}", "apply", f"Crear bridge {bridge}", ["ip", "link", "add", "name", bridge, "type", "bridge"], ["ip", "link", "del", bridge]),
                     self._action(f"bridge-in-{index}", "apply", f"Agregar {pair.input} a {bridge}", ["ip", "link", "set", pair.input, "master", bridge], ["ip", "link", "set", pair.input, "nomaster"]),
                     self._action(f"bridge-out-{index}", "apply", f"Agregar {pair.output} a {bridge}", ["ip", "link", "set", pair.output, "master", bridge], ["ip", "link", "set", pair.output, "nomaster"]),
+                    self._action(f"bridge-in-up-{index}", "apply", f"Activar {pair.input}", ["ip", "link", "set", pair.input, "up"]),
+                    self._action(f"bridge-out-up-{index}", "apply", f"Activar {pair.output}", ["ip", "link", "set", pair.output, "up"]),
                     self._action(f"bridge-up-{index}", "apply", f"Activar {bridge}", ["ip", "link", "set", bridge, "up"]),
                 ])
         actions.append(self._action("verify", "verify", "Verificar interfaces y topología aplicada", ["wansim-agent", "verify"]))
         return actions
 
-    def apply(self, actions: Iterable[CommandAction]) -> list[dict]:
+    def apply(self, actions: Iterable[CommandAction], config: TopologyConfig | None = None) -> ApplyOutcome:
         results: list[dict] = []
+        applied: list[CommandAction] = []
         for action in actions:
-            if action.command[0] == "wansim-agent":
-                results.append({"id": action.id, "ok": True, "output": "handled-by-agent"})
+            if action.phase == "verify":
                 continue
-            result = self.runner.run(action.command)
+            result, changed = self._execute_action(action, config)
             results.append({"id": action.id, "ok": result.ok, "output": result.output})
             if not result.ok:
-                raise RuntimeError(f"{action.description}: {result.output}")
+                raise ApplyError(f"{action.description}: {result.output}", ApplyOutcome(results, applied))
+            if changed:
+                applied.append(action)
+        return ApplyOutcome(results, applied)
+
+    def cleanup_obsolete(self, previous: Iterable[CommandAction], current: Iterable[CommandAction]) -> list[dict]:
+        """Remove only resources whose exact undo command is absent from the new plan."""
+        current_undos = {tuple(action.undo) for action in current if action.undo}
+        results: list[dict] = []
+        for action in reversed(list(previous)):
+            if not action.undo or tuple(action.undo) in current_undos:
+                continue
+            result = self.runner.run(action.undo)
+            results.append({"id": action.id, "ok": result.ok, "output": result.output})
+            if not result.ok and "Cannot find device" not in result.output and "No such" not in result.output and "Bad rule" not in result.output:
+                raise RuntimeError(f"No se pudo retirar {action.description}: {result.output}")
         return results
+
+    def cleanup_conflicts(self, previous: Iterable[CommandAction], current: Iterable[CommandAction]) -> list[dict]:
+        """Remove managed links that keep the same name but change their definition."""
+        previous_links = {self._created_link_name(action): action for action in previous if self._created_link_name(action)}
+        results: list[dict] = []
+        for action in current:
+            name = self._created_link_name(action)
+            old = previous_links.get(name)
+            if not old or old.command == action.command or not old.undo:
+                continue
+            result = self.runner.run(old.undo)
+            results.append({"id": old.id, "ok": result.ok, "output": result.output})
+            if not result.ok:
+                raise RuntimeError(f"No se pudo retirar el recurso incompatible {name}: {result.output}")
+        return results
+
+    def _execute_action(self, action: CommandAction, config: TopologyConfig | None) -> tuple[CommandResult, bool]:
+        command = action.command
+        if command[:3] == ["wansim-agent", "nat", "prepare"]:
+            return self._prepare_nat()
+        if command[:3] == ["wansim-agent", "dhcp", "apply"]:
+            if config is None:
+                return CommandResult(False, command, "Configuración DHCP ausente."), False
+            return self._apply_dhcp(config)
+        if command[:3] == ["wansim-agent", "dhcp", "disable"]:
+            return self._disable_dhcp()
+        if command[:3] == ["ip", "link", "add"]:
+            name = command[command.index("name") + 1] if "name" in command else ""
+            if name and self.runner.probe(["ip", "link", "show", name]).ok:
+                if self._existing_link_matches(command, name):
+                    return CommandResult(True, command, "already-present"), False
+                return CommandResult(False, command, f"La interfaz {name} ya existe con otra definición."), False
+        if command[:4] == ["iptables", "-t", "nat", "-A"]:
+            check = [*command]
+            check[3] = "-C"
+            if self.runner.probe(check).ok:
+                return CommandResult(True, command, "already-present"), False
+        result = self.runner.run(command)
+        return result, result.ok
+
+    @staticmethod
+    def _created_link_name(action: CommandAction) -> str:
+        command = action.command
+        if command[:3] != ["ip", "link", "add"] or "name" not in command:
+            return ""
+        index = command.index("name") + 1
+        return command[index] if index < len(command) else ""
+
+    def _existing_link_matches(self, command: list[str], name: str) -> bool:
+        details = self.runner.probe(["ip", "-d", "-j", "link", "show", name])
+        try:
+            item = json.loads(details.output or "[]")[0] if details.ok else {}
+        except (json.JSONDecodeError, IndexError):
+            return False
+        kind = ((item.get("linkinfo") or {}).get("info_kind"))
+        if command[-1:] == ["bridge"] or command[-2:] == ["type", "bridge"]:
+            return kind == "bridge"
+        if "vlan" not in command:
+            return False
+        expected_id = int(command[command.index("id") + 1])
+        actual_id = (((item.get("linkinfo") or {}).get("info_data") or {}).get("id"))
+        parent = command[command.index("link", 2) + 1]
+        parent_details = self.runner.probe(["ip", "-j", "link", "show", parent])
+        try:
+            parent_index = json.loads(parent_details.output or "[]")[0].get("ifindex") if parent_details.ok else None
+        except (json.JSONDecodeError, IndexError):
+            parent_index = None
+        return kind == "vlan" and actual_id == expected_id and item.get("link_index") == parent_index
+
+    def _prepare_nat(self) -> tuple[CommandResult, bool]:
+        command = ["wansim-agent", "nat", "prepare"]
+        if self.runner.mode != "host":
+            return CommandResult(True, command, "dry-run"), True
+        changed = False
+        if not self.runner.probe(["iptables", "-t", "nat", "-S", "WANSIM_POSTROUTING"]).ok:
+            result = self.runner.run(["iptables", "-t", "nat", "-N", "WANSIM_POSTROUTING"])
+            if not result.ok:
+                return result, changed
+            changed = True
+        jump = ["iptables", "-t", "nat", "-C", "POSTROUTING", "-j", "WANSIM_POSTROUTING"]
+        if not self.runner.probe(jump).ok:
+            result = self.runner.run(["iptables", "-t", "nat", "-A", "POSTROUTING", "-j", "WANSIM_POSTROUTING"])
+            if not result.ok:
+                return result, changed
+            changed = True
+        return CommandResult(True, command, "prepared" if changed else "already-present"), changed
+
+    def _apply_dhcp(self, config: TopologyConfig) -> tuple[CommandResult, bool]:
+        command = ["wansim-agent", "dhcp", "apply"]
+        if self.runner.mode != "host":
+            return CommandResult(True, command, "dry-run"), True
+        if config.topology != Topology.NAT or not config.l3:
+            return CommandResult(False, command, "DHCP sólo está disponible para L3/NAT."), False
+        lines = ["authoritative;", "default-lease-time 600;", "max-lease-time 7200;", ""]
+        for link in config.l3.links:
+            for offset in range(link.vlans):
+                prefix = f"{config.l3.segment}.{link.base_octet + offset}"
+                lines.extend([
+                    f"subnet {prefix}.0 netmask 255.255.255.0 {{",
+                    f"  range {prefix}.100 {prefix}.200;",
+                    f"  option routers {prefix}.1;",
+                    "  option subnet-mask 255.255.255.0;",
+                    "  option domain-name-servers 1.1.1.1, 8.8.8.8;",
+                    "}", "",
+                ])
+        path = "/etc/dhcp/dhcpd.conf"
+        written = self.runner.run(["tee", path], input_data="\n".join(lines))
+        if not written.ok:
+            return written, False
+        validation = self.runner.run(["dhcpd", "-t", "-cf", path])
+        if not validation.ok:
+            return validation, True
+        for service in ("isc-dhcp-server", "dhcpd"):
+            restarted = self.runner.run(["systemctl", "restart", service])
+            if restarted.ok:
+                return CommandResult(True, command, f"configured:{service}"), True
+        return CommandResult(False, command, "No se pudo reiniciar isc-dhcp-server ni dhcpd."), True
+
+    def _disable_dhcp(self) -> tuple[CommandResult, bool]:
+        command = ["wansim-agent", "dhcp", "disable"]
+        if self.runner.mode != "host":
+            return CommandResult(True, command, "dry-run"), True
+        changed = False
+        for service in ("isc-dhcp-server", "dhcpd"):
+            if self.runner.probe(["systemctl", "is-active", service]).ok:
+                stopped = self.runner.run(["systemctl", "stop", service])
+                if not stopped.ok:
+                    return stopped, changed
+                changed = True
+        return CommandResult(True, command, "stopped" if changed else "already-stopped"), changed
 
     def verify(self, config: TopologyConfig) -> dict:
         if self.runner.mode == "dry-run":
             return {"ok": True, "mode": "dry-run", "message": "Plan validado; no se modificó el host."}
-        interfaces = {item["name"] for item in self.interfaces()}
-        required = set()
+        interface_items = self.interfaces()
+        interfaces = {item["name"] for item in interface_items}
+        addresses = {item["name"]: set(item["ips"]) for item in interface_items}
+        required: set[str] = set()
+        errors: list[str] = []
+        routes_probe = self.runner.probe(["ip", "-j", "route", "show"])
+        try:
+            routes = json.loads(routes_probe.output or "[]") if routes_probe.ok else []
+        except json.JSONDecodeError:
+            routes = []
         if config.topology == Topology.NAT and config.l3:
             for index, link in enumerate(config.l3.links, start=1):
                 required.update((link.wan, link.lan))
+                if link.wan_mode == WanAddressing.MANUAL and (link.wan_cidr or "").split("/")[0] not in addresses.get(link.wan, set()):
+                    errors.append(f"WAN {link.wan} sin dirección {link.wan_cidr}")
+                if link.wan_mode == WanAddressing.MANUAL and not any(route.get("dst") == "default" and route.get("gateway") == link.wan_gateway and route.get("dev") == link.wan for route in routes):
+                    errors.append(f"Gateway {link.wan_gateway} ausente en {link.wan}")
+                if link.wan_mode == WanAddressing.DHCP and not addresses.get(link.wan):
+                    errors.append(f"WAN DHCP {link.wan} sin dirección IPv4")
                 if link.lan_mode == LanMode.VLAN:
                     required.update(f"v{index}_{link.start_vlan + offset}" for offset in range(link.vlans))
+                for offset in range(link.vlans):
+                    interface = link.lan if link.lan_mode == LanMode.ACCESS else f"v{index}_{link.start_vlan + offset}"
+                    if link.lan_mode == LanMode.VLAN:
+                        vlan_id = link.start_vlan + offset
+                        expected_link = ["ip", "link", "add", "link", link.lan, "name", interface, "type", "vlan", "id", str(vlan_id)]
+                        if interface in interfaces and not self._existing_link_matches(expected_link, interface):
+                            errors.append(f"VLAN {interface} no corresponde a {link.lan} ID {vlan_id}")
+                    expected = f"{config.l3.segment}.{link.base_octet + offset}.1"
+                    if expected not in addresses.get(interface, set()):
+                        errors.append(f"LAN {interface} sin dirección {expected}")
+                    subnet = f"{config.l3.segment}.{link.base_octet + offset}.0/24"
+                    rule = ["iptables", "-t", "nat", "-C", "WANSIM_POSTROUTING", "-s", subnet, "-o", link.wan, "-j", "MASQUERADE"]
+                    if not self.runner.probe(rule).ok:
+                        errors.append(f"NAT ausente para {subnet} por {link.wan}")
+            if config.dhcp_enabled and not any(self.runner.probe(["systemctl", "is-active", service]).ok for service in ("isc-dhcp-server", "dhcpd")):
+                errors.append("Servicio DHCP inactivo")
         elif config.bridge:
             required.update(interface for pair in config.bridge.pairs for interface in (pair.input, pair.output))
+            required.update(f"br_wan{index}" for index in range(1, len(config.bridge.pairs) + 1))
+            links = self.runner.probe(["ip", "-j", "link", "show"])
+            try:
+                masters = {item.get("ifname"): item.get("master") for item in json.loads(links.output or "[]")}
+            except json.JSONDecodeError:
+                masters = {}
+            for index, pair in enumerate(config.bridge.pairs, start=1):
+                bridge = f"br_wan{index}"
+                for member in (pair.input, pair.output):
+                    if masters.get(member) != bridge:
+                        errors.append(f"{member} no pertenece a {bridge}")
         missing = sorted(required - interfaces)
-        return {"ok": not missing, "mode": "host", "missing_interfaces": missing}
+        errors.extend(f"Interfaz ausente: {name}" for name in missing)
+        return {"ok": not errors, "mode": "host", "missing_interfaces": missing, "errors": errors}
 
     def preflight(self, config: TopologyConfig) -> dict:
         """Confirm selected physical interfaces before a host-mode transaction begins."""
@@ -230,9 +443,10 @@ class NetworkAgent:
             "leases": self.dhcp_leases(),
         }
 
-    def rollback(self, actions: Iterable[CommandAction], snapshot: dict) -> list[dict]:
+    def rollback(self, actions: Iterable[CommandAction], snapshot: dict, restore_actions: Iterable[CommandAction] | None = None) -> list[dict]:
         results: list[dict] = []
-        for action in reversed(list(actions)):
+        applied = list(actions)
+        for action in reversed(applied):
             if not action.undo:
                 continue
             result = self.runner.run(action.undo)
@@ -240,7 +454,114 @@ class NetworkAgent:
         if self.runner.mode == "host" and snapshot.get("iptables"):
             result = self.runner.run(["iptables-restore"], input_data=snapshot["iptables"])
             results.append({"id": "iptables-restore", "ok": result.ok, "output": result.output})
+        if self.runner.mode == "host":
+            results.extend(self._restore_network_state(snapshot, list(restore_actions) if restore_actions is not None else applied))
+            forwarding = str(snapshot.get("forwarding", "")).strip()
+            if forwarding in {"0", "1"}:
+                result = self.runner.run(["sysctl", "-w", f"net.ipv4.ip_forward={forwarding}"])
+                results.append({"id": "forwarding-restore", "ok": result.ok, "output": result.output})
+            results.extend(self._restore_dhcp(snapshot))
         return results
+
+    def _restore_network_state(self, snapshot: dict, actions: list[CommandAction]) -> list[dict]:
+        results: list[dict] = []
+        managed = self._managed_interfaces(actions)
+        try:
+            desired_items = json.loads(snapshot.get("network", {}).get("addresses") or "[]")
+            current_items = json.loads(self.runner.probe(["ip", "-j", "addr", "show"]).output or "[]")
+        except json.JSONDecodeError:
+            return [{"id": "address-restore", "ok": False, "output": "Snapshot de direcciones inválido."}]
+        desired = self._ipv4_map(desired_items)
+        current = self._ipv4_map(current_items)
+        for interface in sorted(managed):
+            if not self.runner.probe(["ip", "link", "show", interface]).ok:
+                continue
+            for cidr in sorted(current.get(interface, set()) - desired.get(interface, set())):
+                result = self.runner.run(["ip", "addr", "del", cidr, "dev", interface])
+                results.append({"id": f"address-remove:{interface}:{cidr}", "ok": result.ok, "output": result.output})
+            for cidr in sorted(desired.get(interface, set()) - current.get(interface, set())):
+                result = self.runner.run(["ip", "addr", "replace", cidr, "dev", interface])
+                results.append({"id": f"address-restore:{interface}:{cidr}", "ok": result.ok, "output": result.output})
+        try:
+            desired_routes = json.loads(snapshot.get("network", {}).get("routes") or "[]")
+            current_routes = json.loads(self.runner.probe(["ip", "-j", "route", "show"]).output or "[]")
+        except json.JSONDecodeError:
+            return results + [{"id": "route-restore", "ok": False, "output": "Snapshot de rutas inválido."}]
+        desired_defaults = {self._route_key(route): route for route in desired_routes if route.get("dst") == "default" and route.get("dev") in managed}
+        current_defaults = {self._route_key(route): route for route in current_routes if route.get("dst") == "default" and route.get("dev") in managed}
+        for key, route in current_defaults.items():
+            if key not in desired_defaults:
+                command = self._route_command("del", route)
+                result = self.runner.run(command)
+                results.append({"id": f"route-remove:{key}", "ok": result.ok, "output": result.output})
+        for key, route in desired_defaults.items():
+            if key not in current_defaults:
+                command = self._route_command("replace", route)
+                result = self.runner.run(command)
+                results.append({"id": f"route-restore:{key}", "ok": result.ok, "output": result.output})
+        return results
+
+    def _restore_dhcp(self, snapshot: dict) -> list[dict]:
+        state = snapshot.get("dhcp_config") or {}
+        path = "/etc/dhcp/dhcpd.conf"
+        results: list[dict] = []
+        if state.get("exists"):
+            result = self.runner.run(["tee", path], input_data=str(state.get("content", "")))
+            results.append({"id": "dhcp-config-restore", "ok": result.ok, "output": result.output})
+        else:
+            result = self.runner.run(["rm", "-f", path])
+            results.append({"id": "dhcp-config-remove", "ok": result.ok, "output": result.output})
+        active = snapshot.get("dhcp_active")
+        if active:
+            result = self.runner.run(["systemctl", "restart", str(active)])
+            results.append({"id": "dhcp-service-restore", "ok": result.ok, "output": result.output})
+        else:
+            for service in ("isc-dhcp-server", "dhcpd"):
+                self.runner.run(["systemctl", "stop", service])
+        return results
+
+    @staticmethod
+    def _ipv4_map(items: list[dict]) -> dict[str, set[str]]:
+        return {
+            item.get("ifname", ""): {
+                f"{address['local']}/{address['prefixlen']}"
+                for address in item.get("addr_info", [])
+                if address.get("family") == "inet" and address.get("local") and address.get("prefixlen") is not None
+            }
+            for item in items
+        }
+
+    @staticmethod
+    def _managed_interfaces(actions: list[CommandAction]) -> set[str]:
+        interfaces: set[str] = set()
+        for action in actions:
+            for command in (action.command, action.undo or []):
+                if "dev" in command and command.index("dev") + 1 < len(command):
+                    interfaces.add(command[command.index("dev") + 1])
+                if command[:3] == ["ip", "link", "set"] and len(command) > 3:
+                    interfaces.add(command[3])
+                if command[:4] == ["ip", "link", "add", "link"] and len(command) > 4:
+                    interfaces.add(command[4])
+                if "name" in command and command.index("name") + 1 < len(command):
+                    interfaces.add(command[command.index("name") + 1])
+        return interfaces
+
+    @staticmethod
+    def _route_key(route: dict) -> str:
+        return "|".join(str(route.get(field, "")) for field in ("dst", "gateway", "dev", "metric", "table"))
+
+    @staticmethod
+    def _route_command(operation: str, route: dict) -> list[str]:
+        command = ["ip", "route", operation, str(route.get("dst", "default"))]
+        if route.get("gateway"):
+            command.extend(["via", str(route["gateway"])])
+        if route.get("dev"):
+            command.extend(["dev", str(route["dev"])])
+        if route.get("metric") is not None:
+            command.extend(["metric", str(route["metric"])])
+        if route.get("table") not in (None, "main", 254):
+            command.extend(["table", str(route["table"])])
+        return command
 
     @staticmethod
     def _action(action_id: str, phase: str, description: str, command: list[str], undo: list[str] | None = None) -> CommandAction:

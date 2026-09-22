@@ -1,7 +1,7 @@
 {
   "name": "wansim-reactui",
   "private": true,
-  "version": "2.0.3-prebeta",
+  "version": "2.0.4-prebeta",
   "type": "module",
   "scripts": {
     "dev": "vite",

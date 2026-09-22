@@ -7,6 +7,7 @@ La etiqueta `v2.0.0-stable` no se crea por avance de interfaz: requiere evidenci
 - Prueba manual de Bridge L2, DHCP, `netem`, reinicio de daemon y restauración de configuración activa anterior.
 - Revisión de la migración V1→V2 y prueba de retorno a `v1.119-stable` en una VM dedicada.
 - Tokens Telegram cifrados, secretos de webhook configurados y bots con chats/roles mínimos necesarios.
+- API operativa protegida con una clave robusta, rotación probada y ausencia de credenciales en URL, logs o repositorio.
 - Proxy HTTPS probado con certificado real, SQLite respaldada y recuperación validada.
 
 Mientras alguna condición esté pendiente, la versión permanece `2.0.x-prebeta` y V1.119 es la instalación recomendada.

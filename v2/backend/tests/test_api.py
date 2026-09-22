@@ -10,6 +10,9 @@ from wansim_v2.api import create_app
 from wansim_v2.network import CommandRunner, NetworkAgent
 from wansim_v2.telegram import TelegramGateway
 
+API_KEY = "test-operator-api-key-1234567890"
+AUTH_HEADERS = {"X-WAN-SIM-API-Key": API_KEY}
+
 
 class FailingRunner(CommandRunner):
     def __init__(self) -> None:
@@ -39,8 +42,11 @@ class RecordingTelegramGateway(TelegramGateway):
     def __init__(self) -> None:
         self.messages: list[dict] = []
         self.webhooks: list[dict] = []
+        self.fail_delivery = False
 
     def send_message(self, token: str, chat_id: int, text: str, keyboard=None) -> dict:
+        if self.fail_delivery:
+            return {"ok": False, "error": "forced Telegram failure"}
         self.messages.append({"token": token, "chat_id": chat_id, "text": text, "keyboard": keyboard})
         return {"ok": True}
 
@@ -52,7 +58,7 @@ class RecordingTelegramGateway(TelegramGateway):
 class ApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.directory = tempfile.TemporaryDirectory()
-        self.client = TestClient(create_app(Path(self.directory.name), NetworkAgent(CommandRunner("dry-run"))))
+        self.client = TestClient(create_app(Path(self.directory.name), NetworkAgent(CommandRunner("dry-run")), api_key=API_KEY), headers=AUTH_HEADERS)
 
     def tearDown(self) -> None:
         self.directory.cleanup()
@@ -75,6 +81,10 @@ class ApiTests(unittest.TestCase):
         response = self.client.get("/health")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["execution_mode"], "dry-run")
+
+    def test_operational_api_requires_operator_key(self) -> None:
+        response = self.client.get("/api/v2/operations/overview", headers={"X-WAN-SIM-API-Key": ""})
+        self.assertEqual(response.status_code, 401)
 
     def test_access_plan_has_no_vlan_creation(self) -> None:
         created = self.client.post("/api/v2/configurations", json=self.nat_payload()).json()
@@ -129,14 +139,14 @@ class ApiTests(unittest.TestCase):
 
     def test_failed_host_apply_rolls_back_and_never_activates_draft(self) -> None:
         runner = FailingRunner()
-        app = create_app(Path(self.directory.name) / "failure", NetworkAgent(runner))
-        client = TestClient(app)
+        app = create_app(Path(self.directory.name) / "failure", NetworkAgent(runner), api_key=API_KEY)
+        client = TestClient(app, headers=AUTH_HEADERS)
         created = client.post("/api/v2/configurations", json=self.nat_payload()).json()
         deployment = client.post(f"/api/v2/configurations/{created['id']}/deploy", json={"apply": True}).json()
         self.assertEqual(deployment["status"], "ROLLED_BACK")
         self.assertIn("forced address failure", deployment["result"]["error"])
         self.assertIsNone(client.get("/api/v2/configurations/active/current").json())
-        self.assertTrue(any(command[:3] == ["ip", "addr", "del"] for command in runner.commands))
+        self.assertFalse(any(command[:3] == ["ip", "addr", "del"] for command in runner.commands))
 
     def test_operations_endpoints_are_safe_in_dry_run(self) -> None:
         overview = self.client.get("/api/v2/operations/overview")
@@ -152,7 +162,7 @@ class ApiTests(unittest.TestCase):
 
     def test_telegram_bots_mask_tokens_and_enforce_permissions(self) -> None:
         gateway = RecordingTelegramGateway()
-        client = TestClient(create_app(Path(self.directory.name) / "telegram", NetworkAgent(CommandRunner("dry-run")), gateway))
+        client = TestClient(create_app(Path(self.directory.name) / "telegram", NetworkAgent(CommandRunner("dry-run")), gateway, API_KEY), headers=AUTH_HEADERS)
         created = client.post("/api/v2/telegram/bots", json={
             "name": "Monitor", "token": "123456:telegram-token-for-tests", "allowedChatIds": [1001], "permission": "read",
         })
@@ -184,6 +194,9 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(listed.status_code, 200)
         self.assertEqual(listed.json()[0]["permission"], "read")
         self.assertTrue(listed.json()[0]["webhook_url"].startswith("https://"))
+        gateway.fail_delivery = True
+        failed_delivery = client.post(f"/api/v2/telegram/bots/{bot_id}/test", json={"chatId": 1001})
+        self.assertEqual(failed_delivery.status_code, 502)
 
 
 if __name__ == "__main__":

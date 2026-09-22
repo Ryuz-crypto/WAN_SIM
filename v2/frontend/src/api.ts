@@ -1,7 +1,13 @@
 import type { Config, Configuration, Deployment, Overview, TelegramBot, TelegramBotCreated, TelegramPermission } from './types'
 
+let operatorKey = ''
+
+export function configureApiKey(value: string) {
+  operatorKey = value
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...init })
+  const response = await fetch(url, { headers: { 'Content-Type': 'application/json', ...(operatorKey ? { 'X-WAN-SIM-API-Key': operatorKey } : {}) }, ...init })
   if (!response.ok) {
     const payload = await response.json().catch(() => ({})) as { detail?: string }
     throw new Error(payload.detail ?? `HTTP ${response.status}`)

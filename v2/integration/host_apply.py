@@ -39,8 +39,6 @@ def main() -> None:
         for name in INTERFACES:
             command("ip", "link", "add", name, "type", "dummy")
             command("ip", "link", "set", name, "up")
-        command("iptables", "-t", "nat", "-N", "WANSIM_POSTROUTING")
-        command("iptables", "-t", "nat", "-A", "POSTROUTING", "-j", "WANSIM_POSTROUTING")
         os.environ["WANSIM_V2_EXECUTION_MODE"] = "host"
         os.environ["WANSIM_V2_ALLOW_HOST_APPLY"] = "1"
         agent = NetworkAgent(CommandRunner())

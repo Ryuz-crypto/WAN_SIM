@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Bot, Cable, CheckCircle2, Clock3, Gauge, GitCompareArrows, LayoutDashboard, Network,
+  Bot, Cable, CheckCircle2, Clock3, Gauge, GitCompareArrows, KeyRound, LayoutDashboard, LogOut, Network,
   Play, RefreshCw, RotateCcw, Router, Save, ServerCog, ShieldCheck, SlidersHorizontal, Workflow, X,
 } from 'lucide-react'
-import { api } from './api'
+import { api, configureApiKey } from './api'
 import type { Config, Configuration, Deployment, L3Link, Overview, TelegramBot, TelegramPermission } from './types'
 
 const emptyLink = (): L3Link => ({ wan: '', lan: '', lanMode: 'vlan', vlans: 1, startVlan: 100, baseOctet: 10, wanMode: 'dhcp', wanCidr: '', wanGateway: '' })
@@ -22,6 +22,8 @@ function Diagram({ config }: { config: Config }) {
 }
 
 function App() {
+  const [apiKey, setApiKey] = useState(() => window.sessionStorage.getItem('wansim-api-key') ?? '')
+  const [apiKeyDraft, setApiKeyDraft] = useState('')
   const [tab, setTab] = useState<'configure' | 'operations' | 'telegram' | 'audit'>('configure')
   const [config, setConfig] = useState<Config>(initialConfig)
   const [name, setName] = useState('Topología WAN_SIM 2.0')
@@ -46,7 +48,28 @@ function App() {
       if (!netem.interface && nextOverview.interfaces[0]) setNetem(value => ({ ...value, interface: nextOverview.interfaces[0].name }))
     } catch (error) { setNotice(error instanceof Error ? error.message : 'No se pudo consultar el plano de control.') }
   }
-  useEffect(() => { void refresh(); const id = window.setInterval(() => void refresh(), 15000); return () => window.clearInterval(id) }, [])
+  useEffect(() => {
+    if (!apiKey) return
+    configureApiKey(apiKey)
+    void refresh()
+    const id = window.setInterval(() => void refresh(), 15000)
+    return () => window.clearInterval(id)
+  }, [apiKey])
+
+  const authenticate = () => {
+    const key = apiKeyDraft.trim()
+    if (!key) { setNotice('Ingresa la clave de operador.'); return }
+    window.sessionStorage.setItem('wansim-api-key', key)
+    configureApiKey(key)
+    setApiKey(key)
+    setApiKeyDraft('')
+  }
+  const logout = () => {
+    window.sessionStorage.removeItem('wansim-api-key')
+    configureApiKey('')
+    setApiKey('')
+    setOverview(null); setDeployments([]); setBots([]); setNotice('')
+  }
 
   const updateLink = (index: number, patch: Partial<L3Link>) => setConfig(value => ({ ...value, l3: { ...value.l3, links: value.l3.links.map((link, position) => position === index ? { ...link, ...patch } : link) } }))
   const removeLink = (index: number) => setConfig(value => ({ ...value, l3: { ...value.l3, links: value.l3.links.filter((_, position) => position !== index) } }))
@@ -101,7 +124,9 @@ function App() {
   }
 
   return <main className="app-shell">
-    <header className="topbar"><div className="brand"><Router size={28} /><div><strong>WAN_SIM</strong><span>Control Plane 2.0</span></div></div><div className="topbar-actions"><span className={`mode ${health?.execution_mode === 'host' ? 'host' : ''}`}><ShieldCheck size={15} />{health?.execution_mode ?? 'conectando'}</span><span className="version">{health?.version ?? '2.0.3-prebeta'}</span><button className="icon-button" onClick={() => void refresh()} title="Actualizar estado"><RefreshCw size={18} /></button></div></header>
+    <header className="topbar"><div className="brand"><Router size={28} /><div><strong>WAN_SIM</strong><span>Control Plane 2.0</span></div></div><div className="topbar-actions"><span className={`mode ${health?.execution_mode === 'host' ? 'host' : ''}`}><ShieldCheck size={15} />{apiKey ? health?.execution_mode ?? 'conectando' : 'protegido'}</span><span className="version">{health?.version ?? '2.0.4-prebeta'}</span>{apiKey && <><button className="icon-button" onClick={() => void refresh()} title="Actualizar estado"><RefreshCw size={18} /></button><button className="icon-button" onClick={logout} title="Cerrar sesión"><LogOut size={18} /></button></>}</div></header>
+    {!apiKey && <section className="workspace"><section className="panel auth-panel"><div className="panel-heading"><div><span className="eyebrow">Acceso de operador</span><h1>Plano de control protegido</h1></div><KeyRound size={23} /></div><label>Clave de API<input type="password" autoComplete="current-password" value={apiKeyDraft} onChange={event => setApiKeyDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') authenticate() }} /></label><div className="button-row"><button className="primary-button" onClick={authenticate}><KeyRound size={17} />Ingresar</button></div></section></section>}
+    {apiKey && <>
     <nav className="nav-tabs" aria-label="Navegación principal">
       <button className={tab === 'configure' ? 'selected' : ''} onClick={() => setTab('configure')}><Workflow size={17} />Configurar</button>
       <button className={tab === 'operations' ? 'selected' : ''} onClick={() => setTab('operations')}><LayoutDashboard size={17} />Operación</button>
@@ -130,6 +155,7 @@ function App() {
     {tab === 'telegram' && <section className="workspace configure-grid"><section className="panel form-panel"><div className="panel-heading"><div><span className="eyebrow">Canal de operación</span><h1>Bots de Telegram</h1></div><Bot size={23} /></div><label>URL pública HTTPS del API<input value={telegramBaseUrl} placeholder="https://wansim.example.com" onChange={event => setTelegramBaseUrl(event.target.value)} /></label><label>Nombre<input value={botForm.name} placeholder="NOC principal" onChange={event => setBotForm(value => ({ ...value, name: event.target.value }))} /></label><label>Token del bot<input type="password" autoComplete="new-password" value={botForm.token} placeholder="123456:ABC..." onChange={event => setBotForm(value => ({ ...value, token: event.target.value }))} /></label><label>Chat IDs autorizados<input value={botForm.chatIds} placeholder="123456789, 987654321" onChange={event => setBotForm(value => ({ ...value, chatIds: event.target.value }))} /></label><label>Permiso<select value={botForm.permission} onChange={event => setBotForm(value => ({ ...value, permission: event.target.value as TelegramPermission }))}><option value="read">Solo lectura</option><option value="operate">Operación / netem</option><option value="admin">Administración</option></select></label><div className="button-row"><button className="primary-button" disabled={busy} onClick={() => void createBot()}><Save size={17} />Crear bot</button></div></section><section className="panel full"><div className="panel-heading"><div><span className="eyebrow">Acceso protegido</span><h2>Inventario de bots</h2></div><ShieldCheck size={22} /></div><div className="table-wrap"><table><thead><tr><th>Nombre</th><th>Token</th><th>Chats</th><th>Rol</th><th>Webhook</th><th>Estado</th><th></th></tr></thead><tbody>{bots.length ? bots.map(bot => <tr key={bot.id}><td><strong>{bot.name}</strong></td><td>{bot.token_hint}</td><td>{bot.allowed_chat_ids.join(', ')}</td><td>{bot.permission}</td><td>{bot.webhook_url ? 'sincronizado' : 'pendiente'}</td><td><span className={bot.enabled ? 'good' : 'muted'}>{bot.enabled ? 'habilitado' : 'deshabilitado'}</span></td><td><div className="button-row"><button className="secondary-button compact" onClick={() => void syncBot(bot)}>Sincronizar</button><button className="secondary-button compact" onClick={() => void testBot(bot)}>Probar</button><button className="secondary-button compact" onClick={() => void updateBot(bot, !bot.enabled)}>{bot.enabled ? 'Deshabilitar' : 'Habilitar'}</button></div></td></tr>) : <tr><td colSpan={7} className="empty">Sin bots configurados</td></tr>}</tbody></table></div></section></section>}
 
     {tab === 'audit' && <section className="workspace"><section className="panel full"><div className="panel-heading"><div><span className="eyebrow">Auditoría</span><h1>Despliegues</h1></div><Clock3 size={22} /></div><div className="table-wrap"><table><thead><tr><th>Hora</th><th>Estado</th><th>Acciones</th><th>Modo</th><th></th></tr></thead><tbody>{deployments.length ? deployments.map(item => <tr key={item.id}><td>{new Date(item.created_at).toLocaleString('es-MX')}</td><td><span className={`state ${item.status.toLowerCase()}`}>{item.status}</span></td><td>{item.plan.length}</td><td>{String(item.result.mode ?? '-')}</td><td><button className="secondary-button compact" disabled={item.status !== 'APPLIED' || busy} onClick={() => void rollback(item.id)}><RotateCcw size={15} />Rollback</button></td></tr>) : <tr><td colSpan={5} className="empty">Sin despliegues registrados</td></tr>}</tbody></table></div></section></section>}
+    </>}
   </main>
 }
 

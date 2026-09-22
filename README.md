@@ -1,6 +1,6 @@
 # Ryuz WAN Simulator
 
-**Instalación recomendada: [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable)** | **Desarrollo actual: `2.0.3-prebeta`** | **Autor**: decameru@outlook.com
+**Instalación recomendada: [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable)** | **Desarrollo actual: `2.0.4-prebeta`** | **Autor**: decameru@outlook.com
 
 Ryuz WAN Simulator es una herramienta para simular condiciones WAN en Linux. Permite aplicar latencia, jitter y perdida de paquetes sobre interfaces fisicas, VLANs o bridges L2, con un dashboard Flask para control operativo.
 
@@ -84,13 +84,13 @@ En Ubuntu/Debian, instala los prerrequisitos si aún no están disponibles:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y python3 python3-venv python3-pip nodejs npm
+sudo apt-get install -y python3 python3-venv python3-pip nodejs npm iproute2 iptables isc-dhcp-client isc-dhcp-server
 ```
 
 En Fedora, CentOS Stream o Rocky Linux:
 
 ```bash
-sudo dnf install -y python3 python3-pip nodejs npm
+sudo dnf install -y python3 python3-pip nodejs npm iproute iptables dhcp-client dhcp-server
 ```
 
 Después inicia el backend. Mantén esta terminal abierta:
@@ -100,10 +100,13 @@ cd v2/backend
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
+export WANSIM_V2_API_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+printf '%s\n' "$WANSIM_V2_API_KEY" > ~/.wansim-v2-operator.key
+chmod 600 ~/.wansim-v2-operator.key
 uvicorn wansim_v2.api:app --host 0.0.0.0 --port 8080
 ```
 
-Comprueba que responde en `http://<IP_DEL_SERVIDOR>:8080/health` y consulta el contrato en `http://<IP_DEL_SERVIDOR>:8080/docs`.
+Comprueba que responde en `http://<IP_DEL_SERVIDOR>:8080/health` y consulta el contrato en `http://<IP_DEL_SERVIDOR>:8080/docs`. ReactUI solicita la clave guardada en `~/.wansim-v2-operator.key`; se conserva solamente durante la pestaña actual del navegador.
 
 ### 3. Iniciar ReactUI
 
@@ -135,6 +138,7 @@ cd v2/deploy
 cp .env.example .env
 python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 # Copia el valor generado en WANSIM_V2_SECRET_KEY dentro de .env
+# Genera WANSIM_V2_API_KEY con: python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 docker compose up --build -d
 ```
 
@@ -272,7 +276,7 @@ Para generar los archivos estáticos de la interfaz: `npm run build`. Sigue sien
 
 ### Telegram Desde FastAPI
 
-V2 administra varios bots desde `/api/v2/telegram/bots`. Cada token queda cifrado en el estado local, sólo se muestra una pista enmascarada y cada bot limita chats autorizados y permiso `read`, `operate` o `admin`. El webhook exige el secreto devuelto una única vez al crear el bot, en el header `X-Telegram-Bot-Api-Secret-Token`.
+V2 administra varios bots desde `/api/v2/telegram/bots`. Toda la API operativa exige `X-WAN-SIM-API-Key`. Cada token queda cifrado en el estado local, sólo se muestra una pista enmascarada y cada bot limita chats autorizados y permiso `read`, `operate` o `admin`. El webhook usa su secreto independiente, devuelto una única vez al crear el bot, en el header `X-Telegram-Bot-Api-Secret-Token`.
 
 En la pestaña **Telegram** de ReactUI indica la URL pública HTTPS del proxy, crea el bot y pulsa **Sincronizar**. El sistema registra `https://<HOST>/api/v2/telegram/bots/<ID>/webhook` con Telegram. **Probar** envía un mensaje al primer chat autorizado. Los botones de Telegram usan la misma capa de operaciones que ReactUI: estado, presets `netem` y, para administradores, reinicios permitidos. No publiques el webhook sin HTTPS.
 
@@ -337,6 +341,14 @@ Antes de ejecutar en un servidor compartido, revisa:
 Si una ejecucion falla, el script ejecuta rollback automatico de servicios, dashboard generado, virtualenv parcial, bridges/VLANs generadas y archivos temporales. El log principal se conserva en `~/emix_abundix.log`.
 
 ## Release Notes
+
+### Version 2.0.4-prebeta
+
+- Protege todos los endpoints operativos con una clave de API y agrega inicio/cierre de sesión en ReactUI.
+- El motor transaccional registra únicamente acciones aplicadas, restaura IP, rutas, forwarding, iptables y DHCP, y reconstruye la configuración activa anterior.
+- NAT crea y enlaza su cadena administrada de forma idempotente; las colisiones de VLAN/Bridge se rechazan o migran de forma controlada.
+- DHCP deja de ser una acción simulada: genera, valida y activa la configuración ISC, y la verificación comprueba interfaces, direcciones, gateways, NAT, DHCP y miembros Bridge.
+- Telegram propaga fallos reales de entrega y ofrece presets de latencia, jitter, pérdida y reset.
 
 ### Version 2.0.3-prebeta
 

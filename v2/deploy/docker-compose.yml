@@ -6,6 +6,7 @@ services:
       WANSIM_V2_DATA_DIR: /data
       WANSIM_V2_EXECUTION_MODE: dry-run
       WANSIM_V2_SECRET_KEY: ${WANSIM_V2_SECRET_KEY:?Set a Fernet key before starting Compose}
+      WANSIM_V2_API_KEY: ${WANSIM_V2_API_KEY:?Set an operator API key before starting Compose}
     volumes:
       - wansim_state:/data
     expose:

@@ -63,7 +63,10 @@ class TelegramService:
             raise LookupError("Bot no encontrado.")
         if chat_id not in bot["allowed_chat_ids"]:
             raise PermissionError("El chat no está autorizado para este bot.")
-        return self.gateway.send_message(bot["token"], chat_id, "WAN_SIM 2.0: conexión Telegram validada.")
+        result = self.gateway.send_message(bot["token"], chat_id, "WAN_SIM 2.0: conexión Telegram validada.")
+        if not result.get("ok"):
+            raise RuntimeError(result.get("error", "Telegram rechazó el mensaje de prueba."))
+        return result
 
     def synchronize(self, bot_id: str, public_base_url: str) -> dict:
         bot = self.repository.get_telegram_bot_secret(bot_id)
@@ -94,6 +97,8 @@ class TelegramService:
         data = callback.get("data") or ((message.get("text") or "").strip())
         result = self._dispatch(bot["permission"], data)
         delivery = self.gateway.send_message(bot["token"], chat_id, result["text"], result.get("keyboard"))
+        if not delivery.get("ok"):
+            raise RuntimeError(delivery.get("error", "Telegram rechazó la respuesta."))
         return {"ok": True, "action": result["action"], "delivery": delivery}
 
     def _dispatch(self, permission: str, data: str) -> dict:
@@ -102,7 +107,12 @@ class TelegramService:
             interfaces = overview["interfaces"][:4]
             buttons = [[{"text": f"Estado {item['name']}", "callback_data": "status"}] for item in interfaces]
             if permission in (TelegramPermission.OPERATE.value, TelegramPermission.ADMIN.value):
-                buttons.extend([[{"text": f"40 ms {item['name']}", "callback_data": f"netem|{item['name']}|40|5|0"}] for item in interfaces])
+                for item in interfaces:
+                    name = item["name"]
+                    buttons.extend([
+                        [{"text": f"Latencia 40 ms · {name}", "callback_data": f"netem|{name}|40|5|0"}, {"text": f"Jitter · {name}", "callback_data": f"netem|{name}|40|25|0"}],
+                        [{"text": f"Pérdida 2% · {name}", "callback_data": f"netem|{name}|0|0|2"}, {"text": f"Reset · {name}", "callback_data": f"netem|{name}|0|0|0"}],
+                    ])
             return {
                 "action": "status",
                 "text": f"WAN_SIM: {len(overview['interfaces'])} interfaces, {len(overview['leases'])} leases DHCP, modo {overview['execution_mode']}.",

@@ -3,7 +3,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from fastapi import FastAPI, Header, HTTPException, status
+from fastapi import FastAPI, Header, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 
 from . import __version__
 from .models import (ConfigurationCreate, ConfigurationRecord, DeploymentRecord, DeploymentRequest, NetemRequest,
@@ -12,21 +13,31 @@ from .models import (ConfigurationCreate, ConfigurationRecord, DeploymentRecord,
 from .network import CommandRunner, NetworkAgent
 from .operations import OperationsService
 from .repository import ConfigRepository
+from .security import ApiKeyGuard
 from .service import DeploymentService
 from .telegram import TelegramGateway, TelegramService
 
 
-def create_app(data_dir: Path | None = None, agent: NetworkAgent | None = None, telegram_gateway: TelegramGateway | None = None) -> FastAPI:
+def create_app(data_dir: Path | None = None, agent: NetworkAgent | None = None, telegram_gateway: TelegramGateway | None = None, api_key: str | None = None) -> FastAPI:
     root = data_dir or Path(os.getenv("WANSIM_V2_DATA_DIR", "~/.wansim-v2")).expanduser()
     repository = ConfigRepository(root / "state.db")
     service = DeploymentService(repository, agent or NetworkAgent(CommandRunner()))
     operations = OperationsService(repository, service.agent)
     telegram = TelegramService(repository, operations, telegram_gateway or TelegramGateway())
+    api_guard = ApiKeyGuard(root, api_key)
     app = FastAPI(title="WAN_SIM 2.0 API", version=__version__)
     app.state.repository = repository
     app.state.service = service
     app.state.operations = operations
     app.state.telegram = telegram
+
+    @app.middleware("http")
+    async def require_api_key(request: Request, call_next):
+        path = request.url.path
+        is_webhook = path.startswith("/api/v2/telegram/bots/") and path.endswith("/webhook")
+        if path.startswith("/api/v2/") and not is_webhook and not api_guard.valid(request.headers.get("X-WAN-SIM-API-Key")):
+            return JSONResponse(status_code=401, content={"detail": "Clave de API inválida o ausente."})
+        return await call_next(request)
 
     @app.get("/health")
     def health() -> dict:
@@ -93,7 +104,10 @@ def create_app(data_dir: Path | None = None, agent: NetworkAgent | None = None, 
     @app.post("/api/v2/deployments/{deployment_id}/rollback", response_model=DeploymentRecord)
     def rollback_deployment(deployment_id: str) -> DeploymentRecord:
         deployment = get_deployment(deployment_id)
-        return service.rollback(deployment)
+        try:
+            return service.rollback(deployment)
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
     @app.get("/api/v2/telegram/bots", response_model=list[TelegramBotRecord])
     def list_telegram_bots() -> list[TelegramBotRecord]:
@@ -119,6 +133,8 @@ def create_app(data_dir: Path | None = None, agent: NetworkAgent | None = None, 
             raise HTTPException(status_code=404, detail=str(error)) from error
         except PermissionError as error:
             raise HTTPException(status_code=403, detail=str(error)) from error
+        except RuntimeError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
 
     @app.post("/api/v2/telegram/bots/{bot_id}/sync")
     def sync_telegram_bot(bot_id: str, request: TelegramWebhookSyncRequest) -> dict:
@@ -126,8 +142,10 @@ def create_app(data_dir: Path | None = None, agent: NetworkAgent | None = None, 
             return telegram.synchronize(bot_id, request.public_base_url)
         except LookupError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
-        except (ValueError, RuntimeError) as error:
+        except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
+        except RuntimeError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
 
     @app.post("/api/v2/telegram/bots/{bot_id}/webhook")
     def telegram_webhook(bot_id: str, update: dict, x_telegram_bot_api_secret_token: str | None = Header(default=None)) -> dict:
@@ -137,8 +155,10 @@ def create_app(data_dir: Path | None = None, agent: NetworkAgent | None = None, 
             raise HTTPException(status_code=404, detail=str(error)) from error
         except PermissionError as error:
             raise HTTPException(status_code=403, detail=str(error)) from error
-        except (ValueError, RuntimeError) as error:
+        except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
+        except RuntimeError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
 
     return app
 

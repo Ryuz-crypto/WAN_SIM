@@ -3,9 +3,9 @@ set -euo pipefail
 
 if command -v apt-get >/dev/null 2>&1; then
   apt-get update
-  apt-get install -y python3 python3-pip iproute2 iptables
+  DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-pip iproute2 iptables isc-dhcp-client isc-dhcp-server
 elif command -v dnf >/dev/null 2>&1; then
-  dnf install -y python3 python3-pip iproute iptables
+  dnf install -y python3 python3-pip iproute iptables dhcp-client dhcp-server
 else
   echo "No se reconoce un gestor de paquetes compatible." >&2
   exit 1
