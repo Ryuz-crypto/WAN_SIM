@@ -29,6 +29,9 @@ def cleanup() -> None:
     command("iptables", "-t", "nat", "-D", "POSTROUTING", "-j", "WANSIM_POSTROUTING", check=False)
     command("iptables", "-t", "nat", "-F", "WANSIM_POSTROUTING", check=False)
     command("iptables", "-t", "nat", "-X", "WANSIM_POSTROUTING", check=False)
+    command("iptables", "-t", "filter", "-D", "FORWARD", "-j", "WANSIM_FORWARD", check=False)
+    command("iptables", "-t", "filter", "-F", "WANSIM_FORWARD", check=False)
+    command("iptables", "-t", "filter", "-X", "WANSIM_FORWARD", check=False)
 
 
 def main() -> None:
@@ -58,9 +61,13 @@ def main() -> None:
             deployed = service.deploy(configuration, apply=True)
             assert deployed.status == "APPLIED", deployed
             assert exists("v1_100"), "No se creó la VLAN de la primera LAN"
+            assert subprocess.run(("iptables", "-t", "nat", "-S", "WANSIM_POSTROUTING"), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+            assert subprocess.run(("iptables", "-t", "filter", "-S", "WANSIM_FORWARD"), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
             rollback = service.rollback(deployed)
             assert rollback.status == "ROLLED_BACK", rollback
             assert not exists("v1_100"), "La VLAN quedó después del rollback"
+            assert subprocess.run(("iptables", "-t", "nat", "-S", "WANSIM_POSTROUTING"), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0
+            assert subprocess.run(("iptables", "-t", "filter", "-S", "WANSIM_FORWARD"), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0
         print("WAN_SIM V2 integration: two WAN, VLAN/access and rollback passed.")
     finally:
         cleanup()

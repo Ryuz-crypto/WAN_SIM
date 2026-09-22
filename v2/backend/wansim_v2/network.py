@@ -137,6 +137,8 @@ class NetworkAgent:
                         actions.append(self._action(f"vlan-address-{link_index}-{vlan_id}", "apply", f"Asignar {address} a {interface}", ["ip", "addr", "replace", address, "dev", interface]))
                         actions.append(self._action(f"vlan-up-{link_index}-{vlan_id}", "apply", f"Activar {interface}", ["ip", "link", "set", interface, "up"]))
                     actions.append(self._action(f"nat-{link_index}-{offset}", "apply", f"NAT {subnet} por {link.wan}", ["iptables", "-t", "nat", "-A", "WANSIM_POSTROUTING", "-s", subnet, "-o", link.wan, "-j", "MASQUERADE"], ["iptables", "-t", "nat", "-D", "WANSIM_POSTROUTING", "-s", subnet, "-o", link.wan, "-j", "MASQUERADE"]))
+                    actions.append(self._action(f"forward-out-{link_index}-{offset}", "apply", f"Permitir salida {interface} hacia {link.wan}", ["iptables", "-t", "filter", "-A", "WANSIM_FORWARD", "-i", interface, "-o", link.wan, "-j", "ACCEPT"], ["iptables", "-t", "filter", "-D", "WANSIM_FORWARD", "-i", interface, "-o", link.wan, "-j", "ACCEPT"]))
+                    actions.append(self._action(f"forward-in-{link_index}-{offset}", "apply", f"Permitir retorno {link.wan} hacia {interface}", ["iptables", "-t", "filter", "-A", "WANSIM_FORWARD", "-i", link.wan, "-o", interface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"], ["iptables", "-t", "filter", "-D", "WANSIM_FORWARD", "-i", link.wan, "-o", interface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"]))
             if config.dhcp_enabled:
                 actions.append(self._action("dhcp", "apply", "Regenerar y reiniciar DHCP desde el agente", ["wansim-agent", "dhcp", "apply"]))
             else:
@@ -180,8 +182,9 @@ class NetworkAgent:
             if not action.undo or tuple(action.undo) in current_undos:
                 continue
             result = self.runner.run(action.undo)
-            results.append({"id": action.id, "ok": result.ok, "output": result.output})
-            if not result.ok and "Cannot find device" not in result.output and "No such" not in result.output and "Bad rule" not in result.output:
+            missing = not result.ok and any(message in result.output for message in ("Cannot find device", "No such", "Bad rule"))
+            results.append({"id": action.id, "ok": result.ok or missing, "output": result.output or ("already-absent" if missing else "")})
+            if not result.ok and not missing:
                 raise RuntimeError(f"No se pudo retirar {action.description}: {result.output}")
         return results
 
@@ -193,6 +196,9 @@ class NetworkAgent:
             name = self._created_link_name(action)
             old = previous_links.get(name)
             if not old or old.command == action.command or not old.undo:
+                continue
+            if not self.runner.probe(["ip", "link", "show", name]).ok:
+                results.append({"id": old.id, "ok": True, "output": "already-absent"})
                 continue
             result = self.runner.run(old.undo)
             results.append({"id": old.id, "ok": result.ok, "output": result.output})
@@ -216,9 +222,9 @@ class NetworkAgent:
                 if self._existing_link_matches(command, name):
                     return CommandResult(True, command, "already-present"), False
                 return CommandResult(False, command, f"La interfaz {name} ya existe con otra definición."), False
-        if command[:4] == ["iptables", "-t", "nat", "-A"]:
+        if command and command[0] == "iptables" and "-A" in command:
             check = [*command]
-            check[3] = "-C"
+            check[check.index("-A")] = "-C"
             if self.runner.probe(check).ok:
                 return CommandResult(True, command, "already-present"), False
         result = self.runner.run(command)
@@ -251,24 +257,26 @@ class NetworkAgent:
             parent_index = json.loads(parent_details.output or "[]")[0].get("ifindex") if parent_details.ok else None
         except (json.JSONDecodeError, IndexError):
             parent_index = None
-        return kind == "vlan" and actual_id == expected_id and item.get("link_index") == parent_index
+        parent_matches = item.get("link") == parent or item.get("link_index") == parent_index
+        return kind == "vlan" and actual_id == expected_id and parent_matches
 
     def _prepare_nat(self) -> tuple[CommandResult, bool]:
         command = ["wansim-agent", "nat", "prepare"]
         if self.runner.mode != "host":
             return CommandResult(True, command, "dry-run"), True
         changed = False
-        if not self.runner.probe(["iptables", "-t", "nat", "-S", "WANSIM_POSTROUTING"]).ok:
-            result = self.runner.run(["iptables", "-t", "nat", "-N", "WANSIM_POSTROUTING"])
-            if not result.ok:
-                return result, changed
-            changed = True
-        jump = ["iptables", "-t", "nat", "-C", "POSTROUTING", "-j", "WANSIM_POSTROUTING"]
-        if not self.runner.probe(jump).ok:
-            result = self.runner.run(["iptables", "-t", "nat", "-A", "POSTROUTING", "-j", "WANSIM_POSTROUTING"])
-            if not result.ok:
-                return result, changed
-            changed = True
+        for table, chain, parent in (("nat", "WANSIM_POSTROUTING", "POSTROUTING"), ("filter", "WANSIM_FORWARD", "FORWARD")):
+            if not self.runner.probe(["iptables", "-t", table, "-S", chain]).ok:
+                result = self.runner.run(["iptables", "-t", table, "-N", chain])
+                if not result.ok:
+                    return result, changed
+                changed = True
+            jump = ["iptables", "-t", table, "-C", parent, "-j", chain]
+            if not self.runner.probe(jump).ok:
+                result = self.runner.run(["iptables", "-t", table, "-A", parent, "-j", chain])
+                if not result.ok:
+                    return result, changed
+                changed = True
         return CommandResult(True, command, "prepared" if changed else "already-present"), changed
 
     def _apply_dhcp(self, config: TopologyConfig) -> tuple[CommandResult, bool]:
@@ -353,6 +361,10 @@ class NetworkAgent:
                     rule = ["iptables", "-t", "nat", "-C", "WANSIM_POSTROUTING", "-s", subnet, "-o", link.wan, "-j", "MASQUERADE"]
                     if not self.runner.probe(rule).ok:
                         errors.append(f"NAT ausente para {subnet} por {link.wan}")
+                    forward_out = ["iptables", "-t", "filter", "-C", "WANSIM_FORWARD", "-i", interface, "-o", link.wan, "-j", "ACCEPT"]
+                    forward_in = ["iptables", "-t", "filter", "-C", "WANSIM_FORWARD", "-i", link.wan, "-o", interface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"]
+                    if not self.runner.probe(forward_out).ok or not self.runner.probe(forward_in).ok:
+                        errors.append(f"Forwarding incompleto entre {interface} y {link.wan}")
             if config.dhcp_enabled and not any(self.runner.probe(["systemctl", "is-active", service]).ok for service in ("isc-dhcp-server", "dhcpd")):
                 errors.append("Servicio DHCP inactivo")
         elif config.bridge:
@@ -419,6 +431,8 @@ class NetworkAgent:
             return {"ok": False, "error": f"Interfaz no encontrada: {interface}"}
         if delay_ms == 0 and jitter_ms == 0 and loss_percent == 0:
             result = self.runner.run(["tc", "qdisc", "del", "dev", interface, "root"])
+            if not result.ok and any(message in result.output for message in ("No such file", "Cannot delete qdisc with handle of zero")):
+                result = CommandResult(True, result.command, "already-reset")
         else:
             command = ["tc", "qdisc", "replace", "dev", interface, "root", "netem", "delay", f"{delay_ms}ms"]
             if jitter_ms:

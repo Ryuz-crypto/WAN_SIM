@@ -51,7 +51,10 @@ class DeploymentService:
             failure = str(error)
         rollback = self.agent.rollback(outcome.applied_actions, snapshot, actions)
         recovery = self._recover_previous(active)
-        return self.repository.update_deployment(deployment.id, "ROLLED_BACK", {"mode": self.agent.execution_mode, "error": failure, "conflicts": conflicts, "rollback": rollback, "recovery": recovery})
+        status = "ROLLED_BACK" if self._results_ok([*rollback, *recovery]) else "ROLLBACK_FAILED"
+        if status == "ROLLBACK_FAILED" and active:
+            self.repository.deactivate(active.id)
+        return self.repository.update_deployment(deployment.id, status, {"mode": self.agent.execution_mode, "error": failure, "conflicts": conflicts, "rollback": rollback, "recovery": recovery})
 
     def rollback(self, deployment: DeploymentRecord) -> DeploymentRecord:
         with self._deployment_lock:
@@ -69,19 +72,26 @@ class DeploymentService:
             host_state = json.loads(snapshot["host_state"])
             restored = self.agent.rollback([], host_state, current_actions)
             recovery = self._recover_previous(previous)
-            if previous:
+            status = "ROLLED_BACK" if self._results_ok([*cleanup, *restored, *recovery]) else "ROLLBACK_FAILED"
+            if status == "ROLLED_BACK" and previous:
                 self.repository.activate(previous.id)
             else:
                 self.repository.deactivate(deployment.configuration_id)
-            return self.repository.update_deployment(deployment.id, "ROLLED_BACK", {"mode": self.agent.execution_mode, "conflicts": conflicts, "cleanup": cleanup, "rollback": restored, "recovery": recovery})
+            return self.repository.update_deployment(deployment.id, status, {"mode": self.agent.execution_mode, "conflicts": conflicts, "cleanup": cleanup, "rollback": restored, "recovery": recovery})
 
     def _recover_previous(self, previous: ConfigurationRecord | None) -> list[dict]:
         if not previous:
             return []
         try:
-            return self.agent.apply(self.agent.plan(previous.config), previous.config).results
+            outcome = self.agent.apply(self.agent.plan(previous.config), previous.config)
+            verification = self.agent.verify(previous.config)
+            return [*outcome.results, {"id": "recovery-verify", "ok": verification["ok"], "output": str(verification)}]
         except ApplyError as error:
             return [*error.outcome.results, {"id": "recovery", "ok": False, "output": str(error)}]
+
+    @staticmethod
+    def _results_ok(results: list[dict]) -> bool:
+        return all(result.get("ok") is True for result in results)
 
     def _snapshot_id(self, deployment: DeploymentRecord) -> str:
         # DeploymentRecord intentionally exposes no storage columns beyond API data.
