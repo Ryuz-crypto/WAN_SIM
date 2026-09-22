@@ -8,6 +8,7 @@ __pycache__/
 htmlcov/
 .venv/
 venv/
+.wansim_v2_test_deps/
 
 # Node
 node_modules/

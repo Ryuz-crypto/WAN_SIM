@@ -1,6 +1,6 @@
 # Ryuz WAN Simulator
 
-**Version 2.0.0-prebeta** | **Autor**: decameru@outlook.com
+**Version 2.0.1-prebeta** | **Autor**: decameru@outlook.com
 
 Ryuz WAN Simulator es una herramienta para simular condiciones WAN en Linux. Permite aplicar latencia, jitter y perdida de paquetes sobre interfaces fisicas, VLANs o bridges L2, con un dashboard Flask para control operativo.
 
@@ -15,6 +15,7 @@ La última versión estable es [`v1.119-stable`](https://github.com/Ryuz-crypto/
 - Control de latencia, jitter y perdida por interfaz usando `tc/netem`.
 - Dashboard web Flask en el puerto `5000`, con administracion HTTPS desde la interfaz web.
 - Seccion `ReactUI pre-beta` para preparar la evolucion grafica de configuracion L3/L2, Telegram multi-bot, daemons y leases DHCP.
+- API FastAPI 2.0 con configuraciones versionadas, plan de despliegue, snapshots y rollback transaccional en modo seguro `dry-run`.
 - DHCP automatico para VLANs y puertos LAN de acceso sin etiqueta.
 - Persistencia L2 mediante `wansim-l2-persist.service`.
 - Integracion opcional con Telegram, botones de presets y fallback HTTP API si falla la libreria legacy.
@@ -22,7 +23,7 @@ La última versión estable es [`v1.119-stable`](https://github.com/Ryuz-crypto/
 
 ## Sistemas Soportados
 
-La version 2.0.0-prebeta detecta el gestor de paquetes y ajusta dependencias para:
+La version 2.0.1-prebeta detecta el gestor de paquetes y ajusta dependencias para:
 
 - Ubuntu Server 20.04 o superior.
 - Ubuntu Workstation 20.04 o superior.
@@ -178,6 +179,24 @@ git pull --ff-only
 
 El script regenera el dashboard; recarga el navegador después. ReactUI 2.0 continúa en pre-beta; la referencia estable es `v1.119-stable`.
 
+## API 2.0: Configuracion Y Despliegue
+
+La base de 2.0 está disponible en `v2/backend`. Su API FastAPI implementa los primeros cuatro pilares: módulos reutilizables, configuración persistente en SQLite, validación/planificación y transacciones con snapshot, verificación y rollback.
+
+Por defecto funciona en `dry-run`: permite probar toda la secuencia sin cambiar ninguna interfaz del host.
+
+```bash
+cd v2/backend
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
+uvicorn wansim_v2.api:app --host 0.0.0.0 --port 8080
+```
+
+Abre `http://<IP_DEL_SERVIDOR>:8080/docs`. El ciclo operativo es crear un borrador, consultar su plan y solicitar un despliegue. La API registra el plan, el snapshot del host, resultado, configuración activa y rollback en `~/.wansim-v2/state.db`.
+
+La aplicación real requiere dos variables explícitas y un host dedicado: `WANSIM_V2_EXECUTION_MODE=host` y `WANSIM_V2_ALLOW_HOST_APPLY=1`. Mientras no estén las dos presentes, el agente no ejecuta comandos de red.
+
 ## Archivos Generados
 
 Los archivos operativos se crean en el home del usuario que ejecuta el script:
@@ -234,11 +253,20 @@ Si una ejecucion falla, el script ejecuta rollback automatico de servicios, dash
 
 ## Release Notes
 
+### Version 2.0.1-prebeta
+
+- Se implementan los pilares 1 a 4 de WAN_SIM 2.0: modularización inicial, estado versionado, FastAPI y transacciones de red seguras.
+- El backend dispone de endpoints para crear borradores, consultar configuración activa, generar planes, desplegar y hacer rollback.
+- Se agregan pruebas de contrato FastAPI y de rollback forzado, además de las regresiones de V1.
+
 ### Version 2.0.0-prebeta
 
 - La rama `main` inicia WAN_SIM 2.0 y ReactUI 2.0 en estado pre-beta.
 - `v1.119-stable` queda marcada como la última versión estable, con guía de instalación y retorno a la rama de desarrollo.
 - La etiqueta estable conserva L3/NAT, Bridge L2, HTTPS, Telegram, DHCP y LAN en VLAN o acceso sin etiqueta.
+- Se inicia la modularización: `WANsim2.sh` utiliza primitivas compartidas de plataforma, logging y red dentro de `lib/`.
+- Se agrega FastAPI 2.0 con almacenamiento SQLite para borradores, configuración activa, snapshots y despliegues.
+- El motor transaccional implementa validar, planificar, snapshot, aplicar, verificar y rollback; por defecto todo opera en `dry-run`.
 
 ### Version 1.119-stable
 

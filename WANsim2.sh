@@ -10,7 +10,7 @@ exec > >(tee -a /tmp/wansim_debug.log) 2>&1
 # -----------------------------------------------
 # Variables de configuración
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WANSIM_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "2.0.0-prebeta")"
+WANSIM_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "2.0.1-prebeta")"
 USER_HOME="${HOME:-$(getent passwd "$(whoami)" | cut -d: -f6)}"
 WANSIM_HOME="$USER_HOME/.wansim"
 PYTHON_VENV="$WANSIM_HOME/venv"
@@ -99,6 +99,15 @@ log_message() {
         DEBUG) echo "${COLOR_DEBUG}[DEBUG] $contenido_msg${COLOR_RESET}" ;;
     esac
 }
+
+# V2 modular primitives remain sourced by the compatible V1 installer.
+WANSIM_LIB_DIR="$SCRIPT_DIR/lib"
+# shellcheck disable=SC1091
+source "$WANSIM_LIB_DIR/logging.sh"
+# shellcheck disable=SC1091
+source "$WANSIM_LIB_DIR/platform.sh"
+# shellcheck disable=SC1091
+source "$WANSIM_LIB_DIR/network.sh"
 
 detect_platform() {
     if [ -f /etc/os-release ]; then
@@ -401,6 +410,7 @@ if [ "$(id -u)" -eq 0 ]; then
 fi
 log_message "OK" "Ejecutando como usuario $CURRENT_USER."
 detect_platform
+wansim_log "DEBUG" "Módulos compartidos cargados: $(wansim_platform_json)"
 set_dependency_list
 
 # Configurar permisos de sudo para el usuario actual
@@ -566,83 +576,6 @@ ensure_telegram_runtime() {
 
     log_message "ERROR" "Telegram no quedo disponible: fallo python-telegram-bot y tambien requests. Detalle: $(cat /tmp/wansim_pip_telegram.log 2>/dev/null)"
     return 1
-}
-
-iface_private_ip() {
-    local iface="$1"
-    ip -o -4 addr show "$iface" 2>/dev/null | awk '{print $4}' | cut -d'/' -f1 | head -n 1
-}
-
-normalize_ipv4_cidr() {
-    local ip_addr="$1"
-    local mask="$2"
-    python3 - "$ip_addr" "$mask" <<'PYCIDR' 2>/dev/null
-import ipaddress, sys
-ip_addr=sys.argv[1].strip()
-mask=sys.argv[2].strip().lstrip("/")
-iface=ipaddress.ip_interface(f"{ip_addr}/{mask}")
-print(iface.with_prefixlen)
-PYCIDR
-}
-
-valid_ipv4() {
-    local ip_addr="$1"
-    python3 - "$ip_addr" <<'PYIP' >/dev/null 2>&1
-import ipaddress, sys
-ipaddress.ip_address(sys.argv[1].strip())
-PYIP
-}
-
-wan_cidr_overlaps_lan_range() {
-    local wan_cidr="$1"
-    local segment_prefix="$2"
-    local base_octet="$3"
-    local vlan_count="$4"
-    python3 - "$wan_cidr" "$segment_prefix" "$base_octet" "$vlan_count" <<'PYOVERLAP' >/dev/null 2>&1
-import ipaddress, sys
-wan=ipaddress.ip_interface(sys.argv[1]).network
-prefix=sys.argv[2]
-base=int(sys.argv[3])
-count=int(sys.argv[4])
-for octet in range(base, base+count):
-    lan=ipaddress.ip_network(f"{prefix}.{octet}.0/24")
-    if wan.overlaps(lan):
-        raise SystemExit(1)
-PYOVERLAP
-}
-
-configure_wan_addressing() {
-    local iface="$1"
-    local mode="$2"
-    local cidr="$3"
-    local gateway="$4"
-    local link_idx="${5:-1}"
-    local metric=$((200 + link_idx))
-
-    sudo ip link set "$iface" up >/dev/null 2>&1 || true
-    if [ "$mode" = "manual" ]; then
-        log_message "INFO" "Configurando WAN $iface en modo manual: $cidr gateway=$gateway metric=$metric"
-        sudo ip addr flush dev "$iface" >/tmp/wansim_wan_ip.log 2>&1 || true
-        sudo ip addr add "$cidr" dev "$iface" >/tmp/wansim_wan_ip.log 2>&1 || {
-            log_message "ERROR" "No se pudo asignar $cidr a $iface: $(cat /tmp/wansim_wan_ip.log)"
-            exit 1
-        }
-        sudo ip route del default via "$gateway" dev "$iface" >/dev/null 2>&1 || true
-        sudo ip route add default via "$gateway" dev "$iface" metric "$metric" >/tmp/wansim_wan_route.log 2>&1 || {
-            log_message "ERROR" "No se pudo agregar gateway $gateway para $iface: $(cat /tmp/wansim_wan_route.log)"
-            exit 1
-        }
-    else
-        log_message "INFO" "Configurando WAN $iface en modo DHCP o conservando lease existente."
-        if command -v dhclient >/dev/null 2>&1; then
-            sudo dhclient -r "$iface" >/dev/null 2>&1 || true
-            sudo dhclient "$iface" >/tmp/wansim_wan_dhcp.log 2>&1 || {
-                log_message "ADVERTENCIA" "dhclient no pudo renovar $iface. Se conserva configuracion actual. Detalle: $(cat /tmp/wansim_wan_dhcp.log)"
-            }
-        elif [ -z "$(iface_private_ip "$iface")" ]; then
-            log_message "ADVERTENCIA" "dhclient no esta disponible y $iface no tiene IPv4. Instala cliente DHCP o usa modo manual."
-        fi
-    fi
 }
 
 validate_tls_chain() {
@@ -2930,7 +2863,7 @@ replacements = {
     "__TOPOLOGY_MODE_LITERAL__": json.dumps(os.environ.get("TOPOLOGY_MODE", "")),
     "__CURRENT_USER_LITERAL__": json.dumps(os.environ.get("CURRENT_USER", "")),
     "__NETEM_STATE_FILE__": os.environ.get("NETEM_STATE_FILE", os.path.expanduser("~/wansim_netem_state.json")),
-    "__WANSIM_VERSION__": os.environ.get("WANSIM_VERSION", "2.0.0-prebeta"),
+    "__WANSIM_VERSION__": os.environ.get("WANSIM_VERSION", "2.0.1-prebeta"),
 }
 for key, value in replacements.items():
     text = text.replace(key, value)
