@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, status
 
 from . import __version__
-from .models import ConfigurationCreate, ConfigurationRecord, DeploymentRecord, DeploymentRequest
+from .models import ConfigurationCreate, ConfigurationRecord, DeploymentRecord, DeploymentRequest, NetemRequest, ServiceRestartRequest
 from .network import CommandRunner, NetworkAgent
 from .repository import ConfigRepository
 from .service import DeploymentService
@@ -27,6 +27,24 @@ def create_app(data_dir: Path | None = None, agent: NetworkAgent | None = None) 
     @app.get("/api/v2/interfaces")
     def interfaces() -> dict:
         return {"items": service.agent.interfaces(), "execution_mode": service.agent.execution_mode}
+
+    @app.get("/api/v2/operations/overview")
+    def operations_overview() -> dict:
+        return {**service.agent.overview(), "active_configuration": repository.active_configuration(), "deployments": repository.list_deployments(20)}
+
+    @app.post("/api/v2/operations/netem")
+    def apply_netem(request: NetemRequest) -> dict:
+        result = service.agent.apply_netem(request.interface, request.delay_ms, request.jitter_ms, request.loss_percent)
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=result.get("error", result.get("output", "No se pudo aplicar netem.")))
+        return result
+
+    @app.post("/api/v2/operations/services/restart")
+    def restart_service(request: ServiceRestartRequest) -> dict:
+        result = service.agent.restart_service(request.service)
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=result.get("error", result.get("output", "No se pudo reiniciar servicio.")))
+        return result
 
     @app.post("/api/v2/configurations", response_model=ConfigurationRecord, status_code=status.HTTP_201_CREATED)
     def create_configuration(request: ConfigurationCreate) -> ConfigurationRecord:
@@ -59,6 +77,10 @@ def create_app(data_dir: Path | None = None, agent: NetworkAgent | None = None) 
         if not deployment:
             raise HTTPException(status_code=404, detail="Despliegue no encontrado.")
         return deployment
+
+    @app.get("/api/v2/deployments", response_model=list[DeploymentRecord])
+    def list_deployments() -> list[DeploymentRecord]:
+        return repository.list_deployments()
 
     @app.post("/api/v2/deployments/{deployment_id}/rollback", response_model=DeploymentRecord)
     def rollback_deployment(deployment_id: str) -> DeploymentRecord:

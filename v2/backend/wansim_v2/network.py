@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -34,6 +35,14 @@ class CommandRunner:
         except (OSError, subprocess.SubprocessError) as error:
             return CommandResult(False, command, str(error))
 
+    def probe(self, command: list[str], *, timeout: int = 10) -> CommandResult:
+        """Read-only commands remain available while mutations are in dry-run mode."""
+        try:
+            process = subprocess.run(command, text=True, capture_output=True, timeout=timeout, check=False)
+            return CommandResult(process.returncode == 0, command, (process.stdout or process.stderr).strip())
+        except (OSError, subprocess.SubprocessError) as error:
+            return CommandResult(False, command, str(error))
+
 
 class NetworkAgent:
     """Host-side planner and executor. It never accepts shell strings from API clients."""
@@ -46,31 +55,40 @@ class NetworkAgent:
         return self.runner.mode
 
     def interfaces(self) -> list[dict]:
-        result = self.runner.run(["ip", "-j", "link", "show"])
-        if not result.ok or result.output == "dry-run":
+        links = self.runner.probe(["ip", "-j", "-s", "link", "show"])
+        addresses = self.runner.probe(["ip", "-j", "addr", "show"])
+        if not links.ok:
             return []
         try:
-            return [
-                {"name": item["ifname"], "mac": item.get("address", ""), "state": item.get("operstate", "UNKNOWN")}
-                for item in json.loads(result.output)
-                if item.get("ifname") != "lo"
-            ]
+            ip_map = {
+                item.get("ifname"): [address.get("local") for group in item.get("addr_info", []) if group.get("family") == "inet" for address in [group]]
+                for item in json.loads(addresses.output or "[]")
+            }
+            items = []
+            for item in json.loads(links.output):
+                if item.get("ifname") == "lo":
+                    continue
+                stats = item.get("stats64", {})
+                items.append({
+                    "name": item["ifname"], "mac": item.get("address", ""), "state": item.get("operstate", "UNKNOWN"),
+                    "ips": ip_map.get(item.get("ifname"), []),
+                    "rx_bytes": stats.get("rx", {}).get("bytes", 0), "tx_bytes": stats.get("tx", {}).get("bytes", 0),
+                })
+            return items
         except json.JSONDecodeError:
             return []
 
     def snapshot(self) -> dict:
         captured_at = datetime.now(UTC).isoformat()
-        if self.runner.mode != "host":
-            return {"captured_at": captured_at, "mode": "dry-run", "network": {}, "iptables": ""}
         probes = {
             "links": ["ip", "-j", "link", "show"],
             "addresses": ["ip", "-j", "addr", "show"],
             "routes": ["ip", "-j", "route", "show"],
             "qdisc": ["tc", "qdisc", "show"],
         }
-        network = {key: self.runner.run(command).output for key, command in probes.items()}
-        iptables = self.runner.run(["iptables-save"]).output
-        return {"captured_at": captured_at, "mode": "host", "network": network, "iptables": iptables}
+        network = {key: self.runner.probe(command).output for key, command in probes.items()}
+        iptables = self.runner.probe(["iptables-save"]).output
+        return {"captured_at": captured_at, "mode": self.runner.mode, "network": network, "iptables": iptables}
 
     def plan(self, config: TopologyConfig) -> list[CommandAction]:
         actions: list[CommandAction] = []
@@ -98,7 +116,7 @@ class NetworkAgent:
                         actions.append(self._action(f"vlan-create-{link_index}-{vlan_id}", "apply", f"Crear VLAN {vlan_id} en {link.lan}", ["ip", "link", "add", "link", link.lan, "name", interface, "type", "vlan", "id", str(vlan_id)], ["ip", "link", "del", interface]))
                         actions.append(self._action(f"vlan-address-{link_index}-{vlan_id}", "apply", f"Asignar {address} a {interface}", ["ip", "addr", "replace", address, "dev", interface]))
                         actions.append(self._action(f"vlan-up-{link_index}-{vlan_id}", "apply", f"Activar {interface}", ["ip", "link", "set", interface, "up"]))
-                    actions.append(self._action(f"nat-{link_index}-{offset}", "apply", f"NAT {subnet} por {link.wan}", ["iptables", "-t", "nat", "-A", "WANSIM_POSTROUTING", "-s", subnet, "-o", link.wan, "-j", "MASQUERADE"]))
+                    actions.append(self._action(f"nat-{link_index}-{offset}", "apply", f"NAT {subnet} por {link.wan}", ["iptables", "-t", "nat", "-A", "WANSIM_POSTROUTING", "-s", subnet, "-o", link.wan, "-j", "MASQUERADE"], ["iptables", "-t", "nat", "-D", "WANSIM_POSTROUTING", "-s", subnet, "-o", link.wan, "-j", "MASQUERADE"]))
             if config.dhcp_enabled:
                 actions.append(self._action("dhcp", "apply", "Regenerar y reiniciar DHCP desde el agente", ["wansim-agent", "dhcp", "apply"]))
         else:
@@ -107,8 +125,8 @@ class NetworkAgent:
                 bridge = f"br_wan{index}"
                 actions.extend([
                     self._action(f"bridge-create-{index}", "apply", f"Crear bridge {bridge}", ["ip", "link", "add", "name", bridge, "type", "bridge"], ["ip", "link", "del", bridge]),
-                    self._action(f"bridge-in-{index}", "apply", f"Agregar {pair.input} a {bridge}", ["ip", "link", "set", pair.input, "master", bridge]),
-                    self._action(f"bridge-out-{index}", "apply", f"Agregar {pair.output} a {bridge}", ["ip", "link", "set", pair.output, "master", bridge]),
+                    self._action(f"bridge-in-{index}", "apply", f"Agregar {pair.input} a {bridge}", ["ip", "link", "set", pair.input, "master", bridge], ["ip", "link", "set", pair.input, "nomaster"]),
+                    self._action(f"bridge-out-{index}", "apply", f"Agregar {pair.output} a {bridge}", ["ip", "link", "set", pair.output, "master", bridge], ["ip", "link", "set", pair.output, "nomaster"]),
                     self._action(f"bridge-up-{index}", "apply", f"Activar {bridge}", ["ip", "link", "set", bridge, "up"]),
                 ])
         actions.append(self._action("verify", "verify", "Verificar interfaces y topología aplicada", ["wansim-agent", "verify"]))
@@ -153,6 +171,64 @@ class NetworkAgent:
             required = {interface for pair in config.bridge.pairs for interface in (pair.input, pair.output)}
         missing = sorted(required - available)
         return {"ok": not missing, "mode": "host", "missing_interfaces": missing}
+
+    def service_statuses(self) -> list[dict]:
+        services = ("wansim.service", "wansim-l2-persist.service", "isc-dhcp-server", "dhcpd", "iptables")
+        output = []
+        for service in services:
+            active = self.runner.probe(["systemctl", "is-active", service])
+            enabled = self.runner.probe(["systemctl", "is-enabled", service])
+            output.append({
+                "name": service,
+                "active": active.output if active.ok else "unavailable",
+                "enabled": enabled.output if enabled.ok else "unavailable",
+            })
+        return output
+
+    def dhcp_leases(self) -> list[dict]:
+        for path in (Path("/var/lib/dhcp/dhcpd.leases"), Path("/var/lib/dhcpd/dhcpd.leases")):
+            try:
+                content = path.read_text(encoding="utf-8", errors="ignore")
+                break
+            except OSError:
+                content = ""
+        leases = []
+        for match in re.finditer(r"lease\s+([0-9.]+)\s+\{(.*?)\}", content, re.DOTALL):
+            body = match.group(2)
+            def group(pattern: str) -> str:
+                value = re.search(pattern, body)
+                return value.group(1) if value else ""
+            leases.append({"ip": match.group(1), "mac": group(r"hardware\s+ethernet\s+([^;]+);"), "host": group(r'client-hostname\s+"([^\"]+)"'), "state": group(r"binding\s+state\s+([^;]+);")})
+        return leases[-100:]
+
+    def apply_netem(self, interface: str, delay_ms: float, jitter_ms: float, loss_percent: float) -> dict:
+        if self.runner.mode == "host" and interface not in {item["name"] for item in self.interfaces()}:
+            return {"ok": False, "error": f"Interfaz no encontrada: {interface}"}
+        if delay_ms == 0 and jitter_ms == 0 and loss_percent == 0:
+            result = self.runner.run(["tc", "qdisc", "del", "dev", interface, "root"])
+        else:
+            command = ["tc", "qdisc", "replace", "dev", interface, "root", "netem", "delay", f"{delay_ms}ms"]
+            if jitter_ms:
+                command.append(f"{jitter_ms}ms")
+            if loss_percent:
+                command.extend(["loss", f"{loss_percent}%"])
+            result = self.runner.run(command)
+        return {"ok": result.ok, "mode": self.runner.mode, "command": result.command, "output": result.output}
+
+    def restart_service(self, service: str) -> dict:
+        allowed = {"wansim.service", "wansim-l2-persist.service", "isc-dhcp-server", "dhcpd", "iptables"}
+        if service not in allowed:
+            return {"ok": False, "error": "Servicio no permitido."}
+        result = self.runner.run(["systemctl", "restart", service])
+        return {"ok": result.ok, "mode": self.runner.mode, "command": result.command, "output": result.output}
+
+    def overview(self) -> dict:
+        return {
+            "execution_mode": self.execution_mode,
+            "interfaces": self.interfaces(),
+            "services": self.service_statuses(),
+            "leases": self.dhcp_leases(),
+        }
 
     def rollback(self, actions: Iterable[CommandAction], snapshot: dict) -> list[dict]:
         results: list[dict] = []

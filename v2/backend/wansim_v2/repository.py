@@ -83,12 +83,12 @@ class ConfigRepository:
             created_at=row["created_at"], updated_at=row["updated_at"],
         )
 
-    def create_snapshot(self, configuration_id: str, config: TopologyConfig | None, host_state: dict) -> str:
+    def create_snapshot(self, previous_configuration_id: str | None, config: TopologyConfig | None, host_state: dict) -> str:
         snapshot_id = str(uuid4())
         with self.connection() as connection:
             connection.execute(
                 "INSERT INTO snapshots VALUES (?, ?, ?, ?, ?)",
-                (snapshot_id, configuration_id, json.dumps(host_state), json.dumps(config.model_dump(mode="json", by_alias=True) if config else None), now()),
+                (snapshot_id, previous_configuration_id or "", json.dumps(host_state), json.dumps(config.model_dump(mode="json", by_alias=True) if config else None), now()),
             )
         return snapshot_id
 
@@ -122,8 +122,24 @@ class ConfigRepository:
             connection.execute("UPDATE deployments SET status=?, result=?, updated_at=? WHERE id=?", (status, json.dumps(result), now(), deployment_id))
         return self.get_deployment(deployment_id)
 
+    def list_deployments(self, limit: int = 50) -> list[DeploymentRecord]:
+        with self.connection() as connection:
+            rows = connection.execute("SELECT * FROM deployments ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+        return [
+            DeploymentRecord(
+                id=row["id"], configuration_id=row["configuration_id"], status=row["status"],
+                plan=json.loads(row["plan"]), result=json.loads(row["result"]),
+                created_at=row["created_at"], updated_at=row["updated_at"],
+            )
+            for row in rows
+        ]
+
     def activate(self, configuration_id: str) -> None:
         with self.connection() as connection:
             timestamp = now()
             connection.execute("UPDATE configurations SET state='ARCHIVED', updated_at=? WHERE state='ACTIVE'", (timestamp,))
             connection.execute("UPDATE configurations SET state='ACTIVE', updated_at=? WHERE id=?", (timestamp, configuration_id))
+
+    def deactivate(self, configuration_id: str) -> None:
+        with self.connection() as connection:
+            connection.execute("UPDATE configurations SET state='ARCHIVED', updated_at=? WHERE id=?", (now(), configuration_id))

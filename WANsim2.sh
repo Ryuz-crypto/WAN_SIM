@@ -10,7 +10,7 @@ exec > >(tee -a /tmp/wansim_debug.log) 2>&1
 # -----------------------------------------------
 # Variables de configuración
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WANSIM_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "2.0.1-prebeta")"
+WANSIM_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "2.0.2-prebeta")"
 USER_HOME="${HOME:-$(getent passwd "$(whoami)" | cut -d: -f6)}"
 WANSIM_HOME="$USER_HOME/.wansim"
 PYTHON_VENV="$WANSIM_HOME/venv"
@@ -2863,7 +2863,7 @@ replacements = {
     "__TOPOLOGY_MODE_LITERAL__": json.dumps(os.environ.get("TOPOLOGY_MODE", "")),
     "__CURRENT_USER_LITERAL__": json.dumps(os.environ.get("CURRENT_USER", "")),
     "__NETEM_STATE_FILE__": os.environ.get("NETEM_STATE_FILE", os.path.expanduser("~/wansim_netem_state.json")),
-    "__WANSIM_VERSION__": os.environ.get("WANSIM_VERSION", "2.0.1-prebeta"),
+    "__WANSIM_VERSION__": os.environ.get("WANSIM_VERSION", "2.0.2-prebeta"),
 }
 for key, value in replacements.items():
     text = text.replace(key, value)

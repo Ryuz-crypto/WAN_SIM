@@ -130,6 +130,17 @@ class DeploymentRequest(BaseModel):
     apply: bool = False
 
 
+class NetemRequest(BaseModel):
+    interface: str = Field(min_length=1, max_length=15, pattern=r"^[a-zA-Z0-9_.-]+$")
+    delay_ms: float = Field(default=0, ge=0, le=60_000, alias="delayMs")
+    jitter_ms: float = Field(default=0, ge=0, le=60_000, alias="jitterMs")
+    loss_percent: float = Field(default=0, ge=0, le=100, alias="lossPercent")
+
+
+class ServiceRestartRequest(BaseModel):
+    service: str = Field(min_length=1, max_length=80, pattern=r"^[a-zA-Z0-9_.@-]+$")
+
+
 class ConfigurationRecord(BaseModel):
     id: str
     name: str

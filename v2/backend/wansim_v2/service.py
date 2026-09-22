@@ -17,7 +17,7 @@ class DeploymentService:
         actions = self.agent.plan(configuration.config)
         active = self.repository.active_configuration()
         snapshot = self.agent.snapshot()
-        snapshot_id = self.repository.create_snapshot(configuration.id, active.config if active else None, snapshot)
+        snapshot_id = self.repository.create_snapshot(active.id if active else None, active.config if active else None, snapshot)
         deployment = self.repository.create_deployment(configuration.id, snapshot_id, [action.model_dump() for action in actions])
         if not apply:
             return self.repository.update_deployment(deployment.id, "PLANNED", {"mode": self.agent.execution_mode, "message": "Plan guardado; no solicitado aplicar."})
@@ -40,6 +40,11 @@ class DeploymentService:
         actions = deployment.plan
         from .models import CommandAction
         rollback = self.agent.rollback([CommandAction.model_validate(action) for action in actions], __import__("json").loads(snapshot["host_state"]) if snapshot else {})
+        previous_id = snapshot["configuration_id"] if snapshot else ""
+        if previous_id and self.repository.get_configuration(previous_id):
+            self.repository.activate(previous_id)
+        else:
+            self.repository.deactivate(deployment.configuration_id)
         return self.repository.update_deployment(deployment.id, "ROLLED_BACK", {"mode": self.agent.execution_mode, "rollback": rollback})
 
     def _snapshot_id(self, deployment: DeploymentRecord) -> str:

@@ -9,6 +9,7 @@ htmlcov/
 .venv/
 venv/
 .wansim_v2_test_deps/
+.wansim_v2_ui_test/
 
 # Node
 node_modules/

@@ -1,6 +1,6 @@
 # Project Structure
 
-Version 2.0.1-prebeta keeps `WANsim2.sh` as the main entrypoint while the current stable release remains `v1.119-stable`.
+Version 2.0.2-prebeta keeps `WANsim2.sh` as the main entrypoint while the current stable release remains `v1.119-stable`.
 
 Current layout:
 
@@ -19,6 +19,7 @@ WAN_SIM/
     platform.sh           # OS and package-manager inspection
   v2/
     backend/              # FastAPI control plane, SQLite state and transaction engine
+    frontend/             # React + TypeScript operational interface
 ```
 
 The V1 entrypoint sources `lib/` to preserve `./WANsim2.sh` compatibility. The V2 backend is deliberately isolated; it does not replace the stable dashboard or alter the V1 installer.
@@ -41,6 +42,6 @@ The safe migration path is to extract one group at a time and keep `WANsim2.sh` 
 ./WANsim2.sh
 ```
 
-WAN_SIM 2.0 begins with FastAPI as the control plane. Its `NetworkAgent` defaults to `dry-run`; it persists drafts, active configuration, host snapshots and deployment results in SQLite. An explicit host agent will later perform privileged network operations.
+WAN_SIM 2.0 uses FastAPI as the control plane and a separate React + TypeScript interface as the operator console. Its `NetworkAgent` defaults to `dry-run`; it persists drafts, active configuration, host snapshots and deployment results in SQLite. An explicit host agent is required before it performs privileged network operations.
 
-Run V1 regression tests with `python3 -m unittest discover -s tests -v`, V2 API tests with `PYTHONPATH=v2/backend python3 -m unittest discover -s v2/backend/tests -v`, and shell syntax checks with `bash -n WANsim2.sh`.
+Run V1 regression tests with `python3 -m unittest discover -s tests -v`, V2 API tests with `PYTHONPATH=v2/backend python3 -m unittest discover -s v2/backend/tests -v`, ReactUI checks with `cd v2/frontend && npm install && npm run build`, and shell syntax checks with `bash -n WANsim2.sh`.

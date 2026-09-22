@@ -19,10 +19,18 @@ class FailingRunner(CommandRunner):
         from wansim_v2.network import CommandResult
 
         self.commands.append(command)
-        if command == ["ip", "-j", "link", "show"]:
-            return CommandResult(True, command, '[{"ifname":"wan0"},{"ifname":"lan0"}]')
         if command[:3] == ["ip", "addr", "replace"]:
             return CommandResult(False, command, "forced address failure")
+        return CommandResult(True, command, "ok")
+
+    def probe(self, command: list[str], **_: object):
+        from wansim_v2.network import CommandResult
+
+        self.commands.append(command)
+        if command == ["ip", "-j", "-s", "link", "show"]:
+            return CommandResult(True, command, '[{"ifname":"wan0"},{"ifname":"lan0"}]')
+        if command == ["ip", "-j", "addr", "show"]:
+            return CommandResult(True, command, '[]')
         return CommandResult(True, command, "ok")
 
 
@@ -92,6 +100,18 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(result.status_code, 200)
         self.assertEqual(result.json()["status"], "ROLLED_BACK")
 
+    def test_rollback_restores_previous_active_configuration(self) -> None:
+        first = self.client.post("/api/v2/configurations", json=self.nat_payload()).json()
+        self.client.post(f"/api/v2/configurations/{first['id']}/deploy", json={"apply": True})
+        second_payload = self.nat_payload(lan_mode="vlan")
+        second_payload["name"] = "Siguiente topologia"
+        second_payload["config"]["l3"]["links"][0]["baseOctet"] = 20
+        second = self.client.post("/api/v2/configurations", json=second_payload).json()
+        deployment = self.client.post(f"/api/v2/configurations/{second['id']}/deploy", json={"apply": True}).json()
+        self.client.post(f"/api/v2/deployments/{deployment['id']}/rollback")
+        active = self.client.get("/api/v2/configurations/active/current").json()
+        self.assertEqual(active["id"], first["id"])
+
     def test_failed_host_apply_rolls_back_and_never_activates_draft(self) -> None:
         runner = FailingRunner()
         app = create_app(Path(self.directory.name) / "failure", NetworkAgent(runner))
@@ -102,6 +122,18 @@ class ApiTests(unittest.TestCase):
         self.assertIn("forced address failure", deployment["result"]["error"])
         self.assertIsNone(client.get("/api/v2/configurations/active/current").json())
         self.assertTrue(any(command[:3] == ["ip", "addr", "del"] for command in runner.commands))
+
+    def test_operations_endpoints_are_safe_in_dry_run(self) -> None:
+        overview = self.client.get("/api/v2/operations/overview")
+        self.assertEqual(overview.status_code, 200)
+        self.assertEqual(overview.json()["execution_mode"], "dry-run")
+        netem = self.client.post("/api/v2/operations/netem", json={"interface": "lan0", "delayMs": 80, "jitterMs": 5, "lossPercent": 1})
+        self.assertEqual(netem.status_code, 200)
+        self.assertEqual(netem.json()["mode"], "dry-run")
+        restart = self.client.post("/api/v2/operations/services/restart", json={"service": "wansim.service"})
+        self.assertEqual(restart.status_code, 200)
+        blocked = self.client.post("/api/v2/operations/services/restart", json={"service": "ssh"})
+        self.assertEqual(blocked.status_code, 400)
 
 
 if __name__ == "__main__":
