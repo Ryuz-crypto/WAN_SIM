@@ -81,6 +81,7 @@ class InstallerStructureTests(unittest.TestCase):
         vagrantfile = (ROOT / "v2/integration/Vagrantfile").read_text(encoding="utf-8")
         lifecycle = (ROOT / "v2/integration/installer-lifecycle.sh").read_text(encoding="utf-8")
         self.assertIn("runs-on: ubuntu-24.04", workflow)
+        self.assertIn("apt.releases.hashicorp.com", workflow)
         self.assertIn("--provider=docker", workflow)
         self.assertIn('docker.has_ssh = true', vagrantfile)
         for evidence in ("control_plane_acceptance.py", "--https pem", "support-bundle", "v1.119-stable"):
