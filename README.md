@@ -1,140 +1,54 @@
 # Ryuz WAN Simulator
 
-**Instalación recomendada: [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable)** | **Versión actual: `2.0.7-prestable`** | **Autor**: decameru@outlook.com
+Simulador WAN para Linux con soporte L3/NAT, Bridge L2, VLAN, puertos LAN sin etiqueta, DHCP, `tc/netem`, HTTPS, Telegram y panel web.
 
-Ryuz WAN Simulator es una herramienta para simular condiciones WAN en Linux. Permite aplicar latencia, jitter y perdida de paquetes sobre interfaces fisicas, VLANs o bridges L2, con un dashboard Flask para control operativo.
+**Versión estable recomendada:** [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable)
 
-La versión más estable es [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable) y debe usarse en laboratorios y entornos operativos. La versión más actual es [`v2.0.7-prestable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v2.0.7-prestable) y debe evaluarse sólo en laboratorio.
+**Versión más actual:** [`v2.0.7-prestable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v2.0.7-prestable)
 
-| Necesidad | Qué usar | Estado |
+**Autor:** decameru@outlook.com
+
+| Uso | Versión | Instalador |
 | --- | --- | --- |
-| Producción o laboratorio operativo | [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable) con `./WANsim2.sh` | **Más estable y recomendada** |
-| Evaluar FastAPI y ReactUI 2.0 | [`v2.0.7-prestable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v2.0.7-prestable) | **Más actual**, pre-estable y `dry-run` por defecto |
+| Producción, centros de datos y laboratorios operativos | `v1.119-stable` | `./WANsim2.sh` |
+| Evaluación de FastAPI, ReactUI y administración centralizada | `v2.0.7-prestable` | `sudo ./install-v2.sh install` |
 
-Las dos versiones deben instalarse en directorios diferentes. `WANsim2.sh` corresponde a V1; V2 se instala de extremo a extremo con `install-v2.sh`.
+V1 y V2 deben probarse en directorios o máquinas diferentes. V2 sigue siendo pre-estable y comienza en modo seguro `dry-run`.
 
-## Funcionalidades
+## Funciones Principales
 
-- Modo L3/NAT con hasta dos pares WAN/LAN: cada LAN puede usar VLANs etiquetadas o acceso sin etiqueta.
-- Cada WAN L3 puede configurarse por DHCP o manualmente con IP, mascara/CIDR y gateway.
-- Deteccion por WAN de IP privada, IP publica y estimacion de ancho de banda disponible.
-- Modo Bridge L2 con 1 a 3 pares de interfaces entrada/salida.
-- Control de latencia, jitter y perdida por interfaz usando `tc/netem`.
-- Dashboard web Flask en el puerto `5000`, con administracion HTTPS desde la interfaz web.
-- Seccion `ReactUI pre-estable` para preparar la evolucion grafica de configuracion L3/L2, Telegram multi-bot, daemons y leases DHCP.
-- API FastAPI 2.0 con configuraciones versionadas, plan de despliegue, snapshots y rollback transaccional en modo seguro `dry-run`.
-- DHCP automatico para VLANs y puertos LAN de acceso sin etiqueta.
-- Persistencia L2 mediante `wansim-l2-persist.service`.
-- Integracion opcional con Telegram, botones de presets y fallback HTTP API si falla la libreria legacy.
-- Configuracion persistente en el home del usuario que ejecuta el script.
+- L3/NAT con hasta dos pares WAN/LAN.
+- WAN por DHCP o configuración manual de IP, CIDR y gateway.
+- LAN con VLANs etiquetadas o acceso sin etiqueta.
+- Bridge L2 con hasta tres pares de interfaces.
+- Inyección de latencia, jitter y pérdida con `tc/netem`.
+- DHCP, NAT, detección de IP pública/privada y estimación de ancho de banda.
+- HTTPS con certificados PEM, PFX/PKCS12 o DER.
+- Telegram con botones operativos.
+- V2 agrega FastAPI, ReactUI, SQLite, Docker Compose, rollback y CLI administrativo.
 
 ## Sistemas Soportados
 
-La instalación estable detecta el gestor de paquetes y ajusta dependencias para:
-
-- Ubuntu Server 20.04 o superior.
-- Ubuntu Workstation 20.04 o superior.
+- Ubuntu Server y Workstation 20.04 o superior.
 - Debian 10 o superior.
-- Fedora Server/Workstation.
-- CentOS Stream.
-- Rocky Linux.
+- Fedora Server y Workstation.
+- Rocky Linux 8/9 y CentOS Stream.
+- Arquitecturas `x86_64` y `aarch64` para V2.
 
-Notas por familia:
+Se requiere Linux con `systemd`, acceso a Internet y un usuario con permisos `sudo`.
 
-- Ubuntu/Debian usan `apt-get`, `isc-dhcp-server` e `/etc/iptables/rules.v4`.
-- Fedora/CentOS/Rocky usan `dnf` o `yum`, `dhcp-server`/`dhcpd` e `/etc/sysconfig/iptables`.
-- En todos los casos se requiere `systemd`, `iproute`, `tc`, `iptables`, `python3` y permisos `sudo`.
-- Las dependencias Python se instalan en `~/.wansim/venv`; no se modifica el Python del sistema.
+## Instalar V1.119 Stable
 
-## Instalación 1: Versión Más Estable (`v1.119-stable`)
+V1 es la versión recomendada para operación. Ejecuta `WANsim2.sh` como usuario normal; el script solicitará `sudo` cuando sea necesario.
 
-**Usa esta opción para producción, centros de datos y laboratorios operativos.** Es la instalación recomendada. No uses `main` para instalar la versión estable:
-
-```bash
-git clone --branch v1.119-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git
-cd WAN_SIM
-chmod +x WANsim2.sh
-./WANsim2.sh
-```
-
-Comprueba antes de instalar que estás exactamente en la versión estable:
-
-```bash
-git describe --tags --exact-match
-# Debe mostrar: v1.119-stable
-```
-
-Si ya tienes el repositorio, actualiza las etiquetas y cambia a la versión estable antes de ejecutar el instalador:
-
-```bash
-git fetch --tags
-git switch --detach v1.119-stable
-./WANsim2.sh
-```
-
-La etiqueta es inmutable y apunta al commit validado con L3/NAT multi-WAN, DHCP o WAN manual, LAN VLAN o acceso sin etiqueta, Bridge L2, HTTPS, Telegram y el dashboard principal.
-
-## Instalación 2: Versión Más Actual (`v2.0.7-prestable`)
-
-**Usa esta opción únicamente en una VM o servidor de laboratorio dedicado.** El instalador detecta el sistema, instala Docker y dependencias de red, prepara el agente nativo, FastAPI, ReactUI, HTTPS, almacenamiento persistente y servicios `systemd`.
-
-No reemplaza `v1.119-stable` ni modifica la configuración creada por V1. Inicia en `dry-run` y no cambia interfaces durante la instalación.
-
-```bash
-git clone --branch v2.0.7-prestable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
-cd WAN_SIM-v2
-git describe --tags --exact-match
-# Debe mostrar: v2.0.7-prestable
-chmod +x install-v2.sh
-sudo ./install-v2.sh install
-```
-
-Si ya tienes el clon de V2:
-
-```bash
-cd WAN_SIM-v2
-git fetch --tags
-git switch --detach v2.0.7-prestable
-sudo ./install-v2.sh install
-```
-
-Al terminar, consulta el estado y recupera la clave inicial de operador:
-
-```bash
-sudo wansim doctor
-sudo sed -n 's/^WANSIM_V2_API_KEY="\(.*\)"$/\1/p' /etc/wansim/wansim.env
-```
-
-El instalador genera HTTPS autofirmado de forma predeterminada. También acepta `--https pem`, `--https pfx` y `--https der`. Instala el comando administrativo `wansim` y servicios `systemd`; no es necesario arrancar FastAPI, ReactUI ni Docker Compose manualmente. Consulta [la guía completa del instalador](docs/V2_INSTALLER.md) y [la guía operativa](docs/V2_OPERATIONS.md).
-
-Para automatización, parte de `installer.example.yaml`, guarda claves y contraseñas en archivos con permisos restringidos y ejecuta:
-
-```bash
-sudo ./install-v2.sh install --config installer.example.yaml --non-interactive
-```
-
-El modo real exige autorización explícita en el archivo o mediante ambos parámetros `--host-apply --confirm-host-apply`. Incluso entonces, ReactUI exige escribir `APLICAR <ID_CONFIGURACION>` antes de enviar un despliegue al host.
-
-Operación diaria después de instalar:
-
-```bash
-sudo wansim status
-sudo wansim doctor --export /tmp/wansim-doctor.txt
-sudo wansim backup
-sudo wansim restart
-sudo wansim update v2.0.7-prestable
-```
-
-### Ubuntu Server / Ubuntu Workstation / Debian
+### Ubuntu Server, Ubuntu Workstation o Debian
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y git sudo
-git clone --branch v1.119-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git
-cd WAN_SIM
+git clone --branch v1.119-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v1
+cd WAN_SIM-v1
 chmod +x WANsim2.sh
-sudo modprobe 8021q
-echo "8021q" | sudo tee -a /etc/modules
 ./WANsim2.sh
 ```
 
@@ -143,353 +57,156 @@ echo "8021q" | sudo tee -a /etc/modules
 ```bash
 sudo dnf makecache -y
 sudo dnf install -y git sudo
-git clone --branch v1.119-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git
-cd WAN_SIM
+git clone --branch v1.119-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v1
+cd WAN_SIM-v1
 chmod +x WANsim2.sh
-sudo modprobe 8021q
-echo "8021q" | sudo tee /etc/modules-load.d/8021q.conf
 ./WANsim2.sh
 ```
 
-### CentOS Stream / Rocky Linux
+### Rocky Linux o CentOS Stream
 
 ```bash
-sudo dnf makecache -y || sudo yum makecache -y
-sudo dnf install -y git sudo || sudo yum install -y git sudo
-git clone --branch v1.119-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git
-cd WAN_SIM
+sudo dnf makecache -y
+sudo dnf install -y git sudo
+git clone --branch v1.119-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v1
+cd WAN_SIM-v1
 chmod +x WANsim2.sh
-sudo modprobe 8021q
-echo "8021q" | sudo tee /etc/modules-load.d/8021q.conf
 ./WANsim2.sh
 ```
 
-El script instala el resto de dependencias segun el sistema detectado.
-
-## Uso
-
-Ejecuta siempre como usuario normal con permisos sudo:
-
-```bash
-./WANsim2.sh
-```
-
-No lo ejecutes directamente como `root`. El script usa `sudo` para las operaciones que requieren privilegios.
-
-Durante el asistente interactivo podras elegir:
-
-- `L3 / NAT`: uno o dos pares WAN/LAN, con DHCP y NAT hacia su WAN.
-- Modo LAN por par: `vlan` para multiples redes etiquetadas o `access` para una subred /24 sin etiqueta sobre el puerto fisico. Puedes combinar ambos modos entre pares.
-- Direccionamiento WAN por par: DHCP o manual con IP, mascara/CIDR y gateway.
-- `Bridge L2`: bridges entre pares de interfaces fisicas.
-- Integracion opcional con Telegram.
-- HTTPS opcional desde el dashboard usando PEM, PEM bundle, PFX/PKCS12 o DER.
-
-Al finalizar, el dashboard queda disponible en:
+Al finalizar, abre:
 
 ```text
 http://<IP_DEL_SERVIDOR>:5000
 ```
 
-Desde el boton `HTTPS` del dashboard puedes cargar un certificado PEM, PEM bundle, PFX/PKCS12 o DER. Al activarlo, el servicio se reinicia y queda publicado con:
+El asistente permite elegir L3/NAT o Bridge L2, interfaces, VLAN/acceso, direccionamiento WAN, DHCP, Telegram y HTTPS.
 
-```text
-https://<IP_DEL_SERVIDOR>:5000
-```
+## Instalar V2.0.7 Pre-Stable
 
-## Desarrollo ReactUI 2.0 Pre-Estable
+V2 es para laboratorio. Su instalador incorpora Docker, FastAPI, ReactUI, proxy HTTPS, agente de red, base de datos y servicios `systemd`.
 
-Esta sección no forma parte de la instalación estable. Usa la etiqueta `v2.0.7-prestable` para una evaluación reproducible o `main` solamente para desarrollo; ReactUI consume la API FastAPI y ésta se comunica con el agente nativo mediante un socket Unix autenticado.
-
-La versión pre-estable permite preparar L3/NAT o Bridge L2, validar las restricciones, revisar un plan de despliegue, consultar interfaces, tráfico, leases DHCP y daemons, y probar perfiles `tc/netem`. El modo predeterminado es `dry-run`: no cambia interfaces ni servicios del host.
-
-### LAN L3 Sin Etiqueta
-
-En el asistente, selecciona `access` en la pregunta `modo LAN` del par deseado. Solo debes indicar el tercer octeto de su subred; no se pide cantidad ni ID de VLAN.
-
-En la configuración L3, selecciona `Acceso sin etiqueta (sin VLAN)` en `Modo del puerto LAN` de cualquier par WAN/LAN. Los campos de cantidad e ID VLAN se ocultan. Define la subred, revisa el plan de despliegue y aplica el cambio únicamente en un host de laboratorio.
-
-Ejemplo: WAN `ens160`, LAN `ens192`, segmento `10.254` y octeto `10` asignan `10.254.10.1/24` directamente a `ens192`. DHCP entrega `10.254.10.100-200` con gateway `10.254.10.1`; los clientes usan trafico sin etiqueta. En el segundo par puedes usar otra LAN en acceso o mantener sus VLANs, siempre con subredes diferentes.
-
-El dashboard principal y la inyeccion en vivo muestran `Acceso sin etiqueta (ens192 -> ens160)` y controlan `ens192`. No se crea una VLAN 0. El modo y la cantidad de redes se guardan por par; las configuraciones anteriores siguen usando VLANs por defecto. Al cambiar de acceso a VLAN o Bridge se retira la IP de acceso administrada por WAN_SIM.
-
-Para actualizar una instalación estable existente, conserva la rama estable:
+### Ubuntu Server, Ubuntu Workstation o Debian
 
 ```bash
-git fetch --tags
-git switch --detach v1.119-stable
-./WANsim2.sh
+sudo apt-get update
+sudo apt-get install -y git sudo
+git clone --branch v2.0.7-prestable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
+cd WAN_SIM-v2
+chmod +x install-v2.sh
+sudo ./install-v2.sh install
 ```
 
-El script regenera el dashboard; recarga el navegador después. ReactUI 2.0 continúa en pre-estable; la referencia de instalación es `v1.119-stable`.
-
-## API 2.0: Configuracion Y Despliegue
-
-La base de 2.0 está disponible en `v2/backend`. Su API FastAPI implementa los primeros cuatro pilares: módulos reutilizables, configuración persistente en SQLite, validación/planificación y transacciones con snapshot, verificación y rollback. La interfaz React + TypeScript que consume esa API vive en `v2/frontend`.
-
-Por defecto funciona en `dry-run`: permite probar toda la secuencia sin cambiar ninguna interfaz del host.
+### Fedora
 
 ```bash
-cd v2/backend
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -r requirements.txt
-uvicorn wansim_v2.api:app --host 0.0.0.0 --port 8080
+sudo dnf makecache -y
+sudo dnf install -y git sudo
+git clone --branch v2.0.7-prestable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
+cd WAN_SIM-v2
+chmod +x install-v2.sh
+sudo ./install-v2.sh install
 ```
 
-Abre `http://<IP_DEL_SERVIDOR>:8080/docs`. El ciclo operativo es crear un borrador, consultar su plan y solicitar un despliegue. La API registra el plan, el snapshot del host, resultado, configuración activa y rollback en `~/.wansim-v2/state.db`.
-
-La aplicación real requiere dos variables explícitas y un host dedicado: `WANSIM_V2_EXECUTION_MODE=host` y `WANSIM_V2_ALLOW_HOST_APPLY=1`. Mientras no estén las dos presentes, el agente no ejecuta comandos de red.
-
-### ReactUI 2.0 Separada
-
-Con la API anterior en ejecución, abre otra terminal para iniciar la consola ReactUI:
+### Rocky Linux
 
 ```bash
-cd v2/frontend
-npm install
-npm run dev -- --host 0.0.0.0
+sudo dnf makecache -y
+sudo dnf install -y git sudo
+git clone --branch v2.0.7-prestable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
+cd WAN_SIM-v2
+chmod +x install-v2.sh
+sudo ./install-v2.sh install
 ```
 
-Abre `http://<IP_DEL_SERVIDOR>:5173`. Vite redirige `/api` al backend en el puerto `8080`. La interfaz permite configurar y validar topologías L3/NAT o Bridge L2, revisar el plan antes de desplegar, aplicar o reiniciar `tc/netem`, consultar interfaces y tráfico, leases DHCP, estado/reinicio de daemons y el historial con rollback.
-
-Para generar los archivos estáticos de la interfaz: `npm run build`. Sigue siendo una versión pre-estable: en modo predeterminado los despliegues se simulan mediante `dry-run` y no modifican la red del host.
-
-### Telegram Desde FastAPI
-
-V2 administra varios bots desde `/api/v2/telegram/bots`. Toda la API operativa exige `X-WAN-SIM-API-Key`. Cada token queda cifrado en el estado local, sólo se muestra una pista enmascarada y cada bot limita chats autorizados y permiso `read`, `operate` o `admin`. El webhook usa su secreto independiente, devuelto una única vez al crear el bot, en el header `X-Telegram-Bot-Api-Secret-Token`.
-
-En la pestaña **Telegram** de ReactUI indica la URL pública HTTPS del proxy, crea el bot y pulsa **Sincronizar**. El sistema registra `https://<HOST>/api/v2/telegram/bots/<ID>/webhook` con Telegram. **Probar** envía un mensaje al primer chat autorizado. Los botones de Telegram usan la misma capa de operaciones que ReactUI: estado, presets `netem` y, para administradores, reinicios permitidos. No publiques el webhook sin HTTPS.
-
-## Migración Y Estabilidad V2
-
-- [Migración desde V1.119](docs/MIGRATION_V1_TO_V2.md)
-- [Criterios para declarar V2 estable](docs/V2_STABILITY.md)
-- [Matriz de VMs Ubuntu/Debian/Fedora/Rocky](v2/integration/README.md)
-
-## Archivos Generados
-
-Los archivos operativos se crean en el home del usuario que ejecuta el script:
-
-| Archivo | Descripcion |
-| --- | --- |
-| `~/emix_abundix.conf` | Configuracion principal |
-| `~/wansim_dashboard.py` | Dashboard Flask generado |
-| `~/api_tokens.json` | Tokens locales de API |
-| `~/emix_abundix.log` | Log principal |
-| `~/wansim_netem_state.json` | Estado tc/netem |
-| `~/.wansim/venv` | Entorno Python aislado del dashboard |
-| `~/.wansim/tls/` | Certificado y llave normalizados para HTTPS |
-| `~/.wansim/reactui_prebeta.json` | Draft guardado desde `ReactUI pre-beta` |
-
-Archivos del sistema:
-
-| Archivo | Ubuntu/Debian | Fedora/CentOS/Rocky |
-| --- | --- | --- |
-| DHCP config | `/etc/dhcp/dhcpd.conf` | `/etc/dhcp/dhcpd.conf` |
-| DHCP service | `isc-dhcp-server` | `dhcpd` |
-| DHCP defaults | `/etc/default/isc-dhcp-server` | `/etc/sysconfig/dhcpd` |
-| iptables persistente | `/etc/iptables/rules.v4` | `/etc/sysconfig/iptables` |
-| Dashboard service | `/etc/systemd/system/wansim.service` | `/etc/systemd/system/wansim.service` |
-| L2 persist service | `/etc/systemd/system/wansim-l2-persist.service` | `/etc/systemd/system/wansim-l2-persist.service` |
-
-## Validacion
-
-En Linux o WSL/Git Bash:
+Comprueba que instalaste la etiqueta correcta:
 
 ```bash
-bash -n WANsim2.sh
+git describe --tags --exact-match
+# Debe mostrar: v2.0.7-prestable
 ```
 
-En un host de laboratorio:
+Consulta el estado y la clave inicial:
 
 ```bash
-sudo systemctl status wansim.service
-sudo journalctl -u wansim.service -n 80 --no-pager
+sudo wansim status
+sudo wansim doctor
+sudo sed -n 's/^WANSIM_V2_API_KEY="\(.*\)"$/\1/p' /etc/wansim/wansim.env
 ```
 
-## Seguridad Operativa
+El instalador muestra al final la URL de ReactUI. HTTPS autofirmado está habilitado de forma predeterminada.
 
-Esta herramienta modifica interfaces, qdisc, DHCP, NAT y servicios systemd. Usala en laboratorio o en un host dedicado para simulacion WAN.
+## Operación Básica De V2
 
-Antes de ejecutar en un servidor compartido, revisa:
+```bash
+sudo wansim status
+sudo wansim restart
+sudo wansim logs
+sudo wansim doctor --export /tmp/wansim-doctor.txt
+sudo wansim backup
+sudo wansim restore /var/backups/wansim/ARCHIVO.tar.gz
+sudo wansim update v2.0.7-prestable
+```
 
-- Interfaces fisicas seleccionadas.
-- Reglas existentes de firewall/NAT.
-- Servicios DHCP activos.
-- Politicas de SELinux/firewalld en Fedora, CentOS o Rocky.
+V2 utiliza `dry-run` de forma predeterminada. Para permitir cambios reales en un servidor de laboratorio:
 
-Si una ejecucion falla, el script ejecuta rollback automatico de servicios, dashboard generado, virtualenv parcial, bridges/VLANs generadas y archivos temporales. El log principal se conserva en `~/emix_abundix.log`.
+```bash
+sudo wansim enable-host-apply --confirm
+```
 
-## Release Notes
+ReactUI exige además escribir `APLICAR <ID_CONFIGURACION>` antes de modificar la red. Para regresar al modo seguro:
 
-### Version 2.0.7-prestable
+```bash
+sudo wansim disable-host-apply
+```
 
-- Completa el ciclo profesional del instalador con asistente interactivo, archivo YAML de respuestas y confirmación doble para el modo `host`.
-- Agrega transacciones de instalación con snapshot de archivos, servicios e `iptables`, verificación y rollback automático ante fallos.
-- Instala el CLI `wansim` para estado, logs, `doctor`, backup, restore, reparación, actualización por etiqueta y desinstalación.
-- Añade migraciones SQLite con comprobación de integridad, respaldos con SHA-256 y actualización restringida a etiquetas V2 publicadas.
-- ReactUI exige una frase ligada al ID de configuración antes de aplicar cambios reales.
-- La matriz Vagrant cubre instalación, fallo inducido, rollback, reparación, red real, restauración, reinstalación y desinstalación en Ubuntu, Debian, Fedora y Rocky.
+Desinstalación:
 
-### Version 2.0.6-prestable
+```bash
+sudo wansim uninstall          # Conserva configuración y datos
+sudo wansim uninstall --purge  # Elimina configuración y datos
+```
 
-- Se agrega `install-v2.sh` con modos de instalación, actualización, reparación, diagnóstico y desinstalación.
-- El instalador soporta Ubuntu, Debian, Fedora y Rocky; instala Docker, Compose, dependencias L2/L3, DHCP y TLS sin preguntas de paquetes.
-- El agente privilegiado queda fuera de los contenedores y usa un socket Unix `0660`, firmas HMAC, timestamps y nonces antirrepetición.
-- FastAPI, ReactUI, SQLite y Nginx se empaquetan con imágenes versionadas, datos persistentes y servicios `systemd` con arranque automático.
-- Los secretos, certificados, configuración, estado y logs se separan en `/etc/wansim`, `/var/lib/wansim` y `/var/log/wansim`.
+Docker no se elimina porque puede ser utilizado por otras aplicaciones.
 
-### Version 2.0.5-prestable
+## Instalación Desatendida De V2
 
-- Se incorpora una matriz real y automática para Ubuntu 24.04, Debian 12, Fedora 42 y Rocky Linux 9, con reportes JSON por distribución.
-- Cada entorno aplica dos WAN, una LAN VLAN, una LAN de acceso, NAT, forwarding y rollback dentro de un namespace de red desechable.
-- Se agrega compatibilidad con Python 3.9 para Rocky Linux y restauración correcta de snapshots `iptables-nft` vacíos.
-- La matriz y la suite general aprobaron en [GitHub Actions run 35820610126](https://github.com/Ryuz-crypto/WAN_SIM/actions/runs/35820610126); V1.119 continúa como versión estable recomendada.
-- La instalación diferencia explícitamente la etiqueta más estable `v1.119-stable` de la etiqueta más actual `v2.0.5-prestable`.
+Edita una copia de `installer.example.yaml` y ejecuta:
 
-### Version 2.0.4-prebeta
+```bash
+sudo ./install-v2.sh install --config installer.example.yaml --non-interactive
+```
 
-- Protege todos los endpoints operativos con una clave de API y agrega inicio/cierre de sesión en ReactUI.
-- El motor transaccional registra únicamente acciones aplicadas, restaura IP, rutas, forwarding, iptables y DHCP, y reconstruye la configuración activa anterior.
-- NAT crea y enlaza su cadena administrada de forma idempotente; las colisiones de VLAN/Bridge se rechazan o migran de forma controlada.
-- DHCP deja de ser una acción simulada: genera, valida y activa la configuración ISC, y la verificación comprueba interfaces, direcciones, gateways, NAT, DHCP y miembros Bridge.
-- Telegram propaga fallos reales de entrega y ofrece presets de latencia, jitter, pérdida y reset.
-- La regresión transaccional distingue un rollback completado de uno fallido y el CI usa acciones compatibles con Node.js 24.
+No guardes contraseñas directamente en YAML. Utiliza `adminKeyFile` y `tlsPasswordFile` con archivos accesibles únicamente por `root`.
 
-### Version 2.0.3-prebeta
+## Novedades De V2.0.7
 
-- Telegram se convierte en cliente de FastAPI con múltiples bots, tokens cifrados, chats autorizados, roles y webhook con secreto.
-- Los botones de Telegram reutilizan la capa operacional de ReactUI para estado, `netem` y reinicios permitidos.
-- Se agrega Docker Compose para ReactUI, API, SQLite y proxy Nginx, con override HTTPS y modo `dry-run` forzado.
-- Se incorpora matriz Vagrant para Ubuntu, Debian, Fedora y Rocky, con pruebas aisladas de dos WAN, VLAN, acceso y rollback.
-- Se documentan la migración desde V1.119 y los criterios explícitos para una futura etiqueta `v2.0.0-stable`.
+- Instalador interactivo o desatendido con servicios `systemd`.
+- Transacción `snapshot -> instalar -> verificar -> rollback`.
+- CLI `wansim` para diagnóstico, logs, servicios, respaldo y actualización.
+- Migraciones SQLite y respaldos protegidos con SHA-256.
+- Confirmación explícita antes de aplicar cambios reales desde ReactUI.
+- Matriz Vagrant preparada para probar el ciclo completo en Ubuntu, Debian, Fedora y Rocky.
 
-### Version 2.0.2-prebeta
+La suite general y la matriz automática Linux aprobaron para esta etiqueta:
 
-- Se completa el ciclo transaccional de la API: preflight, snapshot real de red, aplicar, verificar, rollback de acciones y restauración de la configuración activa anterior.
-- Se incorpora `v2/frontend`, una ReactUI Vite + TypeScript con configurador L3/NAT y Bridge, validación, plan, despliegue y auditoría de cambios.
-- El panel operativo ReactUI muestra interfaces con IP/MAC/tráfico, leases DHCP, daemons, inyección `tc/netem` y reinicio controlado de servicios permitidos.
-- Se agrega la compilación de ReactUI a GitHub Actions y las pruebas de API cubren el rollback a la configuración activa anterior y endpoints operativos en `dry-run`.
+- [WAN_SIM checks](https://github.com/Ryuz-crypto/WAN_SIM/actions/runs/35903709500)
+- [Ubuntu, Debian, Fedora y Rocky](https://github.com/Ryuz-crypto/WAN_SIM/actions/runs/35903709504)
 
-### Version 2.0.1-prebeta
+La matriz Vagrant completa no fue ejecutada en el host Windows de desarrollo por no disponer de Vagrant/VirtualBox. V2 conserva por ello su estado **pre-stable**.
 
-- Se implementan los pilares 1 a 4 de WAN_SIM 2.0: modularización inicial, estado versionado, FastAPI y transacciones de red seguras.
-- El backend dispone de endpoints para crear borradores, consultar configuración activa, generar planes, desplegar y hacer rollback.
-- Se agregan pruebas de contrato FastAPI y de rollback forzado, además de las regresiones de V1.
+## Documentación
 
-### Version 2.0.0-prebeta
+- [Instalador V2](docs/V2_INSTALLER.md)
+- [Operación V2](docs/V2_OPERATIONS.md)
+- [Migración de V1.119 a V2](docs/MIGRATION_V1_TO_V2.md)
+- [Matriz de integración](v2/integration/README.md)
+- [Criterios para V2 estable](docs/V2_STABILITY.md)
 
-- La rama `main` inicia WAN_SIM 2.0 y ReactUI 2.0 en estado pre-beta.
-- `v1.119-stable` queda marcada como la última versión estable, con guía de instalación y retorno a la rama de desarrollo.
-- La etiqueta estable conserva L3/NAT, Bridge L2, HTTPS, Telegram, DHCP y LAN en VLAN o acceso sin etiqueta.
-- Se inicia la modularización: `WANsim2.sh` utiliza primitivas compartidas de plataforma, logging y red dentro de `lib/`.
-- Se agrega FastAPI 2.0 con almacenamiento SQLite para borradores, configuración activa, snapshots y despliegues.
-- El motor transaccional implementa validar, planificar, snapshot, aplicar, verificar y rollback; por defecto todo opera en `dry-run`.
+## Seguridad
 
-### Version 1.119-stable
-
-- LAN L3 configurable por par como trunk con VLANs o acceso sin etiqueta, desde el asistente y ReactUI.
-- En acceso, IP, DHCP, NAT y `tc/netem` usan directamente la interfaz fisica, con una sola subred /24.
-- Resumen y diagrama distinguen los modos; la validacion evita interfaces y subredes repetidas en pares mixtos.
-- Persistencia de modo LAN y cantidad de redes por par, compatible con configuraciones previas.
-- Pruebas automatizadas de configuracion, comandos runtime simulados y transiciones VLAN/acceso. El trafico real y DHCP requieren comprobacion en una VM Linux.
-
-### Version 1.118-prebeta
-
-- `Enviar parametros` en ReactUI aplica la topologia validada en tiempo real, actualiza interfaces controladas y refresca metadata sin reiniciar Flask.
-- L3/NAT runtime crea VLANs, actualiza DHCP, configura NAT en cadena `WANSIM_POSTROUTING` y persiste la configuracion local.
-- Bridge runtime crea pares `br_wan#`, actualiza interfaces controladas y limpia objetos WAN_SIM previos.
-- Se agrega panel `Inyeccion en vivo` para aplicar o resetear delay, jitter y perdida desde ReactUI usando `tc/netem`.
-- Los resultados de submit devuelven acciones ejecutadas, comandos y salida corta para pruebas de laboratorio.
-
-### Version 1.117-stable
-
-- Corrige el resumen L3/NAT cuando una WAN usa DHCP/manual para que el segmento LAN no se mezcle con modo WAN, CIDR o gateway.
-- ReactUI pre-beta reorganiza los campos L3 con etiquetas, ejemplos y contexto para WAN, LAN trunk, direccionamiento, VLAN ID y octetos.
-- ReactUI agrega `Enviar parametros`, que valida y guarda el draft pre-beta en backend sin aplicar cambios destructivos.
-- Las credenciales Telegram se entregan ocultas por API y solo se revelan tras validar la password Linux; la validacion usa el secreto guardado aunque la pantalla muestre `__hidden__`.
-
-### Version 1.116-stable
-
-- Se marca la rama actual como estable para la base V1.
-- En modo L3/NAT, cada WAN puede configurarse por DHCP o manualmente con IP, mascara/CIDR y gateway.
-- El despliegue aplica direccionamiento WAN antes de medir IP publica/BW y antes de configurar NAT.
-- ReactUI pasa a etapa 2 pre-beta con validacion server-side y boton `Plan de despliegue`; aun no aplica cambios destructivos hasta estabilizarse.
-- El README documenta como revisar la version estable y la etapa ReactUI pre-beta.
-
-### Version 1.115
-
-- Se agrega `MAC LAN` al detalle desplegable de cada enlace L3.
-- Se actualiza el branding visual del dashboard a una paleta viva profesional inspirada en HPE: verde principal, fondo claro y acentos cian/purpura.
-- Se agrega boton `Pre-beta ReactUI` con una consola React embebida para preparar cambios futuros de topologia L3/NAT y Bridge L2L.
-- La pre-beta permite guardar drafts, preparar Telegram multi-bot, validar sincronizacion, ver/reiniciar daemons y revisar leases DHCP.
-- La version estable V1 sigue intacta y puede convivir con el draft de la pre-beta.
-
-### Version 1.114
-
-- La carga y activacion de HTTPS pasa del asistente de consola a la interfaz web del dashboard.
-- El flujo L3/NAT ya no repregunta el octeto base global; cada par WAN/LAN define su rango y valida que no se repita.
-- El resumen final de instalacion muestra todos los pares WAN/LAN configurados, no solo el primero.
-- Los titulos de enlaces L3 ahora usan `VLAN <id> (LAN -> WAN)` sin el prefijo `L3#`.
-- La informacion tecnica de cada enlace en el dashboard queda plegada en `Detalles del enlace`.
-
-### Version 1.113
-
-- Se agrega soporte L3/NAT para hasta dos pares WAN/LAN, con validacion para evitar interfaces, VLAN IDs y octetos repetidos.
-- El dashboard muestra con mayor claridad que WAN/LAN/subred controla cada tarjeta de inyeccion.
-- Cada WAN reporta IP privada, IP publica detectada y una estimacion de BW mediante descarga controlada en segundo plano.
-- Se agrega HTTPS opcional para Flask usando certificados PEM separados, PEM bundle, PFX/PKCS12 o DER; el script convierte y valida el par antes de iniciar el servicio.
-- Telegram ahora intenta varias rutinas de instalacion y, si `python-telegram-bot` no importa, opera mediante fallback HTTP API con botones de presets, reset y modo manual.
-
-### Version 1.112
-
-- Se asegura la dependencia `python-telegram-bot==13.15` tambien cuando se reutiliza una configuracion previa con Telegram habilitado.
-- La instalacion opcional de Telegram ahora es idempotente y valida el import `telegram` despues de instalar.
-- Si Telegram no puede instalarse o importarse en el Python disponible, desde 1.113 el dashboard usa el fallback HTTP API.
-
-### Version 1.111
-
-- Se reemplaza `pip3 install --user` por un virtualenv aislado en `~/.wansim/venv` para evitar PEP 668 (`externally-managed-environment`).
-- El servicio systemd ejecuta el dashboard con el Python del virtualenv.
-- Telegram se instala solo si el usuario habilita la integracion.
-- Se agrega rollback automatico en errores para limpiar recursos generados y evitar redeploys de VM durante pruebas.
-
-### Version 1.110
-
-- Se elimina el uso de `sudo DEBIAN_FRONTEND=noninteractive`, porque algunos sudoers bloquean variables de entorno.
-- Se mantiene la preaprobacion por `debconf-set-selections` para evitar el dialogo YES/NO de `iptables-persistent`.
-- Se agrega `debconf-set-selections` a los comandos permitidos por sudoers.
-
-### Version 1.109
-
-- Se preaprueba la instalacion de `iptables-persistent` en Ubuntu/Debian para evitar la pantalla interactiva YES/NO.
-- Se intento ejecutar `apt-get` con `DEBIAN_FRONTEND=noninteractive`; esto fue reemplazado en 1.110 por compatibilidad con sudoers restrictivos.
-- Se conservan configuraciones existentes de paquetes con opciones `--force-confdef` y `--force-confold`.
-
-### Version 1.108
-
-- Se elimina la base secundaria `DashboardAPI-EC` de esta rama principal.
-- Se centraliza la version en el archivo `VERSION`.
-- Se reemplazan rutas fijas `/home/axis` por rutas basadas en `$HOME`.
-- Se agrega deteccion de `apt-get`, `dnf` y `yum`.
-- Se agregan dependencias equivalentes para Ubuntu/Debian, Fedora, CentOS y Rocky Linux.
-- Se ajustan nombres de servicio DHCP por familia de sistema.
-- Se evita que el dashboard en modo NAT dependa del servicio L2.
-- Se actualiza README con instrucciones por sistema operativo.
-
-### Version 1.107
-
-- Soporte para multiples bridges L2.
-- Persistencia de bridges L2 con systemd.
-- Dashboard Flask con informacion de bridge, rol y peer.
-- Version fija de `python-telegram-bot==13.15`.
-- Mejoras de limpieza en VLANs, tc/netem e iptables.
-
-### Version 1.100
-
-- Version inicial con NAT, Bridge, Flask dashboard, Telegram, VLANs y DHCP.
+WAN_SIM modifica interfaces, rutas, DHCP, NAT, firewall y `tc/netem`. Utilízalo en un host dedicado y conserva acceso por consola durante las primeras pruebas. V2 debe permanecer en `dry-run` hasta revisar y aprobar el plan mostrado por ReactUI.
 
 ## Licencia
 
-Este proyecto se distribuye bajo licencia MIT. Consulta `LICENSE`.
+Proyecto distribuido bajo los términos definidos en [LICENSE](LICENSE).
