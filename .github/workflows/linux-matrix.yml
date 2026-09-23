@@ -1,0 +1,65 @@
+name: WAN_SIM Linux integration matrix
+
+on:
+  push:
+    branches: [main]
+    tags: ["v2.*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-matrix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host-network-integration:
+    name: ${{ matrix.name }} host network transaction
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Ubuntu 24.04
+            slug: ubuntu-24.04
+            distro: ubuntu
+            image: ubuntu:24.04
+          - name: Debian 12
+            slug: debian-12
+            distro: debian
+            image: debian:12
+          - name: Fedora 42
+            slug: fedora-42
+            distro: fedora
+            image: fedora:42
+          - name: Rocky Linux 9
+            slug: rocky-9
+            distro: rocky
+            image: rockylinux:9
+    steps:
+      - uses: actions/checkout@v5
+      - name: Run live network transaction
+        env:
+          IMAGE: ${{ matrix.image }}
+          DISTRO: ${{ matrix.distro }}
+          REPORT: test-results/linux-matrix/${{ matrix.slug }}/report.json
+        run: |
+          mkdir -p "$(dirname "$REPORT")"
+          docker pull "$IMAGE"
+          docker run --rm --privileged \
+            --network bridge \
+            --volume "$GITHUB_WORKSPACE:/workspace" \
+            --workdir /workspace \
+            --env "WANSIM_EXPECTED_DISTRO=$DISTRO" \
+            --env "WANSIM_INTEGRATION_REPORT=/workspace/$REPORT" \
+            "$IMAGE" bash /workspace/v2/integration/container-entrypoint.sh
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: linux-matrix-${{ matrix.slug }}
+          path: test-results/linux-matrix/${{ matrix.slug }}/
+          if-no-files-found: error
+
