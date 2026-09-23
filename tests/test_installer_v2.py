@@ -13,7 +13,8 @@ class InstallerStructureTests(unittest.TestCase):
         expected = {
             "platform.sh", "packages.sh", "docker.sh", "network.sh", "agent.sh",
             "control-plane.sh", "security.sh", "systemd.sh", "healthcheck.sh",
-            "rollback.sh", "uninstall.sh",
+            "rollback.sh", "uninstall.sh", "configuration.sh", "wizard.sh",
+            "migrations.sh", "backup.sh", "update.sh",
         }
         for module in expected:
             self.assertIn(f'installer/{module}', entrypoint)
@@ -23,6 +24,21 @@ class InstallerStructureTests(unittest.TestCase):
         for mode in ("install", "update", "repair", "doctor", "uninstall"):
             self.assertIn(mode, entrypoint)
         self.assertIn("--non-interactive", entrypoint)
+        self.assertIn("--config", entrypoint)
+        self.assertIn("--confirm-host-apply", entrypoint)
+
+    def test_transaction_covers_files_firewall_and_service_state(self) -> None:
+        transaction = (ROOT / "installer/rollback.sh").read_text(encoding="utf-8")
+        self.assertIn("managed-files.tar.gz", transaction)
+        self.assertIn("iptables-save", transaction)
+        self.assertIn("capture_service_state", transaction)
+        self.assertIn("ROLLED_BACK", transaction)
+
+    def test_admin_cli_exposes_lifecycle_commands(self) -> None:
+        cli = (ROOT / "installer/bin/wansim").read_text(encoding="utf-8")
+        for command in ("doctor", "backup", "restore", "update", "repair", "uninstall"):
+            self.assertIn(command, cli)
+        self.assertIn("enable-host-apply --confirm", cli)
 
     def test_compose_does_not_grant_host_network_capabilities(self) -> None:
         compose = (ROOT / "v2/deploy/docker-compose.yml").read_text(encoding="utf-8")

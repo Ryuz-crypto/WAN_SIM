@@ -14,15 +14,20 @@ WANSIM_EXECUTION_MODE="${WANSIM_EXECUTION_MODE:-dry-run}"
 WANSIM_CONFIGURE_FIREWALL="${WANSIM_CONFIGURE_FIREWALL:-0}"
 WANSIM_PURGE="${WANSIM_PURGE:-0}"
 WANSIM_SKIP_CONNECTIVITY="${WANSIM_SKIP_CONNECTIVITY:-0}"
+WANSIM_CONFIRM_HOST_APPLY="${WANSIM_CONFIRM_HOST_APPLY:-0}"
+WANSIM_ANSWER_FILE="${WANSIM_ANSWER_FILE:-}"
+WANSIM_DOCTOR_REPORT="${WANSIM_DOCTOR_REPORT:-}"
 
 WANSIM_ETC_DIR="/etc/wansim"
 WANSIM_DATA_DIR="/var/lib/wansim"
 WANSIM_LOG_DIR="/var/log/wansim"
 WANSIM_OPT_DIR="/opt/wansim"
 WANSIM_RUN_DIR="/run/wansim"
+WANSIM_BACKUP_DIR="/var/backups/wansim"
+WANSIM_INSTALLER_STATE_DIR="/var/lib/wansim-installer"
 WANSIM_SERVICE_USER="wansim"
 WANSIM_SERVICE_GROUP="wansim"
-export WANSIM_ETC_DIR WANSIM_DATA_DIR WANSIM_LOG_DIR WANSIM_OPT_DIR WANSIM_RUN_DIR
+export WANSIM_ETC_DIR WANSIM_DATA_DIR WANSIM_LOG_DIR WANSIM_OPT_DIR WANSIM_RUN_DIR WANSIM_BACKUP_DIR WANSIM_INSTALLER_STATE_DIR
 
 log_info() { printf '[INFO] %s\n' "$*"; }
 log_ok() { printf '[OK] %s\n' "$*"; }
@@ -42,6 +47,19 @@ validate_port() {
 }
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
+
+boolean_value() {
+  case "${1,,}" in
+    1|true|yes|si|sí|on) printf 1 ;;
+    0|false|no|off) printf 0 ;;
+    *) die "Valor booleano no válido: $1" ;;
+  esac
+}
+
+maybe_fail_for_test() {
+  [[ "${WANSIM_TEST_FAIL_PHASE:-}" == "$1" ]] || return 0
+  die "Fallo controlado de integración en fase $1."
+}
 
 atomic_install() {
   local source="$1" target="$2" mode="${3:-0644}"

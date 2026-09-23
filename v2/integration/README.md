@@ -17,7 +17,7 @@ docker run --rm --privileged --network bridge \
   ubuntu:24.04 bash /workspace/v2/integration/container-entrypoint.sh
 ```
 
-## Matriz Completa En VMs
+## Matriz Completa Del Instalador En VMs
 
 Requisitos en la estación que lanza las pruebas: Vagrant y un proveedor de VMs. VirtualBox es el predeterminado; VMware se usa con `VAGRANT_PROVIDER=vmware_desktop` si está disponible.
 
@@ -27,11 +27,13 @@ chmod +x provision.sh run-matrix.sh
 ./run-matrix.sh
 ```
 
+Cada VM ejecuta el ciclo integral: instalación nueva, `doctor`, respaldo, fallo inducido durante `repair`, rollback automático, reparación, reinicio, transacción real de red, restauración, desinstalación conservadora, reinstalación y desinstalación total. Los reportes quedan en `test-results/vagrant/<distribución>/`.
+
 Para ejecutar una sola distribución:
 
 ```bash
 vagrant up ubuntu
-vagrant ssh ubuntu -c 'sudo PYTHONPATH=/vagrant/v2/backend python3 /vagrant/v2/integration/host_apply.py'
+vagrant provision ubuntu
 ```
 
 Cuando termine, destruye las VMs de laboratorio:

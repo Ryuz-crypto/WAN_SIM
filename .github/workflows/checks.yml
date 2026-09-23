@@ -14,6 +14,7 @@ jobs:
         run: |
           bash -n WANsim2.sh install-v2.sh installer/*.sh installer/bin/*
           bash install-v2.sh --help >/dev/null
+          for test in tests/test_installer_*.sh; do bash "$test"; done
       - name: L3 access and VLAN regression tests
         run: python -m unittest discover -s tests -v
       - name: Install WAN_SIM 2.0 backend checks
@@ -21,7 +22,9 @@ jobs:
       - name: WAN_SIM 2.0 API transaction tests
         run: PYTHONPATH=v2/backend python -m unittest discover -s v2/backend/tests -v
       - name: Validate V2 integration harness
-        run: python -m py_compile v2/integration/host_apply.py
+        run: |
+          python -m py_compile installer/migrate_state.py v2/integration/host_apply.py
+          bash -n v2/integration/*.sh
       - uses: actions/setup-node@v5
         with:
           node-version: '22'

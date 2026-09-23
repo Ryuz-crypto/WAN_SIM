@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+SOURCE_DIR=/opt/wansim/source
+[[ -r "$SOURCE_DIR/installer/common.sh" ]] || { echo "WAN_SIM 2 no está instalado correctamente." >&2; exit 1; }
+source "$SOURCE_DIR/installer/common.sh"
+source "$SOURCE_DIR/installer/platform.sh"
+source "$SOURCE_DIR/installer/healthcheck.sh"
+source "$SOURCE_DIR/installer/backup.sh"
+source "$SOURCE_DIR/installer/update.sh"
+
+usage() {
+  cat <<'EOF'
+Uso: sudo wansim COMANDO [argumentos]
+
+  status                         Estado resumido
+  start|stop|restart             Control de servicios
+  doctor [--export RUTA]         Diagnóstico sin secretos
+  logs [agent|control]           Logs recientes
+  backup [ARCHIVO.tar.gz]        Respaldo consistente
+  restore ARCHIVO.tar.gz         Restauración validada
+  update v2.X.Y-prestable        Actualización desde etiqueta
+  repair                         Repara la versión instalada
+  enable-host-apply --confirm    Habilita aplicación real
+  disable-host-apply             Regresa a dry-run
+  uninstall [--purge]            Desinstala; Docker se conserva
+  version                        Versión instalada
+EOF
+}
+
+require_cli_root() { [[ "${EUID:-$(id -u)}" -eq 0 ]] || die "Este comando requiere sudo."; }
+
+set_execution_mode() {
+  local mode="$1" allow="$2" tmp
+  require_cli_root
+  tmp="$(mktemp "$WANSIM_ETC_DIR/.wansim.env.XXXXXX")"
+  sed -e "s/^WANSIM_V2_EXECUTION_MODE=.*/WANSIM_V2_EXECUTION_MODE=\"$mode\"/" \
+      -e "s/^WANSIM_V2_ALLOW_HOST_APPLY=.*/WANSIM_V2_ALLOW_HOST_APPLY=\"$allow\"/" \
+      "$WANSIM_ETC_DIR/wansim.env" > "$tmp"
+  chown root:"$WANSIM_SERVICE_GROUP" "$tmp"; chmod 0640 "$tmp"; mv -f "$tmp" "$WANSIM_ETC_DIR/wansim.env"
+  sed -i "s/^executionMode:.*/executionMode: $mode/" "$WANSIM_ETC_DIR/config.yaml"
+  systemctl restart wansim-agent.service wansim-control-plane.service
+  log_ok "Modo de ejecución actualizado a $mode."
+}
+
+show_status() {
+  printf 'WAN_SIM %s\n' "$(cat "$WANSIM_ETC_DIR/version" 2>/dev/null || printf unknown)"
+  systemctl is-active wansim-agent.service wansim-control-plane.service docker.service 2>/dev/null || true
+  [[ -S "$WANSIM_RUN_DIR/agent.sock" ]] && printf 'agent.sock: disponible\n' || printf 'agent.sock: ausente\n'
+}
+
+command="${1:-help}"; shift || true
+case "$command" in
+  status) show_status ;;
+  start) require_cli_root; systemctl start wansim-agent.service wansim-control-plane.service ;;
+  stop) require_cli_root; systemctl stop wansim-control-plane.service wansim-agent.service ;;
+  restart) require_cli_root; systemctl restart wansim-agent.service wansim-control-plane.service ;;
+  doctor)
+    require_cli_root; report=""; [[ "${1:-}" == "--export" ]] && { [[ -n "${2:-}" ]] || die "--export requiere una ruta."; report="$2"; }
+    detect_platform; run_doctor "$report"
+    ;;
+  logs)
+    case "${1:-all}" in
+      agent) journalctl -u wansim-agent.service -n 100 --no-pager ;;
+      control) journalctl -u wansim-control-plane.service -n 100 --no-pager ;;
+      all) journalctl -u wansim-agent.service -u wansim-control-plane.service -n 150 --no-pager ;;
+      *) die "Usa logs agent, logs control o logs." ;;
+    esac
+    ;;
+  backup) require_cli_root; create_backup "${1:-}" ;;
+  restore) require_cli_root; [[ -n "${1:-}" ]] || die "restore requiere un archivo."; restore_backup "$1"; detect_platform; run_doctor "" ;;
+  update) require_cli_root; [[ -n "${1:-}" ]] || die "update requiere una etiqueta."; update_to_release "$1" ;;
+  repair) require_cli_root; exec "$SOURCE_DIR/install-v2.sh" repair --non-interactive ;;
+  enable-host-apply)
+    [[ "${1:-}" == "--confirm" ]] || die "Repite con: sudo wansim enable-host-apply --confirm"
+    set_execution_mode host 1
+    ;;
+  disable-host-apply) set_execution_mode dry-run 0 ;;
+  uninstall)
+    require_cli_root
+    uninstall_args=(uninstall --non-interactive)
+    [[ -z "${1:-}" ]] || uninstall_args+=("$1")
+    exec "$SOURCE_DIR/install-v2.sh" "${uninstall_args[@]}"
+    ;;
+  version) cat "$WANSIM_ETC_DIR/version" ;;
+  help|-h|--help) usage ;;
+  *) usage >&2; exit 2 ;;
+esac

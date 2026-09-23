@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 
 uninstall_wansim() {
+  if [[ -d "$WANSIM_ETC_DIR" || -d "$WANSIM_DATA_DIR" ]]; then
+    create_backup >/dev/null
+  fi
   log_info "Retirando servicios WAN_SIM 2..."
   systemctl disable --now wansim-control-plane.service wansim-agent.service >/dev/null 2>&1 || true
   if [[ -x /usr/local/libexec/wansim-compose ]]; then /usr/local/libexec/wansim-compose down >/dev/null 2>&1 || true; fi
   rm -f /etc/systemd/system/wansim-agent.service /etc/systemd/system/wansim-control-plane.service \
-    /usr/local/libexec/wansim-compose /usr/local/libexec/wansim-agent-ready
+    /usr/local/libexec/wansim-compose /usr/local/libexec/wansim-agent-ready /usr/local/bin/wansim
   rm -rf "$WANSIM_OPT_DIR" "$WANSIM_RUN_DIR"
   systemctl daemon-reload
   if [[ "$WANSIM_PURGE" == "1" ]]; then
