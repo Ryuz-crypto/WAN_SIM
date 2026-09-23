@@ -19,6 +19,7 @@ RUN if command -v apt-get >/dev/null 2>&1; then \
     chmod 0600 /home/vagrant/.ssh/authorized_keys && \
     printf 'vagrant ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/vagrant && \
     chmod 0440 /etc/sudoers.d/vagrant && \
+    ssh-keygen -A && \
     mkdir -p /run/sshd && \
     (systemctl enable ssh.service || systemctl enable sshd.service) && \
     systemctl mask systemd-remount-fs.service getty@.service console-getty.service

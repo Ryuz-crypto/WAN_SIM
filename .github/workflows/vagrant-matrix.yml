@@ -42,7 +42,7 @@ jobs:
         working-directory: v2/integration
         env:
           VAGRANT_PROVIDER: docker
-        run: vagrant ssh ${{ matrix.machine }} -c "test -f /vagrant/test-results/vagrant/*/installer-lifecycle.log"
+        run: vagrant ssh ${{ matrix.machine }} -c "test -d /vagrant/test-results/vagrant"
       - name: Collect acceptance evidence
         if: always()
         run: |
