@@ -91,7 +91,8 @@ class InstallerStructureTests(unittest.TestCase):
         self.assertIn("openssh-clients", dockerfile)
         self.assertIn("ssh-keygen -A", dockerfile)
         for evidence in (
-            "control_plane_acceptance.py", '"storage-driver":"vfs"', "--https pem",
+            "control_plane_acceptance.py", 'WANSIM=/usr/local/bin/wansim',
+            '"storage-driver":"vfs"', "--https pem",
             "support-bundle", "v1.119-stable",
         ):
             self.assertIn(evidence, lifecycle)
