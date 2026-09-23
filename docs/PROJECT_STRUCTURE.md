@@ -1,12 +1,14 @@
 # Project Structure
 
-Version 2.0.5-prestable keeps `WANsim2.sh` as the main entrypoint while the current stable release remains `v1.119-stable`.
+Version 2.0.6-prestable keeps `WANsim2.sh` as the V1 entrypoint while `install-v2.sh` manages the V2 platform. The current stable release remains `v1.119-stable`.
 
 Current layout:
 
 ```text
 WAN_SIM/
   WANsim2.sh              # Main simulator and installer entrypoint
+  install-v2.sh           # All-in-one V2 installer and lifecycle entrypoint
+  installer/              # Platform, packages, security, agent and systemd modules
   VERSION                 # Single source for the released version
   README.md               # User installation and operating guide
   tests/
@@ -44,6 +46,6 @@ The safe migration path is to extract one group at a time and keep `WANsim2.sh` 
 ./WANsim2.sh
 ```
 
-WAN_SIM 2.0 uses FastAPI as the control plane and a separate React + TypeScript interface as the operator console. Its `NetworkAgent` defaults to `dry-run`; it persists drafts, active configuration, host snapshots and deployment results in SQLite. An explicit host agent is required before it performs privileged network operations.
+WAN_SIM 2.0 uses FastAPI as the control plane and a separate React + TypeScript interface as the operator console. Its privileged `NetworkAgent` runs natively under `wansim-agent.service`; FastAPI reaches it through a group-restricted, HMAC-authenticated Unix socket. It defaults to `dry-run` and persists drafts, active configuration, host snapshots and deployment results in SQLite.
 
 Run V1 regression tests with `python3 -m unittest discover -s tests -v`, V2 API tests with `PYTHONPATH=v2/backend python3 -m unittest discover -s v2/backend/tests -v`, ReactUI checks with `cd v2/frontend && npm install && npm run build`, and shell syntax checks with `bash -n WANsim2.sh`.

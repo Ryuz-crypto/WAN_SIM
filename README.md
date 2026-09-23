@@ -1,17 +1,17 @@
 # Ryuz WAN Simulator
 
-**Instalación recomendada: [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable)** | **Desarrollo actual: `2.0.5-prestable`** | **Autor**: decameru@outlook.com
+**Instalación recomendada: [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable)** | **Versión actual: `2.0.6-prestable`** | **Autor**: decameru@outlook.com
 
 Ryuz WAN Simulator es una herramienta para simular condiciones WAN en Linux. Permite aplicar latencia, jitter y perdida de paquetes sobre interfaces fisicas, VLANs o bridges L2, con un dashboard Flask para control operativo.
 
-La versión más estable es [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable) y debe usarse en laboratorios y entornos operativos. La versión más actual publicada es [`v2.0.5-prestable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v2.0.5-prestable) y debe evaluarse sólo en laboratorio; la rama `main` puede contener desarrollo posterior no etiquetado.
+La versión más estable es [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable) y debe usarse en laboratorios y entornos operativos. La versión más actual es [`v2.0.6-prestable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v2.0.6-prestable) y debe evaluarse sólo en laboratorio.
 
 | Necesidad | Qué usar | Estado |
 | --- | --- | --- |
 | Producción o laboratorio operativo | [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable) con `./WANsim2.sh` | **Más estable y recomendada** |
-| Evaluar FastAPI y ReactUI 2.0 | [`v2.0.5-prestable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v2.0.5-prestable) | **Más actual**, pre-estable y `dry-run` por defecto |
+| Evaluar FastAPI y ReactUI 2.0 | [`v2.0.6-prestable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v2.0.6-prestable) | **Más actual**, pre-estable y `dry-run` por defecto |
 
-Las dos versiones deben instalarse en directorios diferentes. No ejecutes `WANsim2.sh` esperando iniciar V2: ese script corresponde a la plataforma estable V1. ReactUI 2.0 se inicia con FastAPI y Vite o mediante Docker Compose.
+Las dos versiones deben instalarse en directorios diferentes. `WANsim2.sh` corresponde a V1; V2 se instala de extremo a extremo con `install-v2.sh`.
 
 ## Funcionalidades
 
@@ -74,95 +74,38 @@ git switch --detach v1.119-stable
 
 La etiqueta es inmutable y apunta al commit validado con L3/NAT multi-WAN, DHCP o WAN manual, LAN VLAN o acceso sin etiqueta, Bridge L2, HTTPS, Telegram y el dashboard principal.
 
-## Instalación 2: Versión Más Actual (`v2.0.5-prestable`)
+## Instalación 2: Versión Más Actual (`v2.0.6-prestable`)
 
-**Usa esta opción únicamente para evaluar WAN_SIM 2.0 en una VM o servidor de laboratorio dedicado.** Incluye FastAPI como plano de control y ReactUI como consola. La etiqueta `v2.0.5-prestable` es la versión más actual publicada y reproducible; `main` puede contener trabajo posterior todavía no etiquetado.
+**Usa esta opción únicamente en una VM o servidor de laboratorio dedicado.** El instalador detecta el sistema, instala Docker y dependencias de red, prepara el agente nativo, FastAPI, ReactUI, HTTPS, almacenamiento persistente y servicios `systemd`.
 
-No reemplaza `v1.119-stable`, no instala ni modifica la configuración creada por V1. Compose está disponible para el plano de control en `dry-run`; el agente que cambia la red sigue siendo nativo del host Linux y no se considera producción durante la etapa pre-estable.
-
-### 1. Obtener La Versión Más Actual
+No reemplaza `v1.119-stable` ni modifica la configuración creada por V1. Inicia en `dry-run` y no cambia interfaces durante la instalación.
 
 ```bash
-git clone --branch v2.0.5-prestable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
+git clone --branch v2.0.6-prestable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
 cd WAN_SIM-v2
 git describe --tags --exact-match
-# Debe mostrar: v2.0.5-prestable
+# Debe mostrar: v2.0.6-prestable
+chmod +x install-v2.sh
+sudo ./install-v2.sh install
 ```
 
-Si ya tienes el clon de V2, selecciona explícitamente la etiqueta publicada:
+Si ya tienes el clon de V2:
 
 ```bash
 cd WAN_SIM-v2
 git fetch --tags
-git switch --detach v2.0.5-prestable
-git describe --tags --exact-match
+git switch --detach v2.0.6-prestable
+sudo ./install-v2.sh install
 ```
 
-### 2. Iniciar La API FastAPI
-
-En Ubuntu/Debian, instala los prerrequisitos si aún no están disponibles:
+Al terminar, consulta el estado y recupera la clave inicial de operador:
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y python3 python3-venv python3-pip nodejs npm iproute2 iptables isc-dhcp-client isc-dhcp-server
+sudo ./install-v2.sh doctor
+sudo sed -n 's/^WANSIM_V2_API_KEY="\(.*\)"$/\1/p' /etc/wansim/wansim.env
 ```
 
-En Fedora, CentOS Stream o Rocky Linux:
-
-```bash
-sudo dnf install -y python3 python3-pip nodejs npm iproute iptables dhcp-client dhcp-server
-```
-
-Después inicia el backend. Mantén esta terminal abierta:
-
-```bash
-cd v2/backend
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -r requirements.txt
-export WANSIM_V2_API_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
-printf '%s\n' "$WANSIM_V2_API_KEY" > ~/.wansim-v2-operator.key
-chmod 600 ~/.wansim-v2-operator.key
-uvicorn wansim_v2.api:app --host 0.0.0.0 --port 8080
-```
-
-Comprueba que responde en `http://<IP_DEL_SERVIDOR>:8080/health` y consulta el contrato en `http://<IP_DEL_SERVIDOR>:8080/docs`. ReactUI solicita la clave guardada en `~/.wansim-v2-operator.key`; se conserva solamente durante la pestaña actual del navegador.
-
-### 3. Iniciar ReactUI
-
-En otra terminal, desde la raíz del mismo clon:
-
-```bash
-cd v2/frontend
-npm install
-npm run dev -- --host 0.0.0.0
-```
-
-Abre `http://<IP_DEL_SERVIDOR>:5173`. La consola se comunica con FastAPI en el puerto `8080` mediante el proxy de Vite. Para validar su compilación sin abrir el servidor: `npm run build`.
-
-Por seguridad, V2 simula los despliegues hasta que se habiliten explícitamente ambas variables en el host dedicado:
-
-```bash
-export WANSIM_V2_EXECUTION_MODE=host
-export WANSIM_V2_ALLOW_HOST_APPLY=1
-```
-
-No actives ese modo en un servidor compartido: permite ejecutar cambios de red planificados por el agente V2.
-
-### 4. Ejecutar V2 Con Docker Compose
-
-Para empaquetar ReactUI, FastAPI, SQLite y el proxy Nginx sin conceder privilegios de red al contenedor:
-
-```bash
-cd v2/deploy
-cp .env.example .env
-python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-# Copia el valor generado en WANSIM_V2_SECRET_KEY dentro de .env
-# Genera WANSIM_V2_API_KEY con: python3 -c "import secrets; print(secrets.token_urlsafe(32))"
-docker compose up --build -d
-```
-
-El proxy queda en `http://<IP_DEL_SERVIDOR>:8080`. Consulta [v2/deploy/README.md](v2/deploy/README.md) para habilitar HTTPS con `docker-compose.https.yml`. Compose queda en `dry-run`; las operaciones de red se validan desde el host Linux y nunca desde un contenedor privilegiado.
+El instalador genera HTTPS autofirmado de forma predeterminada. También acepta `--https pem`, `--https pfx` y `--https der`. Consulta [la guía completa del instalador](docs/V2_INSTALLER.md) para actualización, reparación, parámetros, certificados y desinstalación.
 
 ### Ubuntu Server / Ubuntu Workstation / Debian
 
@@ -238,7 +181,7 @@ https://<IP_DEL_SERVIDOR>:5000
 
 ## Desarrollo ReactUI 2.0 Pre-Estable
 
-Esta sección no forma parte de la instalación estable. Usa la etiqueta `v2.0.5-prestable` para una evaluación reproducible o `main` solamente para desarrollo; ReactUI se ejecuta desde `v2/frontend` y consume la API FastAPI en `v2/backend`.
+Esta sección no forma parte de la instalación estable. Usa la etiqueta `v2.0.6-prestable` para una evaluación reproducible o `main` solamente para desarrollo; ReactUI consume la API FastAPI y ésta se comunica con el agente nativo mediante un socket Unix autenticado.
 
 La versión pre-estable permite preparar L3/NAT o Bridge L2, validar las restricciones, revisar un plan de despliegue, consultar interfaces, tráfico, leases DHCP y daemons, y probar perfiles `tc/netem`. El modo predeterminado es `dry-run`: no cambia interfaces ni servicios del host.
 
@@ -361,6 +304,14 @@ Antes de ejecutar en un servidor compartido, revisa:
 Si una ejecucion falla, el script ejecuta rollback automatico de servicios, dashboard generado, virtualenv parcial, bridges/VLANs generadas y archivos temporales. El log principal se conserva en `~/emix_abundix.log`.
 
 ## Release Notes
+
+### Version 2.0.6-prestable
+
+- Se agrega `install-v2.sh` con modos de instalación, actualización, reparación, diagnóstico y desinstalación.
+- El instalador soporta Ubuntu, Debian, Fedora y Rocky; instala Docker, Compose, dependencias L2/L3, DHCP y TLS sin preguntas de paquetes.
+- El agente privilegiado queda fuera de los contenedores y usa un socket Unix `0660`, firmas HMAC, timestamps y nonces antirrepetición.
+- FastAPI, ReactUI, SQLite y Nginx se empaquetan con imágenes versionadas, datos persistentes y servicios `systemd` con arranque automático.
+- Los secretos, certificados, configuración, estado y logs se separan en `/etc/wansim`, `/var/lib/wansim` y `/var/log/wansim`.
 
 ### Version 2.0.5-prestable
 

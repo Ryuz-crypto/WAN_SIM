@@ -1,29 +1,31 @@
-# WAN_SIM 2.0 Docker Compose
+# WAN_SIM 2 Control Plane
 
-Compose empaqueta ReactUI, FastAPI, el volumen SQLite y un proxy Nginx. No ejecuta el agente de red con privilegios: por diseño inicia en `dry-run` y no monta `/run`, `/sys`, `NET_ADMIN` ni la red del host.
-
-Genera el secreto y prepara el archivo de entorno:
+La instalación soportada del plano de control se realiza desde la raíz del repositorio:
 
 ```bash
-cd v2/deploy
-cp .env.example .env
-python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+sudo ./install-v2.sh install
 ```
 
-Coloca los valores generados en `WANSIM_V2_SECRET_KEY` y `WANSIM_V2_API_KEY` dentro de `.env`, luego inicia HTTP. ReactUI solicitará la segunda clave al operador y la mantendrá únicamente en `sessionStorage`:
+El instalador prepara Docker Engine, Compose, FastAPI, ReactUI, Nginx, SQLite, TLS, el agente nativo y los servicios `systemd`. FastAPI y ReactUI no reciben privilegios de red. Las operaciones se envían al agente del host mediante `/run/wansim/agent.sock`, con permisos de grupo y firma HMAC por solicitud.
+
+## Componentes
+
+- `docker-compose.yml`: FastAPI, ReactUI, proxy y almacenamiento persistente en `/var/lib/wansim`.
+- `docker-compose.https.yml`: listener TLS y redirección HTTP a HTTPS.
+- `/etc/wansim/wansim.env`: secretos y parámetros de ejecución, modo `0640`.
+- `/etc/wansim/certs`: `fullchain.pem` y `privkey.pem` normalizados.
+- `/opt/wansim/control-plane`: copia administrada por el instalador.
+
+El modo inicial es `dry-run`. El modo host sólo se habilita explícitamente con `--host-apply` en un servidor de laboratorio dedicado.
+
+## Operación Manual De Emergencia
+
+Los servicios normales se administran con `systemd`:
 
 ```bash
-docker compose up --build -d
-docker compose ps
+sudo systemctl status wansim-agent wansim-control-plane
+sudo systemctl restart wansim-agent wansim-control-plane
+sudo ./install-v2.sh doctor
 ```
 
-Abre `http://<IP_DEL_SERVIDOR>:8080`. Para usar TLS, coloca `fullchain.pem` y `privkey.pem` en un directorio restringido, define `WANSIM_TLS_DIR` con su ruta absoluta y usa el override:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.https.yml up --build -d
-```
-
-El plano de control persiste SQLite y la llave de cifrado en el volumen `wansim_state`. Respáldalo antes de actualizar. La aplicación real de red permanece fuera de Compose, en un host Linux dedicado; no habilites `WANSIM_V2_EXECUTION_MODE=host` dentro del contenedor.
-
-Para recibir botones de Telegram, inicia el override HTTPS, configura una URL pública que Telegram pueda alcanzar y regístrala desde la pestaña **Telegram** de ReactUI. El proxy debe presentar un certificado válido; Telegram no acepta HTTP para webhooks.
+No ejecutes Compose directamente desde el repositorio: el servicio usa la copia versionada en `/opt/wansim/control-plane` y las credenciales protegidas de `/etc/wansim/wansim.env`.

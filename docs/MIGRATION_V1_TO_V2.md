@@ -14,18 +14,19 @@ mkdir -p ~/wansim-v1-backup
 cp -a ~/emix_abundix.conf ~/wansim_dashboard.py ~/wansim_netem_state.json ~/.wansim ~/wansim-v1-backup/ 2>/dev/null || true
 ```
 
-No copies tokens de Telegram ni llaves TLS a V2. V2 cifra sus propios secretos en `~/.wansim-v2/secret.key` cuando se ejecuta de forma nativa, o en el volumen `wansim_state` al usar Compose.
+No copies tokens de Telegram ni llaves TLS a V2. El instalador crea secretos independientes en `/etc/wansim` y conserva el estado cifrado en `/var/lib/wansim`.
 
 ## 2. Levantar V2 En Paralelo
 
 Clona V2 en otro directorio y utiliza puertos distintos a V1:
 
 ```bash
-git clone --branch main https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
+git clone --branch v2.0.6-prestable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
 cd WAN_SIM-v2
+sudo ./install-v2.sh install
 ```
 
-Sigue la sección **Instalación V2 Pre-Beta** del README. V1 conserva el dashboard en `5000`; V2 nativa usa `8080` para FastAPI y `5173` para ReactUI. Compose publica el proxy en `8080` por defecto.
+Sigue la sección **Instalación 2: Versión Más Actual** del README. V1 conserva el dashboard en `5000`; V2 publica ReactUI y la API mediante su proxy HTTPS.
 
 ## 3. Recrear La Topología Como Borrador
 
