@@ -13,10 +13,23 @@ export type Config = {
 export type Configuration = { id: string; name: string; state: string; config: Config; created_at: string; updated_at: string }
 export type Action = { id: string; phase: string; description: string; command: string[]; undo?: string[] }
 export type Deployment = { id: string; configuration_id: string; status: string; plan: Action[]; result: Record<string, unknown>; created_at: string; updated_at: string }
-export type NetworkInterface = { name: string; mac: string; state: string; ips: string[]; rx_bytes: number; tx_bytes: number }
+export type NetworkInterface = { name: string; mac: string; state: string; ips: string[]; rx_bytes: number; tx_bytes: number; is_management?: boolean }
 export type Service = { name: string; active: string; enabled: string }
 export type Lease = { ip: string; mac: string; host: string; state: string }
 export type Overview = { execution_mode: string; interfaces: NetworkInterface[]; services: Service[]; leases: Lease[]; active_configuration: Configuration | null; deployments: Deployment[] }
 export type TelegramPermission = 'read' | 'operate' | 'admin'
 export type TelegramBot = { id: string; name: string; token_hint: string; allowed_chat_ids: number[]; permission: TelegramPermission; enabled: boolean; webhook_url?: string; created_at: string; updated_at: string }
 export type TelegramBotCreated = { bot: TelegramBot; webhook_secret: string }
+export type PreflightIssue = { severity: 'error' | 'warning' | 'recommendation'; code: string; title: string; detail: string; interfaces: string[] }
+export type PreflightReport = {
+  ok: boolean; can_apply: boolean; mode: string; missing_interfaces: string[]; selected_interfaces: string[]
+  management_interfaces: string[]; protected_interfaces: string[]; requires_management_confirmation: boolean
+  issues: PreflightIssue[]
+}
+export type ConfigurationComparison = {
+  current_name: string; proposed_name: string; current: string[]; proposed: string[]; changes: string[]
+}
+export type PlanReview = {
+  configuration_id: string; execution_mode: string; actions: Action[]; preflight: PreflightReport
+  comparison: ConfigurationComparison; management_confirmation_phrase: string
+}
