@@ -90,6 +90,7 @@ class InstallerStructureTests(unittest.TestCase):
         self.assertIn("curl-minimal", dockerfile)
         self.assertIn("openssh-clients", dockerfile)
         self.assertIn("ssh-keygen -A", dockerfile)
+        self.assertIn("RuntimeDirectory=sshd", dockerfile)
         for evidence in (
             "control_plane_acceptance.py", 'WANSIM=/usr/local/bin/wansim',
             '"storage-driver":"vfs"', "--https pem",

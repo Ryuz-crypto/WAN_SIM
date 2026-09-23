@@ -21,6 +21,10 @@ RUN if command -v apt-get >/dev/null 2>&1; then \
     chmod 0440 /etc/sudoers.d/vagrant && \
     ssh-keygen -A && \
     mkdir -p /run/sshd && \
+    printf 'd /run/sshd 0755 root root -\n' > /etc/tmpfiles.d/wansim-sshd.conf && \
+    install -d -m 0755 /etc/systemd/system/sshd.service.d && \
+    printf '[Service]\nRuntimeDirectory=sshd\nRuntimeDirectoryMode=0755\n' \
+      > /etc/systemd/system/sshd.service.d/runtime.conf && \
     (systemctl enable ssh.service || systemctl enable sshd.service) && \
     systemctl mask systemd-remount-fs.service getty@.service console-getty.service
 
