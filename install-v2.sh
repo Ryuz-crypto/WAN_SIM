@@ -20,6 +20,7 @@ source "$INSTALLER_ROOT/installer/healthcheck.sh"
 source "$INSTALLER_ROOT/installer/rollback.sh"
 source "$INSTALLER_ROOT/installer/migrations.sh"
 source "$INSTALLER_ROOT/installer/backup.sh"
+source "$INSTALLER_ROOT/installer/support.sh"
 source "$INSTALLER_ROOT/installer/update.sh"
 source "$INSTALLER_ROOT/installer/uninstall.sh"
 

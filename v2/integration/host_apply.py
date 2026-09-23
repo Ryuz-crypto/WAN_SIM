@@ -144,6 +144,35 @@ def main() -> None:
                 "nat_rules": 2,
                 "forward_rules": 4,
             }
+            netem = agent.apply_netem("wslan2", 40, 5, 1)
+            assert netem["ok"], netem
+            assert "netem" in output("tc", "qdisc", "show", "dev", "wslan2")
+            reset_netem = agent.apply_netem("wslan2", 0, 0, 0)
+            assert reset_netem["ok"], reset_netem
+            report["checks"]["netem"] = {"applied": True, "reset": True}
+
+            bridge_config = TopologyConfig.model_validate({
+                "topology": "bridge", "dhcpEnabled": False,
+                "bridge": {"pairs": [
+                    {"input": "wswan1", "output": "wslan1"},
+                    {"input": "wswan2", "output": "wslan2"},
+                ]},
+            })
+            bridge_record = repository.create_configuration("Integración Bridge", bridge_config)
+            bridge_deployment = service.deploy(bridge_record, apply=True)
+            assert bridge_deployment.status == "APPLIED", bridge_deployment
+            assert exists("br_wan1") and exists("br_wan2"), "No se crearon los bridges L2"
+            report["checks"]["bridge"] = {"status": bridge_deployment.status, "pairs": 2}
+
+            snapshot = next(item for item in repository.list_snapshots() if item["configuration_id"] == configuration.id)
+            assert snapshot["integrity"], snapshot
+            restored = service.restore_snapshot(snapshot["id"])
+            assert restored.status == "RESTORED", restored
+            assert exists("v1_100"), "La recuperación no restauró la VLAN"
+            assert has_address("wslan2", "10.254.20.1/24"), "La recuperación no restauró la LAN de acceso"
+            assert repository.active_configuration().id == configuration.id
+            report["checks"]["recovery"] = {"status": restored.status, "checksum_verified": True}
+
             rollback = service.rollback(deployed)
             assert rollback.status == "ROLLED_BACK", rollback
             assert not exists("v1_100"), "La VLAN quedó después del rollback"
@@ -163,7 +192,7 @@ def main() -> None:
                 "active_configuration": None,
             }
         report["status"] = "passed"
-        print("WAN_SIM V2 integration: two WAN, VLAN/access and rollback passed.")
+        print("WAN_SIM V2 integration: two WAN, VLAN/access, Bridge, netem, recovery and rollback passed.")
     except BaseException as error:
         report["status"] = "failed"
         report["error"] = f"{type(error).__name__}: {error}"

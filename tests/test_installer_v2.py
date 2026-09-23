@@ -14,7 +14,7 @@ class InstallerStructureTests(unittest.TestCase):
             "platform.sh", "packages.sh", "docker.sh", "network.sh", "agent.sh",
             "control-plane.sh", "security.sh", "systemd.sh", "healthcheck.sh",
             "rollback.sh", "uninstall.sh", "configuration.sh", "wizard.sh",
-            "migrations.sh", "backup.sh", "update.sh",
+            "migrations.sh", "backup.sh", "support.sh", "update.sh",
         }
         for module in expected:
             self.assertIn(f'installer/{module}', entrypoint)
@@ -36,7 +36,7 @@ class InstallerStructureTests(unittest.TestCase):
 
     def test_admin_cli_exposes_lifecycle_commands(self) -> None:
         cli = (ROOT / "installer/bin/wansim").read_text(encoding="utf-8")
-        for command in ("doctor", "backup", "restore", "update", "repair", "uninstall"):
+        for command in ("doctor", "backup", "restore", "update", "upgrade", "rollback-version", "support-bundle", "repair", "uninstall"):
             self.assertIn(command, cli)
         self.assertIn("enable-host-apply --confirm", cli)
 
@@ -53,6 +53,20 @@ class InstallerStructureTests(unittest.TestCase):
         self.assertIn("Restart=on-failure", agent)
         self.assertIn("Requires=docker.service wansim-agent.service", control)
         self.assertIn("WantedBy=multi-user.target", control)
+
+    def test_release_packaging_has_deb_rpm_checksums_and_attestation(self) -> None:
+        builder = (ROOT / "packaging/build-packages.sh").read_text(encoding="utf-8")
+        workflow = (ROOT / ".github/workflows/packages.yml").read_text(encoding="utf-8")
+        self.assertIn("dpkg-deb", builder)
+        self.assertIn("rpmbuild", builder)
+        self.assertIn("SHA256SUMS", builder)
+        self.assertIn("attest-build-provenance", workflow)
+
+    def test_support_bundle_redacts_environment_and_logs(self) -> None:
+        support = (ROOT / "installer/support.sh").read_text(encoding="utf-8")
+        self.assertIn("environment-redacted.txt", support)
+        self.assertIn("sanitize_support_file", support)
+        self.assertIn("Bearer ", support)
 
 
 if __name__ == "__main__":

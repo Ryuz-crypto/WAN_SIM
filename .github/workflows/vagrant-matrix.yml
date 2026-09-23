@@ -1,0 +1,38 @@
+name: WAN_SIM Vagrant acceptance matrix
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  vagrant:
+    name: ${{ matrix.machine }} VM acceptance
+    runs-on: [self-hosted, linux, x64, vagrant]
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        machine: [ubuntu, debian, fedora, rocky]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Run installation lifecycle in VM
+        working-directory: v2/integration
+        run: vagrant up ${{ matrix.machine }} --provision
+      - name: Collect acceptance evidence
+        if: always()
+        run: |
+          mkdir -p "test-results/vagrant-${{ matrix.machine }}"
+          cp -a test-results/vagrant/. "test-results/vagrant-${{ matrix.machine }}/" 2>/dev/null || true
+          vagrant -v > "test-results/vagrant-${{ matrix.machine }}/versions.txt"
+          VBoxManage --version >> "test-results/vagrant-${{ matrix.machine }}/versions.txt"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: vagrant-${{ matrix.machine }}
+          path: test-results/vagrant-${{ matrix.machine }}/
+      - name: Destroy VM
+        if: always()
+        working-directory: v2/integration
+        run: vagrant destroy -f ${{ matrix.machine }}

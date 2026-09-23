@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+[[ $# -gt 0 ]] || set -- install
+exec /opt/wansim/distribution/install-v2.sh "$@"

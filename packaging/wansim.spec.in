@@ -1,0 +1,27 @@
+Name:           wansim
+Version:        @VERSION@
+Release:        1%{?dist}
+Summary:        WAN_SIM 2 transactional network simulator installer
+License:        MIT
+BuildArch:      noarch
+Requires:       bash, git, curl, sudo
+Source0:        %{name}-%{version}.tar.gz
+
+%description
+Versioned WAN_SIM payload. Run sudo wansim-install install after package installation.
+
+%prep
+%setup -q
+
+%install
+mkdir -p %{buildroot}/opt/wansim/distribution %{buildroot}/usr/local/sbin
+cp -a opt/wansim/distribution/. %{buildroot}/opt/wansim/distribution/
+install -m 0755 usr/local/sbin/wansim-install %{buildroot}/usr/local/sbin/wansim-install
+
+%files
+/opt/wansim/distribution
+/usr/local/sbin/wansim-install
+
+%changelog
+* Wed Sep 23 2026 WAN_SIM <decameru@outlook.com> - @VERSION@-1
+- Automated WAN_SIM package

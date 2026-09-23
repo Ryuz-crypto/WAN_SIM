@@ -7,6 +7,7 @@ source "$SOURCE_DIR/installer/common.sh"
 source "$SOURCE_DIR/installer/platform.sh"
 source "$SOURCE_DIR/installer/healthcheck.sh"
 source "$SOURCE_DIR/installer/backup.sh"
+source "$SOURCE_DIR/installer/support.sh"
 source "$SOURCE_DIR/installer/update.sh"
 
 usage() {
@@ -19,7 +20,9 @@ Uso: sudo wansim COMANDO [argumentos]
   logs [agent|control]           Logs recientes
   backup [ARCHIVO.tar.gz]        Respaldo consistente
   restore ARCHIVO.tar.gz         Restauración validada
-  update v2.X.Y-prestable        Actualización desde etiqueta
+  update|upgrade ETIQUETA        Actualización desde etiqueta
+  rollback-version [ETIQUETA]    Regresa a la versión anterior registrada
+  support-bundle [ARCHIVO]       Diagnóstico y logs sanitizados
   repair                         Repara la versión instalada
   enable-host-apply --confirm    Habilita aplicación real
   disable-host-apply             Regresa a dry-run
@@ -69,7 +72,9 @@ case "$command" in
     ;;
   backup) require_cli_root; create_backup "${1:-}" ;;
   restore) require_cli_root; [[ -n "${1:-}" ]] || die "restore requiere un archivo."; restore_backup "$1"; detect_platform; run_doctor "" ;;
-  update) require_cli_root; [[ -n "${1:-}" ]] || die "update requiere una etiqueta."; update_to_release "$1" ;;
+  update|upgrade) require_cli_root; [[ -n "${1:-}" ]] || die "$command requiere una etiqueta."; update_to_release "$1" ;;
+  rollback-version) require_cli_root; rollback_version "${1:-}" ;;
+  support-bundle) require_cli_root; create_support_bundle "${1:-}" ;;
   repair) require_cli_root; exec "$SOURCE_DIR/install-v2.sh" repair --non-interactive ;;
   enable-host-apply)
     [[ "${1:-}" == "--confirm" ]] || die "Repite con: sudo wansim enable-host-apply --confirm"
