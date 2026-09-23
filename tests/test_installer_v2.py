@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 
@@ -8,6 +9,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class InstallerStructureTests(unittest.TestCase):
+    def test_release_version_is_consistent(self) -> None:
+        version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+        backend = (ROOT / "v2/backend/wansim_v2/__init__.py").read_text(encoding="utf-8")
+        frontend = json.loads((ROOT / "v2/frontend/package.json").read_text(encoding="utf-8"))
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertEqual(frontend["version"], version)
+        self.assertIn(f'__version__ = "{version}"', backend)
+        self.assertIn(f"v{version}", readme)
+
     def test_entrypoint_sources_every_required_module(self) -> None:
         entrypoint = (ROOT / "install-v2.sh").read_text(encoding="utf-8")
         expected = {

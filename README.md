@@ -2,18 +2,18 @@
 
 Simulador WAN para Linux con soporte L3/NAT, Bridge L2, VLAN, puertos LAN sin etiqueta, DHCP, `tc/netem`, HTTPS, Telegram y panel web.
 
-**Versión estable recomendada:** [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable)
+**Versión estable recomendada y más actual:** [`v2.0.10-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v2.0.10-stable)
 
-**Versión más actual:** [`v2.0.9-prestable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v2.0.9-prestable)
+**Versión estable anterior:** [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable)
 
 **Autor:** decameru@outlook.com
 
 | Uso | Versión | Instalador |
 | --- | --- | --- |
-| Producción, centros de datos y laboratorios operativos | `v1.119-stable` | `./WANsim2.sh` |
-| Evaluación de FastAPI, ReactUI y administración centralizada | `v2.0.9-prestable` | `sudo ./install-v2.sh install` |
+| Instalación recomendada con FastAPI, ReactUI y rollback | `v2.0.10-stable` | `sudo ./install-v2.sh install` |
+| Compatibilidad con el dashboard clásico | `v1.119-stable` | `./WANsim2.sh` |
 
-V1 y V2 deben probarse en directorios o máquinas diferentes. V2 sigue siendo pre-estable y comienza en modo seguro `dry-run`.
+V2 comienza en modo seguro `dry-run`. Si conservas V1, instala cada versión en un directorio o máquina diferente.
 
 ## Funciones Principales
 
@@ -37,9 +37,9 @@ V1 y V2 deben probarse en directorios o máquinas diferentes. V2 sigue siendo pr
 
 Se requiere Linux con `systemd`, acceso a Internet y un usuario con permisos `sudo`.
 
-## Instalar V1.119 Stable
+## Instalar V1.119 Stable Anterior
 
-V1 es la versión recomendada para operación. Ejecuta `WANsim2.sh` como usuario normal; el script solicitará `sudo` cuando sea necesario.
+V1 se conserva para compatibilidad con el dashboard clásico. Ejecuta `WANsim2.sh` como usuario normal; el script solicitará `sudo` cuando sea necesario.
 
 ### Ubuntu Server, Ubuntu Workstation o Debian
 
@@ -82,16 +82,16 @@ http://<IP_DEL_SERVIDOR>:5000
 
 El asistente permite elegir L3/NAT o Bridge L2, interfaces, VLAN/acceso, direccionamiento WAN, DHCP, Telegram y HTTPS.
 
-## Instalar V2.0.9 Pre-Stable
+## Instalar V2.0.10 Stable
 
-V2 es para laboratorio. Su instalador incorpora Docker, FastAPI, ReactUI, proxy HTTPS, agente de red, base de datos y servicios `systemd`.
+V2 es la versión recomendada. Su instalador incorpora Docker, FastAPI, ReactUI, proxy HTTPS, agente de red, base de datos y servicios `systemd`.
 
 ### Ubuntu Server, Ubuntu Workstation o Debian
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y git sudo
-git clone --branch v2.0.9-prestable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
+git clone --branch v2.0.10-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
 cd WAN_SIM-v2
 chmod +x install-v2.sh
 sudo ./install-v2.sh install
@@ -102,7 +102,7 @@ sudo ./install-v2.sh install
 ```bash
 sudo dnf makecache -y
 sudo dnf install -y git sudo
-git clone --branch v2.0.9-prestable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
+git clone --branch v2.0.10-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
 cd WAN_SIM-v2
 chmod +x install-v2.sh
 sudo ./install-v2.sh install
@@ -113,7 +113,7 @@ sudo ./install-v2.sh install
 ```bash
 sudo dnf makecache -y
 sudo dnf install -y git sudo
-git clone --branch v2.0.9-prestable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
+git clone --branch v2.0.10-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
 cd WAN_SIM-v2
 chmod +x install-v2.sh
 sudo ./install-v2.sh install
@@ -123,7 +123,7 @@ Comprueba que instalaste la etiqueta correcta:
 
 ```bash
 git describe --tags --exact-match
-# Debe mostrar: v2.0.9-prestable
+# Debe mostrar: v2.0.10-stable
 ```
 
 Consulta el estado y la clave inicial:
@@ -145,7 +145,7 @@ sudo wansim logs
 sudo wansim doctor --export /tmp/wansim-doctor.txt
 sudo wansim backup
 sudo wansim restore /var/backups/wansim/ARCHIVO.tar.gz
-sudo wansim upgrade v2.0.9-prestable
+sudo wansim upgrade v2.0.10-stable
 sudo wansim rollback-version
 sudo wansim support-bundle
 ```
@@ -191,7 +191,7 @@ sudo sed -n 's/^WANSIM_V2_API_KEY="\(.*\)"$/\1/p' /etc/wansim/wansim.env
 
 En ReactUI selecciona **Clave heredada**, entra a **Acceso**, crea un usuario `admin`, cierra sesión y vuelve a ingresar con usuario y contraseña. Después podrás crear roles `viewer`, `operator` y `admin`.
 
-## Novedades De V2.0.9
+## Novedades De V2.0.10
 
 - Asistente ReactUI de cuatro pasos con detección y recomendación de interfaces.
 - Preflight con errores, advertencias y recomendaciones antes de desplegar.
@@ -204,12 +204,13 @@ En ReactUI selecciona **Clave heredada**, entra a **Acceso**, crea un usuario `a
 - Paquetes `.deb`/`.rpm`, checksums, procedencia y nuevos comandos de mantenimiento.
 - Pruebas de Bridge, `netem`, recuperación, disco crítico e interrupción de SQLite.
 
-La suite general y la matriz automática Linux aprobaron para esta etiqueta:
+La suite general, la matriz Linux y la aceptación integral Vagrant aprobaron para esta versión:
 
 - [WAN_SIM checks](https://github.com/Ryuz-crypto/WAN_SIM/actions/workflows/checks.yml)
 - [Ubuntu, Debian, Fedora y Rocky](https://github.com/Ryuz-crypto/WAN_SIM/actions/workflows/linux-matrix.yml)
+- [Instalador integral con Vagrant](https://github.com/Ryuz-crypto/WAN_SIM/actions/workflows/vagrant-matrix.yml)
 
-El workflow Vagrant requiere un runner Linux con VirtualBox o VMware y todavía necesita una ejecución manual aprobada. V2 conserva por ello su estado **pre-stable**.
+La aceptación Vagrant ejecuta instalación, fallo inducido y rollback, reparación, TLS, control de acceso, secretos Telegram cifrados, red, backup/restore, reinstalación y purga sobre las cuatro distribuciones.
 
 ## Documentación
 

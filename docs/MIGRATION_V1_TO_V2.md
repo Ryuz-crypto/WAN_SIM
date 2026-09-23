@@ -1,6 +1,6 @@
 # Migración De V1.119 A V2
 
-V1 y V2 no comparten archivos de estado ni deben instalarse sobre el mismo host de producción. Conserva V1 como referencia estable y despliega V2 primero en una VM de laboratorio.
+V1 y V2 no comparten archivos de estado ni deben instalarse sobre el mismo host. Conserva V1 como referencia anterior y valida V2 primero en una VM de laboratorio antes de migrar un host operativo.
 
 ## 1. Respaldar V1
 
@@ -21,7 +21,7 @@ No copies tokens de Telegram ni llaves TLS a V2. El instalador crea secretos ind
 Clona V2 en otro directorio y utiliza puertos distintos a V1:
 
 ```bash
-git clone --branch v2.0.9-prestable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
+git clone --branch v2.0.10-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
 cd WAN_SIM-v2
 sudo ./install-v2.sh install
 ```
@@ -36,4 +36,4 @@ No importes directamente `~/emix_abundix.conf`: V2 valida el modelo antes de apl
 
 Mantén V2 en `dry-run` durante la primera revisión. Cuando la matriz de integración haya sido aprobada para tu distribución, realiza el primer despliegue en una VM aislada, comprueba interfaces, DHCP, NAT y `netem`, y usa el botón **Rollback** si el plan no coincide con lo esperado.
 
-La migración a un host operativo sólo se aprueba después de una versión V2 estable; hasta entonces V1.119 sigue siendo la ruta soportada.
+`v2.0.10-stable` es la ruta recomendada para instalaciones nuevas. Conserva el respaldo y la referencia V1.119 hasta completar tus pruebas de aceptación locales.

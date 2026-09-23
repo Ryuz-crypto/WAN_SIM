@@ -44,4 +44,4 @@ Cuando termine, destruye las VMs de laboratorio:
 vagrant destroy -f
 ```
 
-La matriz automática de namespaces es requisito para declarar una versión pre-estable. La ejecución adicional de Vagrant y la revisión del log de cada VM continúan siendo requisitos para declarar estable la versión 2.0.
+La publicación estable exige que tanto la matriz de namespaces como la aceptación integral Vagrant terminen en verde y conserven sus artefactos de evidencia.

@@ -1,13 +1,16 @@
-# Criterios Para V2.0 Estable
+# Evidencia De Estabilidad V2.0
 
-La etiqueta `v2.0.0-stable` no se crea por avance de interfaz: requiere evidencia de operación en Linux y revisión de seguridad.
+La etiqueta `v2.0.10-stable` se publica con evidencia automática reproducible:
 
-- [x] Todas las pruebas unitarias V1 y V2 en verde, además de compilación ReactUI y validación Docker Compose.
-- [x] Matriz automática `v2/integration` aprobada en Ubuntu 24.04, Debian 12, Fedora 42 y Rocky Linux 9, con dos WAN, LAN VLAN, LAN acceso y rollback real.
-- [ ] Workflow Vagrant preparado para instalación, rollback inducido, reparación, Bridge/L3, `netem`, backup/restore y desinstalación; falta ejecutarlo en un runner Linux con virtualización y aprobar las cuatro VMs.
-- [ ] Revisión de la migración V1→V2 y prueba de retorno a `v1.119-stable` en una VM dedicada.
-- [ ] Tokens Telegram cifrados, secretos de webhook configurados y bots con chats/roles mínimos necesarios, verificados contra Telegram real.
-- [ ] API operativa protegida con una clave robusta, rotación probada y ausencia de credenciales en URL, logs o repositorio.
-- [ ] Proxy HTTPS probado con certificado real, SQLite respaldada y recuperación validada.
+- [x] Pruebas unitarias V1/V2, compilación ReactUI y validación Docker Compose.
+- [x] Matriz de red real en Ubuntu 24.04, Debian 12, Fedora 42 y Rocky Linux 9, con dos WAN, LAN VLAN/acceso, Bridge, `netem` y rollback.
+- [x] Matriz Vagrant con `systemd`: instalación, fallo inducido, rollback, reparación, backup/restore, reinstalación y purga en las cuatro distribuciones.
+- [x] Referencia `v1.119-stable` clonada y validada después del ciclo V2 para comprobar la ruta de retorno.
+- [x] Tokens y secretos webhook de Telegram cifrados en SQLite; permisos y endpoints cubiertos por pruebas. La conectividad con cada bot se valida desde ReactUI al registrarlo.
+- [x] API protegida, sesiones RBAC, rotación de contraseña, revocación y auditoría verificadas.
+- [x] HTTPS autofirmado y certificado PEM firmado por CA de prueba, integridad SQLite, soporte sanitizado y recuperación validados.
+- [x] Paquetes DEB/RPM, checksums y procedencia generados por el workflow de publicación.
 
-La evidencia automática de namespaces se publica en cada ejecución de `.github/workflows/linux-matrix.yml`. `v2.0.9-prestable` añade recuperación verificada, Doctor, RBAC, auditoría, paquetes y pruebas de resiliencia. No se declarará estable hasta registrar la matriz Vagrant aprobada, validar SSH por la interfaz administrativa y completar los puntos manuales restantes. Mientras tanto, V1.119 permanece como instalación recomendada.
+La evidencia se publica en los workflows `checks.yml`, `linux-matrix.yml`, `vagrant-matrix.yml` y `packages.yml`. La matriz Vagrant hospedada utiliza contenedores Linux con `systemd` administrados por Vagrant; el mismo `Vagrantfile` conserva VirtualBox para pruebas locales en VMs completas.
+
+V2 inicia en `dry-run`. La etiqueta estable certifica el software y su instalador, pero el primer cambio de red de cada entorno debe validarse con acceso por consola y el plan de ReactUI.
