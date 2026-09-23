@@ -7,7 +7,7 @@ from hashlib import sha256, scrypt
 from hmac import compare_digest
 from pathlib import Path
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 
 
 class SecretBox:
@@ -31,6 +31,13 @@ class SecretBox:
 
     def open(self, value: str) -> str:
         return self._fernet.decrypt(value.encode()).decode()
+
+    def is_sealed(self, value: str) -> bool:
+        try:
+            self.open(value)
+            return True
+        except InvalidToken:
+            return False
 
 
 class ApiKeyGuard:

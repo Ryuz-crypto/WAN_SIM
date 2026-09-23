@@ -450,6 +450,12 @@ class ApiTests(unittest.TestCase):
         self.assertNotIn("token", body["bot"])
         self.assertTrue(body["webhook_secret"])
         bot_id = body["bot"]["id"]
+        with client.app.state.repository.connection() as connection:
+            stored = connection.execute(
+                "SELECT token_ciphertext, webhook_secret FROM telegram_bots WHERE id=?", (bot_id,),
+            ).fetchone()
+        self.assertNotIn("telegram-token-for-tests", stored["token_ciphertext"])
+        self.assertNotEqual(stored["webhook_secret"], body["webhook_secret"])
         denied = client.post(f"/api/v2/telegram/bots/{bot_id}/webhook", json={"message": {"chat": {"id": 1001}, "text": "/status"}})
         self.assertEqual(denied.status_code, 403)
         status = client.post(
@@ -473,6 +479,22 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(listed.status_code, 200)
         self.assertEqual(listed.json()[0]["permission"], "read")
         self.assertTrue(listed.json()[0]["webhook_url"].startswith("https://"))
+
+    def test_plaintext_webhook_secret_is_migrated_to_encryption(self) -> None:
+        gateway = RecordingTelegramGateway()
+        root = Path(self.directory.name) / "telegram-migration"
+        client = TestClient(create_app(root, NetworkAgent(CommandRunner("dry-run")), gateway, API_KEY), headers=AUTH_HEADERS)
+        created = client.post("/api/v2/telegram/bots", json={
+            "name": "Legacy", "token": "123456:legacy-telegram-token", "allowedChatIds": [1001], "permission": "read",
+        }).json()
+        bot_id, secret = created["bot"]["id"], created["webhook_secret"]
+        with client.app.state.repository.connection() as connection:
+            connection.execute("UPDATE telegram_bots SET webhook_secret=? WHERE id=?", (secret, bot_id))
+        migrated = create_app(root, NetworkAgent(CommandRunner("dry-run")), gateway, API_KEY)
+        with migrated.state.repository.connection() as connection:
+            stored = connection.execute("SELECT webhook_secret FROM telegram_bots WHERE id=?", (bot_id,)).fetchone()[0]
+        self.assertNotEqual(stored, secret)
+        self.assertEqual(migrated.state.repository.get_telegram_bot_secret(bot_id)["webhook_secret"], secret)
         gateway.fail_delivery = True
         failed_delivery = client.post(f"/api/v2/telegram/bots/{bot_id}/test", json={"chatId": 1001})
         self.assertEqual(failed_delivery.status_code, 502)

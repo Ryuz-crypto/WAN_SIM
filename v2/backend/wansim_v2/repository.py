@@ -89,6 +89,12 @@ class ConfigRepository:
                     "UPDATE snapshots SET checksum=? WHERE id=?",
                     (self._snapshot_checksum(row["host_state"], row["config_payload"]), row["id"]),
                 )
+            for row in connection.execute("SELECT id, webhook_secret FROM telegram_bots"):
+                if row["webhook_secret"] and not self.secrets.is_sealed(row["webhook_secret"]):
+                    connection.execute(
+                        "UPDATE telegram_bots SET webhook_secret=? WHERE id=?",
+                        (self.secrets.seal(row["webhook_secret"]), row["id"]),
+                    )
 
     def create_configuration(self, name: str, config: TopologyConfig) -> ConfigurationRecord:
         config_id, timestamp = str(uuid4()), now()
@@ -215,7 +221,7 @@ class ConfigRepository:
         with self.connection() as connection:
             connection.execute(
                 "INSERT INTO telegram_bots (id, name, token_ciphertext, webhook_secret, allowed_chat_ids, permission, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
-                (bot_id, name, self.secrets.seal(token), webhook_secret, json.dumps(allowed_chat_ids), permission, timestamp, timestamp),
+                (bot_id, name, self.secrets.seal(token), self.secrets.seal(webhook_secret), json.dumps(allowed_chat_ids), permission, timestamp, timestamp),
             )
         return self.get_telegram_bot(bot_id)  # type: ignore[return-value]
 
@@ -249,7 +255,7 @@ class ConfigRepository:
         if not row:
             return None
         return {
-            "id": row["id"], "token": self.secrets.open(row["token_ciphertext"]), "webhook_secret": row["webhook_secret"],
+            "id": row["id"], "token": self.secrets.open(row["token_ciphertext"]), "webhook_secret": self.secrets.open(row["webhook_secret"]),
             "allowed_chat_ids": json.loads(row["allowed_chat_ids"]), "permission": row["permission"], "enabled": bool(row["enabled"]),
         }
 
