@@ -25,9 +25,9 @@ class InstallerMigrationTests(unittest.TestCase):
                     connection.execute("CREATE TABLE existing_value (value TEXT NOT NULL)")
                     connection.execute("INSERT INTO existing_value VALUES ('kept')")
 
-            MIGRATION.migrate(database, "2.0.7-prestable")
+            MIGRATION.migrate(database, "2.0.8-prestable")
 
-            backup = Path(directory) / "state.pre-2.0.7-prestable.db"
+            backup = Path(directory) / "state.pre-2.0.8-prestable.db"
             self.assertTrue(backup.is_file())
             if os.name == "posix":
                 self.assertEqual(backup.stat().st_mode & 0o777, 0o600)
@@ -36,7 +36,7 @@ class InstallerMigrationTests(unittest.TestCase):
                 self.assertEqual(connection.execute("SELECT value FROM existing_value").fetchone()[0], "kept")
                 self.assertEqual(
                     connection.execute("SELECT value FROM schema_metadata WHERE key='application_version'").fetchone()[0],
-                    "2.0.7-prestable",
+                    "2.0.8-prestable",
                 )
 
 

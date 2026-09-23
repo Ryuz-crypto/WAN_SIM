@@ -10,4 +10,4 @@ La etiqueta `v2.0.0-stable` no se crea por avance de interfaz: requiere evidenci
 - [ ] API operativa protegida con una clave robusta, rotación probada y ausencia de credenciales en URL, logs o repositorio.
 - [ ] Proxy HTTPS probado con certificado real, SQLite respaldada y recuperación validada.
 
-La evidencia automática de namespaces se publica en cada ejecución de `.github/workflows/linux-matrix.yml`. `v2.0.7-prestable` añade la matriz completa del instalador en Vagrant, pero no se declarará estable hasta registrar su ejecución aprobada en Ubuntu, Debian, Fedora y Rocky y completar los puntos manuales restantes. Mientras tanto, V1.119 permanece como instalación recomendada.
+La evidencia automática de namespaces se publica en cada ejecución de `.github/workflows/linux-matrix.yml`. `v2.0.8-prestable` añade el asistente guiado, preflight visual y protección de la ruta administrativa sobre la matriz completa del instalador, pero no se declarará estable hasta registrar su ejecución aprobada en Ubuntu, Debian, Fedora y Rocky y completar los puntos manuales restantes. Mientras tanto, V1.119 permanece como instalación recomendada.

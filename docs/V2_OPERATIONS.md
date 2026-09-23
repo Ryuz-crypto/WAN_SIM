@@ -1,6 +1,6 @@
 # Operación De WAN_SIM 2
 
-Esta guía aplica a `v2.0.7-prestable`. La versión estable para entornos operativos continúa siendo `v1.119-stable`.
+Esta guía aplica a `v2.0.8-prestable`. La versión estable para entornos operativos continúa siendo `v1.119-stable`.
 
 ## Estado Y Diagnóstico
 
@@ -38,7 +38,7 @@ El respaldo detiene brevemente el plano de control para mantener consistente SQL
 ## Actualización Y Reparación
 
 ```bash
-sudo wansim update v2.0.7-prestable
+sudo wansim update v2.0.8-prestable
 sudo wansim repair
 ```
 
@@ -51,7 +51,7 @@ sudo wansim enable-host-apply --confirm
 sudo wansim disable-host-apply
 ```
 
-`dry-run` es el valor predeterminado. En modo `host`, ReactUI todavía exige la frase `APLICAR <ID_CONFIGURACION>` correspondiente al borrador que se desplegará.
+`dry-run` es el valor predeterminado. En modo `host`, ReactUI exige la frase `APLICAR <ID_CONFIGURACION>` correspondiente al borrador que se desplegará. Si el cambio afecta la ruta de administración, solicita una segunda frase de riesgo y abre una ventana de confirmación de conectividad de 45 segundos. Sin confirmación, el agente revierte el snapshot automáticamente; el plazo puede ajustarse con `WANSIM_V2_CONFIRMATION_TIMEOUT`.
 
 ## Desinstalación
 
