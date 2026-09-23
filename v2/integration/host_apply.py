@@ -30,6 +30,11 @@ def succeeds(*args: str) -> bool:
     return subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
 
 
+def chain_exists(table: str, chain: str) -> bool:
+    state = subprocess.run(("iptables-save", "-t", table), text=True, capture_output=True)
+    return state.returncode == 0 and any(line.startswith(f":{chain} ") for line in state.stdout.splitlines())
+
+
 def output(*args: str) -> str:
     return subprocess.run(args, check=True, text=True, capture_output=True).stdout.strip()
 
@@ -142,8 +147,8 @@ def main() -> None:
             assert not has_address("wslan2", "10.254.20.1/24"), "La dirección de acceso quedó después del rollback"
             assert not has_address("wswan1", "198.18.1.2/24"), "La dirección WAN1 quedó después del rollback"
             assert not has_address("wswan2", "198.18.2.2/24"), "La dirección WAN2 quedó después del rollback"
-            assert not succeeds("iptables", "-t", "nat", "-S", "WANSIM_POSTROUTING")
-            assert not succeeds("iptables", "-t", "filter", "-S", "WANSIM_FORWARD")
+            assert not chain_exists("nat", "WANSIM_POSTROUTING"), "La cadena NAT administrada quedó después del rollback"
+            assert not chain_exists("filter", "WANSIM_FORWARD"), "La cadena FORWARD administrada quedó después del rollback"
             assert output("sysctl", "-n", "net.ipv4.ip_forward") == forwarding_before, "IPv4 forwarding no volvió al valor inicial"
             assert repository.active_configuration() is None, "La configuración quedó activa después del rollback"
             report["checks"]["rollback"] = {

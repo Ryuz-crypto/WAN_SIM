@@ -70,9 +70,11 @@ class StickyNftChainRunner(CommandRunner):
         from wansim_v2.network import CommandResult
 
         self.commands.append(command)
-        if command[:4] == ["iptables", "-t", "nat", "-S"] or command[:4] == ["iptables", "-t", "filter", "-S"]:
-            chain = command[-1]
-            return CommandResult(chain in self.chains, command, "present" if chain in self.chains else "missing")
+        if command[:2] == ["iptables-save", "-t"]:
+            table = command[-1]
+            chain = "WANSIM_POSTROUTING" if table == "nat" else "WANSIM_FORWARD"
+            definition = f":{chain} - [0:0]\n" if chain in self.chains else ""
+            return CommandResult(True, command, f"*{table}\n{definition}COMMIT\n")
         if command in (["ip", "-j", "addr", "show"], ["ip", "-j", "route", "show"]):
             return CommandResult(True, command, "[]")
         return CommandResult(False, command, "missing")

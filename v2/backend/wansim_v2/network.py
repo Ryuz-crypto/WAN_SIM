@@ -485,7 +485,11 @@ class NetworkAgent:
         for table, chain, parent in (("nat", "WANSIM_POSTROUTING", "POSTROUTING"), ("filter", "WANSIM_FORWARD", "FORWARD")):
             if any(line.startswith(f":{chain} ") for line in snapshot.splitlines()):
                 continue
-            if not self.runner.probe(["iptables", "-t", table, "-S", chain]).ok:
+            table_state = self.runner.probe(["iptables-save", "-t", table])
+            if not table_state.ok:
+                results.append({"id": f"iptables-inspect:{chain}", "ok": False, "output": table_state.output})
+                continue
+            if not any(line.startswith(f":{chain} ") for line in table_state.output.splitlines()):
                 results.append({"id": f"iptables-remove:{chain}", "ok": True, "output": "already-absent"})
                 continue
             jump = self.runner.run(["iptables", "-t", table, "-D", parent, "-j", chain])
@@ -495,6 +499,9 @@ class NetworkAgent:
             results.append({"id": f"iptables-flush:{chain}", "ok": flush.ok, "output": flush.output})
             delete = self.runner.run(["iptables", "-t", table, "-X", chain])
             results.append({"id": f"iptables-remove:{chain}", "ok": delete.ok, "output": delete.output})
+            current = self.runner.probe(["iptables-save", "-t", table])
+            absent = current.ok and not any(line.startswith(f":{chain} ") for line in current.output.splitlines())
+            results.append({"id": f"iptables-verify:{chain}", "ok": absent, "output": "absent" if absent else current.output})
         return results
 
     def _restore_network_state(self, snapshot: dict, actions: list[CommandAction]) -> list[dict]:
