@@ -1,6 +1,6 @@
 # Project Structure
 
-Version 2.0.6-prestable keeps `WANsim2.sh` as the V1 entrypoint while `install-v2.sh` manages the V2 platform. The current stable release remains `v1.119-stable`.
+Version 2.0.7-prestable keeps `WANsim2.sh` as the V1 entrypoint while `install-v2.sh` manages the V2 platform. The current stable release remains `v1.119-stable`.
 
 Current layout:
 
@@ -8,11 +8,12 @@ Current layout:
 WAN_SIM/
   WANsim2.sh              # Main simulator and installer entrypoint
   install-v2.sh           # All-in-one V2 installer and lifecycle entrypoint
-  installer/              # Platform, packages, security, agent and systemd modules
+  installer/              # Wizard, lifecycle, platform, security, agent and systemd modules
   VERSION                 # Single source for the released version
   README.md               # User installation and operating guide
   tests/
     test_l3_access.py     # L3 access/tagged regression tests without root
+    test_installer_v2.py  # Installer structure and security contracts
   docs/
     PROJECT_STRUCTURE.md  # Notes for future modularization
   lib/

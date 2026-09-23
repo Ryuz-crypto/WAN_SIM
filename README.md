@@ -1,15 +1,15 @@
 # Ryuz WAN Simulator
 
-**Instalación recomendada: [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable)** | **Versión actual: `2.0.6-prestable`** | **Autor**: decameru@outlook.com
+**Instalación recomendada: [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable)** | **Versión actual: `2.0.7-prestable`** | **Autor**: decameru@outlook.com
 
 Ryuz WAN Simulator es una herramienta para simular condiciones WAN en Linux. Permite aplicar latencia, jitter y perdida de paquetes sobre interfaces fisicas, VLANs o bridges L2, con un dashboard Flask para control operativo.
 
-La versión más estable es [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable) y debe usarse en laboratorios y entornos operativos. La versión más actual es [`v2.0.6-prestable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v2.0.6-prestable) y debe evaluarse sólo en laboratorio.
+La versión más estable es [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable) y debe usarse en laboratorios y entornos operativos. La versión más actual es [`v2.0.7-prestable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v2.0.7-prestable) y debe evaluarse sólo en laboratorio.
 
 | Necesidad | Qué usar | Estado |
 | --- | --- | --- |
 | Producción o laboratorio operativo | [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable) con `./WANsim2.sh` | **Más estable y recomendada** |
-| Evaluar FastAPI y ReactUI 2.0 | [`v2.0.6-prestable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v2.0.6-prestable) | **Más actual**, pre-estable y `dry-run` por defecto |
+| Evaluar FastAPI y ReactUI 2.0 | [`v2.0.7-prestable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v2.0.7-prestable) | **Más actual**, pre-estable y `dry-run` por defecto |
 
 Las dos versiones deben instalarse en directorios diferentes. `WANsim2.sh` corresponde a V1; V2 se instala de extremo a extremo con `install-v2.sh`.
 
@@ -74,17 +74,17 @@ git switch --detach v1.119-stable
 
 La etiqueta es inmutable y apunta al commit validado con L3/NAT multi-WAN, DHCP o WAN manual, LAN VLAN o acceso sin etiqueta, Bridge L2, HTTPS, Telegram y el dashboard principal.
 
-## Instalación 2: Versión Más Actual (`v2.0.6-prestable`)
+## Instalación 2: Versión Más Actual (`v2.0.7-prestable`)
 
 **Usa esta opción únicamente en una VM o servidor de laboratorio dedicado.** El instalador detecta el sistema, instala Docker y dependencias de red, prepara el agente nativo, FastAPI, ReactUI, HTTPS, almacenamiento persistente y servicios `systemd`.
 
 No reemplaza `v1.119-stable` ni modifica la configuración creada por V1. Inicia en `dry-run` y no cambia interfaces durante la instalación.
 
 ```bash
-git clone --branch v2.0.6-prestable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
+git clone --branch v2.0.7-prestable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
 cd WAN_SIM-v2
 git describe --tags --exact-match
-# Debe mostrar: v2.0.6-prestable
+# Debe mostrar: v2.0.7-prestable
 chmod +x install-v2.sh
 sudo ./install-v2.sh install
 ```
@@ -94,18 +94,36 @@ Si ya tienes el clon de V2:
 ```bash
 cd WAN_SIM-v2
 git fetch --tags
-git switch --detach v2.0.6-prestable
+git switch --detach v2.0.7-prestable
 sudo ./install-v2.sh install
 ```
 
 Al terminar, consulta el estado y recupera la clave inicial de operador:
 
 ```bash
-sudo ./install-v2.sh doctor
+sudo wansim doctor
 sudo sed -n 's/^WANSIM_V2_API_KEY="\(.*\)"$/\1/p' /etc/wansim/wansim.env
 ```
 
-El instalador genera HTTPS autofirmado de forma predeterminada. También acepta `--https pem`, `--https pfx` y `--https der`. Consulta [la guía completa del instalador](docs/V2_INSTALLER.md) para actualización, reparación, parámetros, certificados y desinstalación.
+El instalador genera HTTPS autofirmado de forma predeterminada. También acepta `--https pem`, `--https pfx` y `--https der`. Instala el comando administrativo `wansim` y servicios `systemd`; no es necesario arrancar FastAPI, ReactUI ni Docker Compose manualmente. Consulta [la guía completa del instalador](docs/V2_INSTALLER.md) y [la guía operativa](docs/V2_OPERATIONS.md).
+
+Para automatización, parte de `installer.example.yaml`, guarda claves y contraseñas en archivos con permisos restringidos y ejecuta:
+
+```bash
+sudo ./install-v2.sh install --config installer.example.yaml --non-interactive
+```
+
+El modo real exige autorización explícita en el archivo o mediante ambos parámetros `--host-apply --confirm-host-apply`. Incluso entonces, ReactUI exige escribir `APLICAR <ID_CONFIGURACION>` antes de enviar un despliegue al host.
+
+Operación diaria después de instalar:
+
+```bash
+sudo wansim status
+sudo wansim doctor --export /tmp/wansim-doctor.txt
+sudo wansim backup
+sudo wansim restart
+sudo wansim update v2.0.7-prestable
+```
 
 ### Ubuntu Server / Ubuntu Workstation / Debian
 
@@ -181,7 +199,7 @@ https://<IP_DEL_SERVIDOR>:5000
 
 ## Desarrollo ReactUI 2.0 Pre-Estable
 
-Esta sección no forma parte de la instalación estable. Usa la etiqueta `v2.0.6-prestable` para una evaluación reproducible o `main` solamente para desarrollo; ReactUI consume la API FastAPI y ésta se comunica con el agente nativo mediante un socket Unix autenticado.
+Esta sección no forma parte de la instalación estable. Usa la etiqueta `v2.0.7-prestable` para una evaluación reproducible o `main` solamente para desarrollo; ReactUI consume la API FastAPI y ésta se comunica con el agente nativo mediante un socket Unix autenticado.
 
 La versión pre-estable permite preparar L3/NAT o Bridge L2, validar las restricciones, revisar un plan de despliegue, consultar interfaces, tráfico, leases DHCP y daemons, y probar perfiles `tc/netem`. El modo predeterminado es `dry-run`: no cambia interfaces ni servicios del host.
 
@@ -304,6 +322,15 @@ Antes de ejecutar en un servidor compartido, revisa:
 Si una ejecucion falla, el script ejecuta rollback automatico de servicios, dashboard generado, virtualenv parcial, bridges/VLANs generadas y archivos temporales. El log principal se conserva en `~/emix_abundix.log`.
 
 ## Release Notes
+
+### Version 2.0.7-prestable
+
+- Completa el ciclo profesional del instalador con asistente interactivo, archivo YAML de respuestas y confirmación doble para el modo `host`.
+- Agrega transacciones de instalación con snapshot de archivos, servicios e `iptables`, verificación y rollback automático ante fallos.
+- Instala el CLI `wansim` para estado, logs, `doctor`, backup, restore, reparación, actualización por etiqueta y desinstalación.
+- Añade migraciones SQLite con comprobación de integridad, respaldos con SHA-256 y actualización restringida a etiquetas V2 publicadas.
+- ReactUI exige una frase ligada al ID de configuración antes de aplicar cambios reales.
+- La matriz Vagrant cubre instalación, fallo inducido, rollback, reparación, red real, restauración, reinstalación y desinstalación en Ubuntu, Debian, Fedora y Rocky.
 
 ### Version 2.0.6-prestable
 

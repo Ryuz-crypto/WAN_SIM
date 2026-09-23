@@ -1,0 +1,14 @@
+# WAN_SIM 2 unattended installer answers. Keep secrets in root-readable files.
+nonInteractive: true
+bindAddress: 0.0.0.0
+httpPort: 8080
+httpsMode: self-signed
+httpsPort: 443
+executionMode: dry-run
+confirmHostApply: false
+configureFirewall: false
+skipConnectivityCheck: false
+# tlsCert: /root/wansim/fullchain.pem
+# tlsKey: /root/wansim/privkey.pem
+# tlsPasswordFile: /root/wansim/pfx-password.txt
+# adminKeyFile: /root/wansim/operator-key.txt

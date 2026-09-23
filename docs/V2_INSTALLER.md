@@ -7,9 +7,13 @@
 ## Instalación
 
 ```bash
+git clone --branch v2.0.7-prestable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
+cd WAN_SIM-v2
 chmod +x install-v2.sh
 sudo ./install-v2.sh install
 ```
+
+El asistente pregunta publicación, HTTPS, modo de ejecución y firewall, muestra un resumen y sólo entonces inicia la transacción. La opción recomendada es conservar `dry-run` durante la primera validación.
 
 Instalación automatizada con parámetros:
 
@@ -21,6 +25,15 @@ sudo ./install-v2.sh install \
   --http-port 8080 \
   --https-port 443
 ```
+
+También puede utilizarse un archivo de respuestas:
+
+```bash
+cp installer.example.yaml /tmp/wansim-installer.yaml
+sudo ./install-v2.sh install --config /tmp/wansim-installer.yaml --non-interactive
+```
+
+El parser acepta únicamente las claves documentadas. `adminKeyFile` y `tlsPasswordFile` leen secretos desde archivos; no se recomienda ponerlos directamente en YAML ni en la línea de comandos.
 
 Formatos TLS aceptados durante la instalación:
 
@@ -46,6 +59,34 @@ sudo ./install-v2.sh uninstall --purge
 ```
 
 La desinstalación no elimina Docker porque puede pertenecer a otras aplicaciones.
+
+Después de instalar, la administración se realiza mediante `sudo wansim`. Consulta [V2_OPERATIONS.md](V2_OPERATIONS.md) para diagnóstico, logs, actualización, respaldo, restauración y desinstalación.
+
+## Transacción Y Rollback
+
+Antes de modificar una instalación, el instalador registra estado de servicios, reglas `iptables`, usuario de servicio y un archivo comprimido de todos los directorios administrados. Si cualquier fase falla, detiene los componentes parciales, restaura el snapshot y devuelve el estado previo de los servicios. La evidencia queda en `/var/lib/wansim-installer/transactions`.
+
+La actualización profesional se hace desde una etiqueta publicada y crea un respaldo adicional:
+
+```bash
+sudo wansim update v2.0.7-prestable
+```
+
+No se aceptan ramas ni una etiqueta ajena al patrón `v2.X.Y-prestable` o `v2.X.Y-stable`.
+
+## Aplicación Real
+
+La instalación inicia en `dry-run`. Para habilitar cambios reales posteriormente:
+
+```bash
+sudo wansim enable-host-apply --confirm
+```
+
+En una instalación desatendida, deben coincidir `executionMode: host` y `confirmHostApply: true`. ReactUI mantiene una segunda barrera: antes de desplegar exige escribir exactamente `APLICAR <ID_CONFIGURACION>`. Para volver al modo seguro:
+
+```bash
+sudo wansim disable-host-apply
+```
 
 ## Seguridad
 
