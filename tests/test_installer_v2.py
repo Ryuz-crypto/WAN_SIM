@@ -54,6 +54,12 @@ class InstallerStructureTests(unittest.TestCase):
         self.assertIn("Requires=docker.service wansim-agent.service", control)
         self.assertIn("WantedBy=multi-user.target", control)
 
+    def test_rpm_platform_installs_tc_for_netem(self) -> None:
+        packages = (ROOT / "installer/packages.sh").read_text(encoding="utf-8")
+        integration = (ROOT / "v2/integration/container-entrypoint.sh").read_text(encoding="utf-8")
+        self.assertIn("iproute-tc", packages)
+        self.assertIn("iproute-tc", integration)
+
     def test_release_packaging_has_deb_rpm_checksums_and_attestation(self) -> None:
         builder = (ROOT / "packaging/build-packages.sh").read_text(encoding="utf-8")
         workflow = (ROOT / ".github/workflows/packages.yml").read_text(encoding="utf-8")

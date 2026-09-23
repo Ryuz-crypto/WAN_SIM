@@ -11,7 +11,7 @@ install_base_packages() {
   else
     dnf -y install \
       ca-certificates curl git jq openssl python3 python3-pip \
-      iproute iptables nftables dhcp-client dhcp-server util-linux dnf-plugins-core
+      iproute iproute-tc iptables nftables dhcp-client dhcp-server util-linux dnf-plugins-core
   fi
   log_ok "Dependencias base y de red instaladas."
 }
