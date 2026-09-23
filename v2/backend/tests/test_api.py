@@ -203,7 +203,7 @@ class ApiTests(unittest.TestCase):
     def test_rollback_removes_nft_chains_absent_from_snapshot(self) -> None:
         runner = StickyNftChainRunner()
         snapshot = {
-            "iptables": "*nat\n:POSTROUTING ACCEPT [0:0]\nCOMMIT\n*filter\n:FORWARD ACCEPT [0:0]\nCOMMIT\n",
+            "iptables": "",
             "network": {"addresses": "[]", "routes": "[]"},
             "dhcp_config": {"exists": False, "content": ""},
             "dhcp_active": "",

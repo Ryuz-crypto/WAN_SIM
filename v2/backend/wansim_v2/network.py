@@ -465,11 +465,12 @@ class NetworkAgent:
                 continue
             result = self.runner.run(action.undo)
             results.append({"id": action.id, "ok": result.ok, "output": result.output})
-        if self.runner.mode == "host" and snapshot.get("iptables"):
-            result = self.runner.run(["iptables-restore"], input_data=snapshot["iptables"])
+        if self.runner.mode == "host" and "iptables" in snapshot:
+            saved_iptables = str(snapshot.get("iptables") or "")
+            result = self.runner.run(["iptables-restore"], input_data=saved_iptables) if saved_iptables else CommandResult(True, ["iptables-restore"], "empty-snapshot")
             results.append({"id": "iptables-restore", "ok": result.ok, "output": result.output})
             if result.ok:
-                results.extend(self._remove_new_managed_chains(str(snapshot["iptables"])))
+                results.extend(self._remove_new_managed_chains(saved_iptables))
         if self.runner.mode == "host":
             results.extend(self._restore_network_state(snapshot, list(restore_actions) if restore_actions is not None else applied))
             forwarding = str(snapshot.get("forwarding", "")).strip()
