@@ -106,6 +106,12 @@ class InstallerStructureTests(unittest.TestCase):
         self.assertIn("if ! command_exists curl", packages)
         self.assertIn('dnf -y install "${packages[@]}"', packages)
 
+    def test_self_signed_tls_has_portable_hostname_fallback(self) -> None:
+        security = (ROOT / "installer/security.sh").read_text(encoding="utf-8")
+        self.assertIn("system_hostname()", security)
+        self.assertIn("uname -n", security)
+        self.assertIn("${name:-wansim.local}", security)
+
 
 if __name__ == "__main__":
     unittest.main()

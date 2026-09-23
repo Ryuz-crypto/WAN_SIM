@@ -20,6 +20,15 @@ print(base64.urlsafe_b64encode(os.urandom(32)).decode())
 PY
 }
 
+system_hostname() {
+  local name=""
+  if command_exists hostname; then
+    name="$(hostname -f 2>/dev/null || hostname 2>/dev/null || true)"
+  fi
+  [[ -n "$name" ]] || name="$(uname -n 2>/dev/null || true)"
+  printf '%s\n' "${name:-wansim.local}"
+}
+
 normalize_tls_material() {
   local cert_dir="$WANSIM_ETC_DIR/certs"
   [[ "$WANSIM_HTTPS_MODE" == "off" ]] && return 0
@@ -27,9 +36,11 @@ normalize_tls_material() {
   case "$WANSIM_HTTPS_MODE" in
     self-signed)
       if [[ ! -s "$cert_dir/fullchain.pem" || ! -s "$cert_dir/privkey.pem" ]]; then
+        local tls_hostname
+        tls_hostname="$(system_hostname)"
         openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 825 \
-          -subj "/CN=$(hostname -f 2>/dev/null || hostname)" \
-          -addext "subjectAltName=DNS:$(hostname -f 2>/dev/null || hostname),IP:127.0.0.1" \
+          -subj "/CN=$tls_hostname" \
+          -addext "subjectAltName=DNS:$tls_hostname,IP:127.0.0.1" \
           -keyout "$cert_dir/privkey.pem" -out "$cert_dir/fullchain.pem"
       fi
       ;;
