@@ -4,12 +4,14 @@
 
 Ryuz WAN Simulator es una herramienta para simular condiciones WAN en Linux. Permite aplicar latencia, jitter y perdida de paquetes sobre interfaces fisicas, VLANs o bridges L2, con un dashboard Flask para control operativo.
 
-La última versión estable es [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable). Es la versión que debe instalarse en laboratorios y entornos operativos. La rama `main` contiene WAN_SIM 2.0 en estado pre-estable y no sustituye la instalación estable.
+La versión más estable es [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable) y debe usarse en laboratorios y entornos operativos. La versión más actual publicada es [`v2.0.5-prestable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v2.0.5-prestable) y debe evaluarse sólo en laboratorio; la rama `main` puede contener desarrollo posterior no etiquetado.
 
 | Necesidad | Qué usar | Estado |
 | --- | --- | --- |
-| Simular WAN en un laboratorio | [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable) con `./WANsim2.sh` | Estable |
-| Evaluar FastAPI y ReactUI | Rama `main`, directorios `v2/backend` y `v2/frontend` | Pre-beta, `dry-run` por defecto |
+| Producción o laboratorio operativo | [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable) con `./WANsim2.sh` | **Más estable y recomendada** |
+| Evaluar FastAPI y ReactUI 2.0 | [`v2.0.5-prestable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v2.0.5-prestable) | **Más actual**, pre-estable y `dry-run` por defecto |
+
+Las dos versiones deben instalarse en directorios diferentes. No ejecutes `WANsim2.sh` esperando iniciar V2: ese script corresponde a la plataforma estable V1. ReactUI 2.0 se inicia con FastAPI y Vite o mediante Docker Compose.
 
 ## Funcionalidades
 
@@ -44,15 +46,22 @@ Notas por familia:
 - En todos los casos se requiere `systemd`, `iproute`, `tc`, `iptables`, `python3` y permisos `sudo`.
 - Las dependencias Python se instalan en `~/.wansim/venv`; no se modifica el Python del sistema.
 
-## Instalación Estable
+## Instalación 1: Versión Más Estable (`v1.119-stable`)
 
-Para un laboratorio operativo, instala siempre la última etiqueta estable. No uses `main` para instalar el simulador mientras WAN_SIM 2.0 permanezca en pre-estable:
+**Usa esta opción para producción, centros de datos y laboratorios operativos.** Es la instalación recomendada. No uses `main` para instalar la versión estable:
 
 ```bash
 git clone --branch v1.119-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git
 cd WAN_SIM
 chmod +x WANsim2.sh
 ./WANsim2.sh
+```
+
+Comprueba antes de instalar que estás exactamente en la versión estable:
+
+```bash
+git describe --tags --exact-match
+# Debe mostrar: v1.119-stable
 ```
 
 Si ya tienes el repositorio, actualiza las etiquetas y cambia a la versión estable antes de ejecutar el instalador:
@@ -63,19 +72,30 @@ git switch --detach v1.119-stable
 ./WANsim2.sh
 ```
 
-La etiqueta es inmutable y apunta al commit validado con L3/NAT multi-WAN, DHCP o WAN manual, LAN VLAN o acceso sin etiqueta, Bridge L2, HTTPS, Telegram y el dashboard principal. Para probar el desarrollo 2.0 sólo en un entorno dedicado: `git switch main && git pull --ff-only`.
+La etiqueta es inmutable y apunta al commit validado con L3/NAT multi-WAN, DHCP o WAN manual, LAN VLAN o acceso sin etiqueta, Bridge L2, HTTPS, Telegram y el dashboard principal.
 
-## Instalación V2 Pre-Beta
+## Instalación 2: Versión Más Actual (`v2.0.5-prestable`)
 
-WAN_SIM 2.0 es una plataforma separada de la instalación estable: incluye FastAPI como plano de control y ReactUI como consola de operación. Está disponible solamente en `main`, inicia en `dry-run` y debe instalarse en una VM o host de laboratorio dedicado.
+**Usa esta opción únicamente para evaluar WAN_SIM 2.0 en una VM o servidor de laboratorio dedicado.** Incluye FastAPI como plano de control y ReactUI como consola. La etiqueta `v2.0.5-prestable` es la versión más actual publicada y reproducible; `main` puede contener trabajo posterior todavía no etiquetado.
 
 No reemplaza `v1.119-stable`, no instala ni modifica la configuración creada por V1. Compose está disponible para el plano de control en `dry-run`; el agente que cambia la red sigue siendo nativo del host Linux y no se considera producción durante la etapa pre-estable.
 
-### 1. Obtener La Rama De Desarrollo
+### 1. Obtener La Versión Más Actual
 
 ```bash
-git clone --branch main https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
+git clone --branch v2.0.5-prestable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
 cd WAN_SIM-v2
+git describe --tags --exact-match
+# Debe mostrar: v2.0.5-prestable
+```
+
+Si ya tienes el clon de V2, selecciona explícitamente la etiqueta publicada:
+
+```bash
+cd WAN_SIM-v2
+git fetch --tags
+git switch --detach v2.0.5-prestable
+git describe --tags --exact-match
 ```
 
 ### 2. Iniciar La API FastAPI
@@ -216,9 +236,9 @@ Desde el boton `HTTPS` del dashboard puedes cargar un certificado PEM, PEM bundl
 https://<IP_DEL_SERVIDOR>:5000
 ```
 
-## Desarrollo ReactUI 2.0 Pre-Beta
+## Desarrollo ReactUI 2.0 Pre-Estable
 
-Esta sección no forma parte de la instalación estable. Usa una copia de laboratorio en la rama `main`; la consola ReactUI actual se ejecuta por separado desde `v2/frontend` y consume la API FastAPI en `v2/backend`.
+Esta sección no forma parte de la instalación estable. Usa la etiqueta `v2.0.5-prestable` para una evaluación reproducible o `main` solamente para desarrollo; ReactUI se ejecuta desde `v2/frontend` y consume la API FastAPI en `v2/backend`.
 
 La versión pre-estable permite preparar L3/NAT o Bridge L2, validar las restricciones, revisar un plan de despliegue, consultar interfaces, tráfico, leases DHCP y daemons, y probar perfiles `tc/netem`. El modo predeterminado es `dry-run`: no cambia interfaces ni servicios del host.
 
@@ -348,6 +368,7 @@ Si una ejecucion falla, el script ejecuta rollback automatico de servicios, dash
 - Cada entorno aplica dos WAN, una LAN VLAN, una LAN de acceso, NAT, forwarding y rollback dentro de un namespace de red desechable.
 - Se agrega compatibilidad con Python 3.9 para Rocky Linux y restauración correcta de snapshots `iptables-nft` vacíos.
 - La matriz y la suite general aprobaron en [GitHub Actions run 35820610126](https://github.com/Ryuz-crypto/WAN_SIM/actions/runs/35820610126); V1.119 continúa como versión estable recomendada.
+- La instalación diferencia explícitamente la etiqueta más estable `v1.119-stable` de la etiqueta más actual `v2.0.5-prestable`.
 
 ### Version 2.0.4-prebeta
 
