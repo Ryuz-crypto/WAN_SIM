@@ -82,9 +82,15 @@ class InstallerStructureTests(unittest.TestCase):
         lifecycle = (ROOT / "v2/integration/installer-lifecycle.sh").read_text(encoding="utf-8")
         self.assertIn("runs-on: ubuntu-24.04", workflow)
         self.assertIn("apt.releases.hashicorp.com", workflow)
+        self.assertIn("sudo chown -R", workflow)
         self.assertIn("--provider=docker", workflow)
         self.assertIn('docker.has_ssh = true', vagrantfile)
-        for evidence in ("control_plane_acceptance.py", "--https pem", "support-bundle", "v1.119-stable"):
+        dockerfile = (ROOT / "v2/integration/vagrant-docker/Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("curl-minimal", dockerfile)
+        for evidence in (
+            "control_plane_acceptance.py", '"storage-driver":"vfs"', "--https pem",
+            "support-bundle", "v1.119-stable",
+        ):
             self.assertIn(evidence, lifecycle)
 
 

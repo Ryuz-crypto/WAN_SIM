@@ -46,8 +46,9 @@ jobs:
       - name: Collect acceptance evidence
         if: always()
         run: |
-          mkdir -p "test-results/vagrant-${{ matrix.machine }}"
-          cp -a test-results/vagrant/. "test-results/vagrant-${{ matrix.machine }}/" 2>/dev/null || true
+          sudo mkdir -p "test-results/vagrant-${{ matrix.machine }}"
+          sudo cp -a test-results/vagrant/. "test-results/vagrant-${{ matrix.machine }}/" 2>/dev/null || true
+          sudo chown -R "$(id -u):$(id -g)" "test-results/vagrant-${{ matrix.machine }}"
           vagrant -v > "test-results/vagrant-${{ matrix.machine }}/versions.txt"
           docker version --format '{{.Server.Version}}' >> "test-results/vagrant-${{ matrix.machine }}/versions.txt"
       - uses: actions/upload-artifact@v6

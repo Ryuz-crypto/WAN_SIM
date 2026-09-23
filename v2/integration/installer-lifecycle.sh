@@ -17,6 +17,12 @@ exec > >(tee "$REPORT") 2>&1
 
 phase() { printf '\n=== %s ===\n' "$1"; }
 
+if [[ -f /.dockerenv ]]; then
+  phase "Preparación de Docker anidado"
+  install -d -m 0755 /etc/docker
+  printf '{"storage-driver":"vfs"}\n' > /etc/docker/daemon.json
+fi
+
 phase "Instalación nueva"
 "$ROOT/install-v2.sh" install --non-interactive --https self-signed
 wansim doctor --export "$REPORT_DIR/doctor-install.txt"

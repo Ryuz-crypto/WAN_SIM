@@ -8,7 +8,7 @@ RUN if command -v apt-get >/dev/null 2>&1; then \
         ca-certificates curl dbus openssh-server openssl procps sudo systemd systemd-sysv && \
       rm -rf /var/lib/apt/lists/*; \
     else \
-      dnf -y install ca-certificates curl dbus openssh-server openssl procps-ng sudo systemd && \
+      dnf -y install ca-certificates curl-minimal dbus openssh-server openssl procps-ng sudo systemd && \
       dnf clean all; \
     fi && \
     useradd --create-home --shell /bin/bash vagrant && \
