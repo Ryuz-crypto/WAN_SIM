@@ -10,7 +10,8 @@ from . import __version__
 from .models import (ConfigurationCreate, ConfigurationRecord, DeploymentRecord, DeploymentRequest, NetemRequest,
                      ServiceRestartRequest, TelegramBotCreate, TelegramBotCreated, TelegramBotRecord,
                      TelegramBotUpdate, TelegramDeliveryRequest, TelegramWebhookSyncRequest)
-from .network import CommandRunner, NetworkAgent
+from .agent_client import network_agent_from_environment
+from .network import NetworkAgent
 from .operations import OperationsService
 from .repository import ConfigRepository
 from .security import ApiKeyGuard
@@ -21,7 +22,7 @@ from .telegram import TelegramGateway, TelegramService
 def create_app(data_dir: Path | None = None, agent: NetworkAgent | None = None, telegram_gateway: TelegramGateway | None = None, api_key: str | None = None) -> FastAPI:
     root = data_dir or Path(os.getenv("WANSIM_V2_DATA_DIR", "~/.wansim-v2")).expanduser()
     repository = ConfigRepository(root / "state.db")
-    service = DeploymentService(repository, agent or NetworkAgent(CommandRunner()))
+    service = DeploymentService(repository, agent or network_agent_from_environment())
     operations = OperationsService(repository, service.agent)
     telegram = TelegramService(repository, operations, telegram_gateway or TelegramGateway())
     api_guard = ApiKeyGuard(root, api_key)

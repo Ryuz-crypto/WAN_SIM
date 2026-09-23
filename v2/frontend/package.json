@@ -1,7 +1,8 @@
 {
   "name": "wansim-reactui",
   "private": true,
-  "version": "2.0.5-prestable",
+  "version": "2.0.6-prestable",
+  "packageManager": "pnpm@9.15.4",
   "type": "module",
   "scripts": {
     "dev": "vite",

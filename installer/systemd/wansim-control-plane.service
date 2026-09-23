@@ -1,0 +1,21 @@
+[Unit]
+Description=WAN_SIM 2 control plane
+Requires=docker.service wansim-agent.service
+After=docker.service wansim-agent.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/wansim/wansim.env
+WorkingDirectory=/opt/wansim/control-plane/deploy
+ExecStart=/usr/local/libexec/wansim-compose up
+ExecReload=/usr/local/libexec/wansim-compose restart
+ExecStop=/usr/local/libexec/wansim-compose down
+TimeoutStartSec=600
+TimeoutStopSec=120
+StandardOutput=append:/var/log/wansim/control-plane.log
+StandardError=append:/var/log/wansim/control-plane.log
+
+[Install]
+WantedBy=multi-user.target

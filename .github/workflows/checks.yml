@@ -11,7 +11,9 @@ jobs:
         with:
           python-version: '3.12'
       - name: Bash syntax
-        run: bash -n WANsim2.sh
+        run: |
+          bash -n WANsim2.sh install-v2.sh installer/*.sh installer/bin/*
+          bash install-v2.sh --help >/dev/null
       - name: L3 access and VLAN regression tests
         run: python -m unittest discover -s tests -v
       - name: Install WAN_SIM 2.0 backend checks
@@ -32,6 +34,8 @@ jobs:
         env:
           WANSIM_V2_SECRET_KEY: YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=
           WANSIM_V2_API_KEY: test-compose-api-key-1234567890
+          WANSIM_V2_AGENT_TOKEN: test-agent-token-with-at-least-32-characters
+          WANSIM_GID: 1000
         run: docker compose -f v2/deploy/docker-compose.yml config --quiet
       - name: Browser test dependencies
         run: |

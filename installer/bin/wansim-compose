@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+source /etc/wansim/wansim.env
+cd /opt/wansim/control-plane/deploy
+files=(-f docker-compose.yml)
+[[ "${WANSIM_HTTPS_MODE:-off}" == "off" ]] || files+=(-f docker-compose.https.yml)
+
+case "${1:-}" in
+  up) exec docker compose "${files[@]}" up -d --remove-orphans ;;
+  down) exec docker compose "${files[@]}" down ;;
+  restart) docker compose "${files[@]}" down; exec docker compose "${files[@]}" up -d --remove-orphans ;;
+  *) echo "Uso: wansim-compose up|down|restart" >&2; exit 2 ;;
+esac

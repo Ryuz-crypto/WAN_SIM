@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+for _ in {1..50}; do
+  if [[ -S /run/wansim/agent.sock ]]; then
+    chgrp wansim /run/wansim/agent.sock
+    chmod 0660 /run/wansim/agent.sock
+    exit 0
+  fi
+  sleep 0.1
+done
+echo "El agente no creó /run/wansim/agent.sock a tiempo." >&2
+exit 1

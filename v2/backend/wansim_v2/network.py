@@ -398,7 +398,10 @@ class NetworkAgent:
         return {"ok": not missing, "mode": "host", "missing_interfaces": missing}
 
     def service_statuses(self) -> list[dict]:
-        services = ("wansim.service", "wansim-l2-persist.service", "isc-dhcp-server", "dhcpd", "iptables")
+        services = (
+            "wansim-agent.service", "wansim-control-plane.service", "wansim.service",
+            "wansim-l2-persist.service", "isc-dhcp-server", "dhcpd", "iptables",
+        )
         output = []
         for service in services:
             active = self.runner.probe(["systemctl", "is-active", service])
@@ -443,10 +446,14 @@ class NetworkAgent:
         return {"ok": result.ok, "mode": self.runner.mode, "command": result.command, "output": result.output}
 
     def restart_service(self, service: str) -> dict:
-        allowed = {"wansim.service", "wansim-l2-persist.service", "isc-dhcp-server", "dhcpd", "iptables"}
+        allowed = {
+            "wansim.service", "wansim-l2-persist.service", "wansim-agent.service",
+            "wansim-control-plane.service", "isc-dhcp-server", "dhcpd", "iptables",
+        }
         if service not in allowed:
             return {"ok": False, "error": "Servicio no permitido."}
-        result = self.runner.run(["systemctl", "restart", service])
+        command = ["systemctl", "--no-block", "restart", service] if service.startswith("wansim-") else ["systemctl", "restart", service]
+        result = self.runner.run(command)
         return {"ok": result.ok, "mode": self.runner.mode, "command": result.command, "output": result.output}
 
     def overview(self) -> dict:

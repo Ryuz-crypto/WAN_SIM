@@ -1,0 +1,30 @@
+[Unit]
+Description=WAN_SIM 2 privileged network agent
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=root
+Group=wansim
+EnvironmentFile=/etc/wansim/wansim.env
+Environment=PYTHONPATH=/opt/wansim/agent/app
+RuntimeDirectory=wansim
+RuntimeDirectoryMode=0770
+ExecStartPre=/usr/bin/rm -f /run/wansim/agent.sock
+ExecStart=/opt/wansim/agent/venv/bin/uvicorn wansim_v2.agent_server:app --uds /run/wansim/agent.sock --workers 1
+ExecStartPost=/usr/local/libexec/wansim-agent-ready
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+PrivateTmp=yes
+ProtectHome=yes
+NoNewPrivileges=yes
+UMask=0007
+StandardOutput=append:/var/log/wansim/agent.log
+StandardError=append:/var/log/wansim/agent.log
+
+[Install]
+WantedBy=multi-user.target

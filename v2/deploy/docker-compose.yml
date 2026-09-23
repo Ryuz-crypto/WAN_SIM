@@ -1,3 +1,5 @@
+name: wansim-v2
+
 services:
   api:
     build:
@@ -7,10 +9,17 @@ services:
       WANSIM_V2_EXECUTION_MODE: dry-run
       WANSIM_V2_SECRET_KEY: ${WANSIM_V2_SECRET_KEY:?Set a Fernet key before starting Compose}
       WANSIM_V2_API_KEY: ${WANSIM_V2_API_KEY:?Set an operator API key before starting Compose}
+      WANSIM_V2_AGENT_TOKEN: ${WANSIM_V2_AGENT_TOKEN:?Set the host agent token before starting Compose}
+      WANSIM_V2_AGENT_SOCKET: /run/wansim/agent.sock
+    group_add:
+      - "${WANSIM_GID:?Set the wansim host group id}"
     volumes:
-      - wansim_state:/data
+      - "${WANSIM_DATA_DIR:-/var/lib/wansim}:/data:Z"
+      - "/run/wansim:/run/wansim:ro,z"
     expose:
       - "8080"
+    restart: unless-stopped
+    networks: [control]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"]
       interval: 15s
@@ -21,19 +30,25 @@ services:
     build:
       context: ../frontend
     expose:
-      - "80"
+      - "8080"
+    restart: unless-stopped
+    networks: [control]
 
   proxy:
-    image: nginx:1.27-alpine
+    image: nginx:1.27.4-alpine
     depends_on:
       api:
         condition: service_healthy
       reactui:
         condition: service_started
     ports:
-      - "${WANSIM_HTTP_PORT:-8080}:80"
+      - "${WANSIM_BIND_ADDRESS:-0.0.0.0}:${WANSIM_HTTP_PORT:-8080}:80"
     volumes:
       - ./nginx/http.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
+    networks: [control]
 
-volumes:
-  wansim_state:
+networks:
+  control:
+    driver: bridge
+    internal: false

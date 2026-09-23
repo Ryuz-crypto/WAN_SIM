@@ -1,11 +1,12 @@
-FROM node:22-alpine AS build
+FROM node:22.14.0-alpine3.21 AS build
 
 WORKDIR /app
-COPY package.json ./
-RUN npm install --no-audit --no-fund
+RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
 COPY . .
-RUN npm run build
+RUN pnpm run build
 
-FROM nginx:1.27-alpine
+FROM nginxinc/nginx-unprivileged:1.27.4-alpine
 COPY --from=build /app/dist /usr/share/nginx/html
-EXPOSE 80
+EXPOSE 8080

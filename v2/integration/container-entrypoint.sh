@@ -2,6 +2,16 @@
 set -euo pipefail
 
 workspace="${WANSIM_WORKSPACE:-/workspace}"
+export INSTALLER_ROOT="$workspace"
+
+# Validate that the all-in-one installer identifies every matrix platform.
+source "$workspace/installer/common.sh"
+source "$workspace/installer/platform.sh"
+detect_platform
+if [[ -n "${WANSIM_EXPECTED_DISTRO:-}" && "$WANSIM_DISTRO_ID" != "$WANSIM_EXPECTED_DISTRO" ]]; then
+  echo "Distribución detectada $WANSIM_DISTRO_ID; se esperaba $WANSIM_EXPECTED_DISTRO." >&2
+  exit 1
+fi
 
 if command -v apt-get >/dev/null 2>&1; then
   export DEBIAN_FRONTEND=noninteractive
