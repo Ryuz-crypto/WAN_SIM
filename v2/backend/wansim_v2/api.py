@@ -89,6 +89,8 @@ def create_app(data_dir: Path | None = None, agent: NetworkAgent | None = None, 
     @app.post("/api/v2/configurations/{configuration_id}/deploy", response_model=DeploymentRecord)
     def deploy_configuration(configuration_id: str, request: DeploymentRequest) -> DeploymentRecord:
         configuration = get_configuration(configuration_id)
+        if request.apply and service.agent.execution_mode == "host" and request.confirmation != f"APLICAR {configuration_id}":
+            raise HTTPException(status_code=409, detail="El modo host requiere confirmar el identificador exacto desde ReactUI.")
         return service.deploy(configuration, request.apply)
 
     @app.get("/api/v2/deployments/{deployment_id}", response_model=DeploymentRecord)

@@ -128,6 +128,7 @@ class ConfigurationCreate(BaseModel):
 
 class DeploymentRequest(BaseModel):
     apply: bool = False
+    confirmation: str | None = Field(default=None, max_length=80)
 
 
 class NetemRequest(BaseModel):

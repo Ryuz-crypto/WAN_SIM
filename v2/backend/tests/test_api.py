@@ -184,7 +184,7 @@ class ApiTests(unittest.TestCase):
         app = create_app(Path(self.directory.name) / "failure", NetworkAgent(runner), api_key=API_KEY)
         client = TestClient(app, headers=AUTH_HEADERS)
         created = client.post("/api/v2/configurations", json=self.nat_payload()).json()
-        deployment = client.post(f"/api/v2/configurations/{created['id']}/deploy", json={"apply": True}).json()
+        deployment = client.post(f"/api/v2/configurations/{created['id']}/deploy", json={"apply": True, "confirmation": f"APLICAR {created['id']}"}).json()
         self.assertEqual(deployment["status"], "ROLLED_BACK")
         self.assertIn("forced address failure", deployment["result"]["error"])
         self.assertIsNone(client.get("/api/v2/configurations/active/current").json())
@@ -195,10 +195,18 @@ class ApiTests(unittest.TestCase):
         app = create_app(Path(self.directory.name) / "rollback-failure", NetworkAgent(runner), api_key=API_KEY)
         client = TestClient(app, headers=AUTH_HEADERS)
         created = client.post("/api/v2/configurations", json=self.nat_payload()).json()
-        deployment = client.post(f"/api/v2/configurations/{created['id']}/deploy", json={"apply": True}).json()
+        deployment = client.post(f"/api/v2/configurations/{created['id']}/deploy", json={"apply": True, "confirmation": f"APLICAR {created['id']}"}).json()
         self.assertEqual(deployment["status"], "ROLLBACK_FAILED")
         self.assertTrue(any(item["output"] == "forced rollback failure" for item in deployment["result"]["rollback"]))
         self.assertIsNone(client.get("/api/v2/configurations/active/current").json())
+
+    def test_host_apply_requires_exact_reactui_confirmation(self) -> None:
+        runner = FailingRunner()
+        client = TestClient(create_app(Path(self.directory.name) / "host-confirmation", NetworkAgent(runner), api_key=API_KEY), headers=AUTH_HEADERS)
+        created = client.post("/api/v2/configurations", json=self.nat_payload()).json()
+        denied = client.post(f"/api/v2/configurations/{created['id']}/deploy", json={"apply": True})
+        self.assertEqual(denied.status_code, 409)
+        self.assertFalse(any(command[:3] == ["ip", "addr", "replace"] for command in runner.commands))
 
     def test_rollback_removes_nft_chains_absent_from_snapshot(self) -> None:
         runner = StickyNftChainRunner()
