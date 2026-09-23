@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from ipaddress import IPv4Network, ip_interface
+from ipaddress import IPv4Address, IPv4Network, ip_interface
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -48,8 +48,10 @@ class L3Link(BaseModel):
         if self.wan_mode == WanAddressing.MANUAL:
             if not self.wan_cidr or not self.wan_gateway:
                 raise ValueError("WAN manual requiere CIDR y gateway.")
-            ip_interface(self.wan_cidr)
-            ip_interface(f"{self.wan_gateway}/32")
+            wan_interface = ip_interface(self.wan_cidr)
+            gateway = IPv4Address(self.wan_gateway)
+            if gateway not in wan_interface.network:
+                raise ValueError("El gateway WAN debe pertenecer a la red indicada por el CIDR.")
         return self
 
 
@@ -127,8 +129,11 @@ class ConfigurationCreate(BaseModel):
 
 
 class DeploymentRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     apply: bool = False
     confirmation: str | None = Field(default=None, max_length=80)
+    management_confirmation: str | None = Field(default=None, max_length=160, alias="managementConfirmation")
 
 
 class NetemRequest(BaseModel):

@@ -76,6 +76,7 @@ class NetworkAgent:
                 item.get("ifname"): [address.get("local") for group in item.get("addr_info", []) if group.get("family") == "inet" for address in [group]]
                 for item in json.loads(addresses.output or "[]")
             }
+            management = set(self._management_path().get("interfaces", []))
             items = []
             for item in json.loads(links.output):
                 if item.get("ifname") == "lo":
@@ -85,6 +86,7 @@ class NetworkAgent:
                     "name": item["ifname"], "mac": item.get("address", ""), "state": item.get("operstate", "UNKNOWN"),
                     "ips": ip_map.get(item.get("ifname"), []),
                     "rx_bytes": stats.get("rx", {}).get("bytes", 0), "tx_bytes": stats.get("tx", {}).get("bytes", 0),
+                    "is_management": item["ifname"] in management,
                 })
             return items
         except json.JSONDecodeError:
@@ -323,7 +325,7 @@ class NetworkAgent:
                 changed = True
         return CommandResult(True, command, "stopped" if changed else "already-stopped"), changed
 
-    def verify(self, config: TopologyConfig) -> dict:
+    def verify(self, config: TopologyConfig, management: dict | None = None) -> dict:
         if self.runner.mode == "dry-run":
             return {"ok": True, "mode": "dry-run", "message": "Plan validado; no se modificó el host."}
         interface_items = self.interfaces()
@@ -382,20 +384,114 @@ class NetworkAgent:
                         errors.append(f"{member} no pertenece a {bridge}")
         missing = sorted(required - interfaces)
         errors.extend(f"Interfaz ausente: {name}" for name in missing)
-        return {"ok": not errors, "mode": "host", "missing_interfaces": missing, "errors": errors}
+        management_check = self.verify_management_path(management or {})
+        if not management_check["ok"]:
+            errors.extend(management_check["errors"])
+        return {"ok": not errors, "mode": "host", "missing_interfaces": missing, "errors": errors, "management": management_check}
 
-    def preflight(self, config: TopologyConfig) -> dict:
-        """Confirm selected physical interfaces before a host-mode transaction begins."""
-        if self.runner.mode == "dry-run":
-            return {"ok": True, "mode": "dry-run", "missing_interfaces": []}
-        available = {item["name"] for item in self.interfaces()}
+    def preflight(self, config: TopologyConfig, client_ip: str | None = None) -> dict:
+        """Inspect selected interfaces and management routing before a transaction."""
+        interface_items = self.interfaces()
+        available = {item["name"] for item in interface_items}
+        by_name = {item["name"]: item for item in interface_items}
         required: set[str] = set()
         if config.topology == Topology.NAT and config.l3:
             required = {interface for link in config.l3.links for interface in (link.wan, link.lan)}
         elif config.bridge:
             required = {interface for pair in config.bridge.pairs for interface in (pair.input, pair.output)}
         missing = sorted(required - available)
-        return {"ok": not missing, "mode": "host", "missing_interfaces": missing}
+        management = self._management_path(client_ip)
+        management_interfaces = set(management.get("interfaces", []))
+        protected = sorted(required & management_interfaces)
+        management["protected_interfaces"] = protected
+        issues: list[dict] = []
+        for interface in missing:
+            issues.append(self._issue(
+                "error" if self.runner.mode == "host" else "warning", "interface_missing",
+                f"Interfaz no disponible: {interface}",
+                "El host no reporta esta interfaz. En dry-run puede pertenecer al equipo donde se aplicará después.", [interface],
+            ))
+        for interface in protected:
+            issues.append(self._issue(
+                "warning", "management_interface", f"{interface} transporta la administración",
+                "Modificar esta interfaz puede interrumpir ReactUI o SSH. Se activará recuperación automática.", [interface],
+            ))
+        for interface in sorted(required & available):
+            item = by_name[interface]
+            if item.get("state") not in ("UP", "UNKNOWN"):
+                issues.append(self._issue(
+                    "recommendation", "interface_down", f"{interface} está {item.get('state', 'DOWN')}",
+                    "WAN_SIM la activará durante el despliegue; comprueba cableado y enlace.", [interface],
+                ))
+        if not management_interfaces:
+            issues.append(self._issue(
+                "recommendation", "management_unknown", "Ruta de administración no identificada",
+                "Conserva acceso por consola durante el primer despliegue real.", [],
+            ))
+        if config.topology == Topology.BRIDGE and config.bridge:
+            for pair in config.bridge.pairs:
+                addressed = [name for name in (pair.input, pair.output) if by_name.get(name, {}).get("ips")]
+                if addressed:
+                    issues.append(self._issue(
+                        "warning", "bridge_addressed_member", "Bridge con interfaz direccionada",
+                        "Las direcciones actuales pueden dejar de ser alcanzables al convertir el puerto en miembro L2.", addressed,
+                    ))
+        errors = [item for item in issues if item["severity"] == "error"]
+        return {
+            "ok": not errors,
+            "can_apply": not errors,
+            "mode": self.runner.mode,
+            "missing_interfaces": missing,
+            "selected_interfaces": sorted(required),
+            "management_interfaces": sorted(management_interfaces),
+            "protected_interfaces": protected,
+            "requires_management_confirmation": bool(protected),
+            "management": management,
+            "issues": issues,
+        }
+
+    def verify_management_path(self, management: dict) -> dict:
+        original = set(management.get("protected_interfaces") or management.get("interfaces", []))
+        target = str(management.get("target") or "")
+        if self.runner.mode != "host" or not original or not target:
+            return {"ok": True, "interfaces": sorted(original), "errors": []}
+        current = self._management_path(target)
+        current_interfaces = set(current.get("interfaces", []))
+        if original & current_interfaces:
+            return {"ok": True, "interfaces": sorted(current_interfaces), "errors": []}
+        return {
+            "ok": False,
+            "interfaces": sorted(current_interfaces),
+            "errors": [f"La ruta de administración hacia {target} dejó de usar {', '.join(sorted(original))}."],
+        }
+
+    def _management_path(self, client_ip: str | None = None) -> dict:
+        target = client_ip or "1.1.1.1"
+        route = self.runner.probe(["ip", "-j", "route", "get", target])
+        routes: list[dict] = []
+        try:
+            routes = json.loads(route.output or "[]") if route.ok else []
+        except json.JSONDecodeError:
+            routes = []
+        if not routes and client_ip:
+            target = "1.1.1.1"
+            fallback = self.runner.probe(["ip", "-j", "route", "get", target])
+            try:
+                routes = json.loads(fallback.output or "[]") if fallback.ok else []
+            except json.JSONDecodeError:
+                routes = []
+        defaults = self.runner.probe(["ip", "-j", "route", "show", "default"])
+        try:
+            routes.extend(json.loads(defaults.output or "[]") if defaults.ok else [])
+        except json.JSONDecodeError:
+            pass
+        interfaces = sorted({str(item.get("dev")) for item in routes if item.get("dev")})
+        gateways = sorted({str(item.get("gateway")) for item in routes if item.get("gateway")})
+        return {"target": target, "client_ip": client_ip or "", "interfaces": interfaces, "gateways": gateways}
+
+    @staticmethod
+    def _issue(severity: str, code: str, title: str, detail: str, interfaces: list[str]) -> dict:
+        return {"severity": severity, "code": code, "title": title, "detail": detail, "interfaces": interfaces}
 
     def service_statuses(self) -> list[dict]:
         services = (

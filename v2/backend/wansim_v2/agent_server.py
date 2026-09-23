@@ -92,7 +92,7 @@ def plan(payload: dict) -> list[dict]:
 
 @app.post("/v1/preflight")
 def preflight(payload: dict) -> dict:
-    return agent.preflight(config_from(payload))
+    return agent.preflight(config_from(payload), payload.get("client_ip"))
 
 
 @app.post("/v1/apply")
@@ -114,7 +114,7 @@ def apply(payload: dict) -> dict:
 
 @app.post("/v1/verify")
 def verify(payload: dict) -> dict:
-    return agent.verify(config_from(payload))
+    return agent.verify(config_from(payload), payload.get("management"))
 
 
 @app.post("/v1/cleanup-conflicts")

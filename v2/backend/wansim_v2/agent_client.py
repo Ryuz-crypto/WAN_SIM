@@ -76,8 +76,10 @@ class RemoteNetworkAgent:
         result = self._request("POST", "/v1/plan", {"config": config.model_dump(mode="json", by_alias=True)})
         return [CommandAction.model_validate(item) for item in result]  # type: ignore[arg-type]
 
-    def preflight(self, config: TopologyConfig) -> dict:
-        return self._request("POST", "/v1/preflight", {"config": config.model_dump(mode="json", by_alias=True)})  # type: ignore[return-value]
+    def preflight(self, config: TopologyConfig, client_ip: str | None = None) -> dict:
+        return self._request("POST", "/v1/preflight", {
+            "config": config.model_dump(mode="json", by_alias=True), "client_ip": client_ip,
+        })  # type: ignore[return-value]
 
     def apply(self, actions: Iterable[CommandAction], config: TopologyConfig | None = None) -> ApplyOutcome:
         result = self._request("POST", "/v1/apply", {
@@ -86,8 +88,10 @@ class RemoteNetworkAgent:
         })
         return ApplyOutcome(result["results"], [CommandAction.model_validate(item) for item in result["applied_actions"]])  # type: ignore[index]
 
-    def verify(self, config: TopologyConfig) -> dict:
-        return self._request("POST", "/v1/verify", {"config": config.model_dump(mode="json", by_alias=True)})  # type: ignore[return-value]
+    def verify(self, config: TopologyConfig, management: dict | None = None) -> dict:
+        return self._request("POST", "/v1/verify", {
+            "config": config.model_dump(mode="json", by_alias=True), "management": management or {},
+        })  # type: ignore[return-value]
 
     def cleanup_conflicts(self, previous: Iterable[CommandAction], current: Iterable[CommandAction]) -> list[dict]:
         return self._request("POST", "/v1/cleanup-conflicts", {"previous": self._actions(previous), "current": self._actions(current)})  # type: ignore[return-value]

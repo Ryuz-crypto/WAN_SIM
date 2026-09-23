@@ -11,6 +11,7 @@ services:
       WANSIM_V2_API_KEY: ${WANSIM_V2_API_KEY:?Set an operator API key before starting Compose}
       WANSIM_V2_AGENT_TOKEN: ${WANSIM_V2_AGENT_TOKEN:?Set the host agent token before starting Compose}
       WANSIM_V2_AGENT_SOCKET: /run/wansim/agent.sock
+      WANSIM_V2_CONFIRMATION_TIMEOUT: ${WANSIM_V2_CONFIRMATION_TIMEOUT:-45}
     group_add:
       - "${WANSIM_GID:?Set the wansim host group id}"
     volumes:

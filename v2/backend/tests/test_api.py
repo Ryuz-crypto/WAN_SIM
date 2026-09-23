@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -50,6 +51,55 @@ class RollbackFailingRunner(FailingRunner):
             self.commands.append(command)
             return CommandResult(False, command, "forced rollback failure")
         return super().run(command, **kwargs)
+
+
+class ManagementRunner(CommandRunner):
+    def __init__(self) -> None:
+        self.mode = "host"
+        self.commands: list[list[str]] = []
+        self.addresses = {"wan0": {"192.0.2.2"}, "lan0": set()}
+        self.routes = [{"dst": "default", "gateway": "192.0.2.1", "dev": "wan0", "metric": 100}]
+
+    def run(self, command: list[str], **_: object):
+        from wansim_v2.network import CommandResult
+
+        self.commands.append(command)
+        if command[:3] == ["ip", "addr", "replace"]:
+            self.addresses.setdefault(command[-1], set()).add(command[3].split("/")[0])
+        elif command[:3] == ["ip", "addr", "del"]:
+            self.addresses.setdefault(command[-1], set()).discard(command[3].split("/")[0])
+        elif command[:4] == ["ip", "route", "replace", "default"]:
+            self.routes = [{"dst": "default", "gateway": command[5], "dev": command[7], "metric": int(command[9])}]
+        return CommandResult(True, command, "ok")
+
+    def probe(self, command: list[str], **_: object):
+        from wansim_v2.network import CommandResult
+
+        self.commands.append(command)
+        if command == ["ip", "-j", "-s", "link", "show"]:
+            links = [{"ifname": name, "operstate": "UP", "address": f"00:00:00:00:00:0{index}", "stats64": {}} for index, name in enumerate(("wan0", "lan0"), start=1)]
+            return CommandResult(True, command, json.dumps(links))
+        if command == ["ip", "-j", "addr", "show"]:
+            payload = [{"ifname": name, "addr_info": [{"family": "inet", "local": address} for address in addresses]} for name, addresses in self.addresses.items()]
+            return CommandResult(True, command, json.dumps(payload))
+        if command[:5] == ["ip", "-j", "route", "get", command[-1]]:
+            return CommandResult(True, command, json.dumps([{"dst": command[-1], "gateway": "192.0.2.1", "dev": "wan0"}]))
+        if command in (["ip", "-j", "route", "show"], ["ip", "-j", "route", "show", "default"]):
+            return CommandResult(True, command, json.dumps(self.routes))
+        if command[:4] == ["ip", "link", "show", command[-1]]:
+            return CommandResult(command[-1] in self.addresses, command, "present")
+        if command[0:1] == ["iptables"] and "-C" in command:
+            return CommandResult(True, command, "present")
+        if command[0:1] == ["iptables-save"]:
+            output = f"*{command[-1]}\nCOMMIT\n" if "-t" in command else ""
+            return CommandResult(True, command, output)
+        if command[:2] == ["systemctl", "is-active"]:
+            return CommandResult(False, command, "inactive")
+        if command[:3] == ["sysctl", "-n", "net.ipv4.ip_forward"]:
+            return CommandResult(True, command, "0")
+        if command[:2] == ["tc", "qdisc"]:
+            return CommandResult(True, command, "")
+        return CommandResult(False, command, "missing")
 
 
 class StickyNftChainRunner(CommandRunner):
@@ -160,6 +210,12 @@ class ApiTests(unittest.TestCase):
         payload["config"]["l3"]["links"][0]["wanGateway"] = "not-an-ip"
         self.assertEqual(self.client.post("/api/v2/configurations", json=payload).status_code, 422)
 
+    def test_manual_gateway_must_be_inside_wan_network(self) -> None:
+        payload = self.nat_payload()
+        payload["config"]["l3"]["links"][0]["wanGateway"] = "198.51.100.1"
+        response = self.client.post("/api/v2/configurations", json=payload)
+        self.assertEqual(response.status_code, 422)
+
     def test_rollback_marks_deployment(self) -> None:
         created = self.client.post("/api/v2/configurations", json=self.nat_payload()).json()
         deployment = self.client.post(f"/api/v2/configurations/{created['id']}/deploy", json={"apply": True}).json()
@@ -207,6 +263,57 @@ class ApiTests(unittest.TestCase):
         denied = client.post(f"/api/v2/configurations/{created['id']}/deploy", json={"apply": True})
         self.assertEqual(denied.status_code, 409)
         self.assertFalse(any(command[:3] == ["ip", "addr", "replace"] for command in runner.commands))
+
+    def test_review_identifies_management_interface_and_compares_change(self) -> None:
+        runner = ManagementRunner()
+        client = TestClient(create_app(Path(self.directory.name) / "management-review", NetworkAgent(runner), api_key=API_KEY), headers=AUTH_HEADERS)
+        payload = self.nat_payload()
+        payload["config"]["dhcpEnabled"] = False
+        created = client.post("/api/v2/configurations", json=payload).json()
+        review = client.post(f"/api/v2/configurations/{created['id']}/plan", headers={**AUTH_HEADERS, "X-Forwarded-For": "203.0.113.20"}).json()
+        self.assertTrue(review["preflight"]["can_apply"])
+        self.assertEqual(review["preflight"]["protected_interfaces"], ["wan0"])
+        self.assertTrue(any(item["code"] == "management_interface" for item in review["preflight"]["issues"]))
+        self.assertIn("RIESGO wan0", review["management_confirmation_phrase"])
+        self.assertTrue(review["comparison"]["changes"])
+
+    def test_management_change_waits_for_connectivity_confirmation(self) -> None:
+        runner = ManagementRunner()
+        app = create_app(Path(self.directory.name) / "management-confirm", NetworkAgent(runner), api_key=API_KEY)
+        client = TestClient(app, headers={**AUTH_HEADERS, "X-Forwarded-For": "203.0.113.20"})
+        payload = self.nat_payload()
+        payload["config"]["dhcpEnabled"] = False
+        created = client.post("/api/v2/configurations", json=payload).json()
+        review = client.post(f"/api/v2/configurations/{created['id']}/plan").json()
+        denied = client.post(f"/api/v2/configurations/{created['id']}/deploy", json={"apply": True, "confirmation": f"APLICAR {created['id']}"})
+        self.assertEqual(denied.status_code, 409)
+        pending = client.post(f"/api/v2/configurations/{created['id']}/deploy", json={
+            "apply": True,
+            "confirmation": f"APLICAR {created['id']}",
+            "managementConfirmation": review["management_confirmation_phrase"],
+        }).json()
+        self.assertEqual(pending["status"], "AWAITING_CONFIRMATION")
+        confirmed = client.post(f"/api/v2/deployments/{pending['id']}/confirm")
+        self.assertEqual(confirmed.status_code, 200)
+        self.assertEqual(confirmed.json()["status"], "APPLIED")
+
+    def test_management_confirmation_timeout_rolls_back(self) -> None:
+        runner = ManagementRunner()
+        app = create_app(Path(self.directory.name) / "management-timeout", NetworkAgent(runner), api_key=API_KEY)
+        client = TestClient(app, headers={**AUTH_HEADERS, "X-Forwarded-For": "203.0.113.20"})
+        payload = self.nat_payload()
+        payload["config"]["dhcpEnabled"] = False
+        created = client.post("/api/v2/configurations", json=payload).json()
+        review = client.post(f"/api/v2/configurations/{created['id']}/plan").json()
+        pending = client.post(f"/api/v2/configurations/{created['id']}/deploy", json={
+            "apply": True,
+            "confirmation": f"APLICAR {created['id']}",
+            "managementConfirmation": review["management_confirmation_phrase"],
+        }).json()
+        app.state.service._expire_confirmation(pending["id"])
+        rolled_back = client.get(f"/api/v2/deployments/{pending['id']}").json()
+        self.assertEqual(rolled_back["status"], "ROLLED_BACK")
+        self.assertEqual(rolled_back["result"]["reason"], "management-confirmation-timeout")
 
     def test_rollback_removes_nft_chains_absent_from_snapshot(self) -> None:
         runner = StickyNftChainRunner()

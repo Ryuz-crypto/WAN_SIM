@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from ipaddress import ip_address
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Request, status
@@ -17,6 +18,16 @@ from .repository import ConfigRepository
 from .security import ApiKeyGuard
 from .service import DeploymentService
 from .telegram import TelegramGateway, TelegramService
+
+
+def request_client_ip(request: Request) -> str | None:
+    candidate = request.headers.get("X-Forwarded-For", "").split(",", 1)[0].strip()
+    candidate = candidate or request.headers.get("X-Real-IP", "").strip()
+    try:
+        parsed = ip_address(candidate)
+    except ValueError:
+        return None
+    return str(parsed) if parsed.version == 4 else None
 
 
 def create_app(data_dir: Path | None = None, agent: NetworkAgent | None = None, telegram_gateway: TelegramGateway | None = None, api_key: str | None = None) -> FastAPI:
@@ -82,16 +93,20 @@ def create_app(data_dir: Path | None = None, agent: NetworkAgent | None = None, 
         return repository.active_configuration()
 
     @app.post("/api/v2/configurations/{configuration_id}/plan")
-    def plan_configuration(configuration_id: str) -> dict:
+    def plan_configuration(configuration_id: str, request: Request) -> dict:
         configuration = get_configuration(configuration_id)
-        return {"configuration_id": configuration_id, "execution_mode": service.agent.execution_mode, "actions": service.plan(configuration)}
+        return service.review(configuration, request_client_ip(request))
 
     @app.post("/api/v2/configurations/{configuration_id}/deploy", response_model=DeploymentRecord)
-    def deploy_configuration(configuration_id: str, request: DeploymentRequest) -> DeploymentRecord:
+    def deploy_configuration(configuration_id: str, payload: DeploymentRequest, request: Request) -> DeploymentRecord:
         configuration = get_configuration(configuration_id)
-        if request.apply and service.agent.execution_mode == "host" and request.confirmation != f"APLICAR {configuration_id}":
+        review = service.review(configuration, request_client_ip(request))
+        if payload.apply and service.agent.execution_mode == "host" and payload.confirmation != f"APLICAR {configuration_id}":
             raise HTTPException(status_code=409, detail="El modo host requiere confirmar el identificador exacto desde ReactUI.")
-        return service.deploy(configuration, request.apply)
+        expected_risk = review["management_confirmation_phrase"]
+        if payload.apply and service.agent.execution_mode == "host" and expected_risk and payload.management_confirmation != expected_risk:
+            raise HTTPException(status_code=409, detail="La interfaz de administración requiere la confirmación de riesgo exacta.")
+        return service.deploy(configuration, payload.apply, request_client_ip(request))
 
     @app.get("/api/v2/deployments/{deployment_id}", response_model=DeploymentRecord)
     def get_deployment(deployment_id: str) -> DeploymentRecord:
@@ -109,6 +124,14 @@ def create_app(data_dir: Path | None = None, agent: NetworkAgent | None = None, 
         deployment = get_deployment(deployment_id)
         try:
             return service.rollback(deployment)
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.post("/api/v2/deployments/{deployment_id}/confirm", response_model=DeploymentRecord)
+    def confirm_management_connectivity(deployment_id: str) -> DeploymentRecord:
+        deployment = get_deployment(deployment_id)
+        try:
+            return service.confirm_management(deployment)
         except ValueError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
