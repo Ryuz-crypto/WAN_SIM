@@ -160,9 +160,16 @@ def main() -> None:
             })
             bridge_record = repository.create_configuration("Integración Bridge", bridge_config)
             bridge_deployment = service.deploy(bridge_record, apply=True)
+            management_guard = bridge_deployment.status == "AWAITING_CONFIRMATION"
+            if management_guard:
+                bridge_deployment = service.confirm_management(bridge_deployment)
             assert bridge_deployment.status == "APPLIED", bridge_deployment
             assert exists("br_wan1") and exists("br_wan2"), "No se crearon los bridges L2"
-            report["checks"]["bridge"] = {"status": bridge_deployment.status, "pairs": 2}
+            report["checks"]["bridge"] = {
+                "status": bridge_deployment.status,
+                "pairs": 2,
+                "management_guard_confirmed": management_guard,
+            }
 
             snapshot = next(item for item in repository.list_snapshots() if item["configuration_id"] == configuration.id)
             assert snapshot["integrity"], snapshot
