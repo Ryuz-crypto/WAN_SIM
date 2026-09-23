@@ -88,6 +88,7 @@ class InstallerStructureTests(unittest.TestCase):
         self.assertIn('inline: "bash /vagrant/v2/integration/installer-lifecycle.sh"', vagrantfile)
         dockerfile = (ROOT / "v2/integration/vagrant-docker/Dockerfile").read_text(encoding="utf-8")
         self.assertIn("curl-minimal", dockerfile)
+        self.assertIn("openssh-clients", dockerfile)
         self.assertIn("ssh-keygen -A", dockerfile)
         for evidence in (
             "control_plane_acceptance.py", '"storage-driver":"vfs"', "--https pem",
