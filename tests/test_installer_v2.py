@@ -100,6 +100,11 @@ class InstallerStructureTests(unittest.TestCase):
         workspace = (ROOT / "v2/frontend/pnpm-workspace.yaml").read_text(encoding="utf-8")
         self.assertIn('packages:\n  - "."', workspace)
 
+    def test_rpm_package_install_reuses_curl_minimal(self) -> None:
+        packages = (ROOT / "installer/packages.sh").read_text(encoding="utf-8")
+        self.assertIn("if ! command_exists curl", packages)
+        self.assertIn('dnf -y install "${packages[@]}"', packages)
+
 
 if __name__ == "__main__":
     unittest.main()
