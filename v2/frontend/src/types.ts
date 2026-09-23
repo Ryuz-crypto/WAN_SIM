@@ -33,3 +33,25 @@ export type PlanReview = {
   configuration_id: string; execution_mode: string; actions: Action[]; preflight: PreflightReport
   comparison: ConfigurationComparison; management_confirmation_phrase: string
 }
+export type UserRole = 'viewer' | 'operator' | 'admin'
+export type Identity = { id: string; username: string; role: UserRole; auth: 'session' | 'api_key'; expires_at?: string }
+export type User = { id: string; username: string; role: UserRole; enabled: boolean; created_at: string; updated_at: string }
+export type RecoverySnapshot = {
+  id: string; configuration_id: string; created_at: string; version: string; checksum: string
+  integrity: boolean; topology: string
+}
+export type HostBackup = {
+  name: string; size: number; created_at: string; checksum: string; integrity: boolean
+}
+export type DoctorCheck = {
+  component: string; status: 'ok' | 'warning' | 'error'; title: string; detail: string
+  remediation: string; restart_service: string
+}
+export type DoctorReport = {
+  generated_at: string; status: 'ok' | 'warning' | 'error'
+  summary: { ok: number; warning: number; error: number }; checks: DoctorCheck[]
+}
+export type AuditEvent = {
+  id: string; actor: string; role: string; action: string; target: string
+  detail: Record<string, unknown>; created_at: string
+}

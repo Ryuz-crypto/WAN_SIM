@@ -13,6 +13,7 @@ jobs:
       - name: Bash syntax
         run: |
           bash -n WANsim2.sh install-v2.sh installer/*.sh installer/bin/*
+          bash -n packaging/*.sh packaging/wansim-install
           bash install-v2.sh --help >/dev/null
           for test in tests/test_installer_*.sh; do bash "$test"; done
       - name: L3 access and VLAN regression tests
@@ -48,6 +49,7 @@ jobs:
         run: |
           NODE_PATH="$RUNNER_TEMP/wansim-ui/node_modules" node tests/check_reactui.cjs
           NODE_PATH="$RUNNER_TEMP/wansim-ui/node_modules" node tests/check_v2_wizard.cjs
+          NODE_PATH="$RUNNER_TEMP/wansim-ui/node_modules" node tests/check_v2_admin.cjs
       - uses: actions/upload-artifact@v6
         if: always()
         with:

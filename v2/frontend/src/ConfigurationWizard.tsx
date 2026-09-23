@@ -12,6 +12,7 @@ type Props = {
   configuration: Configuration | null
   review: PlanReview | null
   busy: boolean
+  canOperate: boolean
   setName: (value: string) => void
   setConfig: Dispatch<SetStateAction<Config>>
   onReview: () => void
@@ -91,14 +92,14 @@ export function ConfigurationWizard(props: Props) {
 
       {step === 3 && <div className="wizard-body">
         <Diagram config={config} />
-        <div className="button-row"><button className="primary-button" disabled={props.busy} onClick={props.onReview}><RefreshCw size={17} />Revisar cambio</button><button className="secondary-button" onClick={props.onReset}><RotateCcw size={17} />Restablecer</button></div>
+          <div className="button-row"><button className="primary-button" disabled={props.busy || !props.canOperate} onClick={props.onReview}><RefreshCw size={17} />Revisar cambio</button><button className="secondary-button" onClick={props.onReset}><RotateCcw size={17} />Restablecer</button></div>
         {review && <>
           <div className="preflight-summary"><span className={errors ? 'bad' : 'good'}>{errors} errores</span><span className={warnings ? 'warn' : 'good'}>{warnings} advertencias</span><span>{review.actions.length} acciones</span></div>
           <div className="issue-list">{review.preflight.issues.map((issue, index) => <div key={`${issue.code}-${index}`} className={`issue ${issue.severity}`}>{issue.severity === 'error' ? <X size={17} /> : issue.severity === 'warning' ? <AlertTriangle size={17} /> : <CheckCircle2 size={17} />}<div><strong>{issue.title}</strong><span>{issue.detail}</span></div></div>)}</div>
           <div className="comparison"><div><span>Actual</span>{review.comparison.current.map(item => <p key={item}>{item}</p>)}</div><div><span>Propuesta</span>{review.comparison.proposed.map(item => <p key={item}>{item}</p>)}</div></div>
           <div className="change-list"><strong>Cambios</strong>{review.comparison.changes.map(item => <p key={item}>{item}</p>)}</div>
           <details className="technical-plan"><summary><Save size={15} />Plan técnico ({review.actions.length})</summary><ol className="action-list">{review.actions.map(action => <li key={action.id}><span className={`phase ${action.phase}`}>{action.phase}</span><div><strong>{action.description}</strong><code>{action.command.join(' ')}</code></div></li>)}</ol></details>
-          <div className="button-row"><button className="primary-button" disabled={!props.configuration || !review.preflight.can_apply || props.busy} onClick={props.onDeploy}><Play size={17} />Desplegar cambio</button></div>
+          <div className="button-row"><button className="primary-button" disabled={!props.canOperate || !props.configuration || !review.preflight.can_apply || props.busy} onClick={props.onDeploy}><Play size={17} />Desplegar cambio</button></div>
         </>}
       </div>}
 
