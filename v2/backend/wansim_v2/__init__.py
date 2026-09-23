@@ -1,3 +1,3 @@
 """WAN_SIM 2.0 control plane."""
 
-__version__ = "2.0.4-prebeta"
+__version__ = "2.0.5-prestable"

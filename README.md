@@ -1,10 +1,10 @@
 # Ryuz WAN Simulator
 
-**Instalación recomendada: [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable)** | **Desarrollo actual: `2.0.4-prebeta`** | **Autor**: decameru@outlook.com
+**Instalación recomendada: [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable)** | **Desarrollo actual: `2.0.5-prestable`** | **Autor**: decameru@outlook.com
 
 Ryuz WAN Simulator es una herramienta para simular condiciones WAN en Linux. Permite aplicar latencia, jitter y perdida de paquetes sobre interfaces fisicas, VLANs o bridges L2, con un dashboard Flask para control operativo.
 
-La última versión estable es [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable). Es la versión que debe instalarse en laboratorios y entornos operativos. La rama `main` contiene WAN_SIM 2.0 en estado pre-beta y no sustituye la instalación estable.
+La última versión estable es [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable). Es la versión que debe instalarse en laboratorios y entornos operativos. La rama `main` contiene WAN_SIM 2.0 en estado pre-estable y no sustituye la instalación estable.
 
 | Necesidad | Qué usar | Estado |
 | --- | --- | --- |
@@ -19,7 +19,7 @@ La última versión estable es [`v1.119-stable`](https://github.com/Ryuz-crypto/
 - Modo Bridge L2 con 1 a 3 pares de interfaces entrada/salida.
 - Control de latencia, jitter y perdida por interfaz usando `tc/netem`.
 - Dashboard web Flask en el puerto `5000`, con administracion HTTPS desde la interfaz web.
-- Seccion `ReactUI pre-beta` para preparar la evolucion grafica de configuracion L3/L2, Telegram multi-bot, daemons y leases DHCP.
+- Seccion `ReactUI pre-estable` para preparar la evolucion grafica de configuracion L3/L2, Telegram multi-bot, daemons y leases DHCP.
 - API FastAPI 2.0 con configuraciones versionadas, plan de despliegue, snapshots y rollback transaccional en modo seguro `dry-run`.
 - DHCP automatico para VLANs y puertos LAN de acceso sin etiqueta.
 - Persistencia L2 mediante `wansim-l2-persist.service`.
@@ -46,7 +46,7 @@ Notas por familia:
 
 ## Instalación Estable
 
-Para un laboratorio operativo, instala siempre la última etiqueta estable. No uses `main` para instalar el simulador mientras WAN_SIM 2.0 permanezca en pre-beta:
+Para un laboratorio operativo, instala siempre la última etiqueta estable. No uses `main` para instalar el simulador mientras WAN_SIM 2.0 permanezca en pre-estable:
 
 ```bash
 git clone --branch v1.119-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git
@@ -69,7 +69,7 @@ La etiqueta es inmutable y apunta al commit validado con L3/NAT multi-WAN, DHCP 
 
 WAN_SIM 2.0 es una plataforma separada de la instalación estable: incluye FastAPI como plano de control y ReactUI como consola de operación. Está disponible solamente en `main`, inicia en `dry-run` y debe instalarse en una VM o host de laboratorio dedicado.
 
-No reemplaza `v1.119-stable`, no instala ni modifica la configuración creada por V1. Compose está disponible para el plano de control en `dry-run`; el agente que cambia la red sigue siendo nativo del host Linux y no se considera producción durante la pre-beta.
+No reemplaza `v1.119-stable`, no instala ni modifica la configuración creada por V1. Compose está disponible para el plano de control en `dry-run`; el agente que cambia la red sigue siendo nativo del host Linux y no se considera producción durante la etapa pre-estable.
 
 ### 1. Obtener La Rama De Desarrollo
 
@@ -220,7 +220,7 @@ https://<IP_DEL_SERVIDOR>:5000
 
 Esta sección no forma parte de la instalación estable. Usa una copia de laboratorio en la rama `main`; la consola ReactUI actual se ejecuta por separado desde `v2/frontend` y consume la API FastAPI en `v2/backend`.
 
-La pre-beta permite preparar L3/NAT o Bridge L2, validar las restricciones, revisar un plan de despliegue, consultar interfaces, tráfico, leases DHCP y daemons, y probar perfiles `tc/netem`. El modo predeterminado es `dry-run`: no cambia interfaces ni servicios del host.
+La versión pre-estable permite preparar L3/NAT o Bridge L2, validar las restricciones, revisar un plan de despliegue, consultar interfaces, tráfico, leases DHCP y daemons, y probar perfiles `tc/netem`. El modo predeterminado es `dry-run`: no cambia interfaces ni servicios del host.
 
 ### LAN L3 Sin Etiqueta
 
@@ -240,7 +240,7 @@ git switch --detach v1.119-stable
 ./WANsim2.sh
 ```
 
-El script regenera el dashboard; recarga el navegador después. ReactUI 2.0 continúa en pre-beta; la referencia de instalación es `v1.119-stable`.
+El script regenera el dashboard; recarga el navegador después. ReactUI 2.0 continúa en pre-estable; la referencia de instalación es `v1.119-stable`.
 
 ## API 2.0: Configuracion Y Despliegue
 
@@ -272,7 +272,7 @@ npm run dev -- --host 0.0.0.0
 
 Abre `http://<IP_DEL_SERVIDOR>:5173`. Vite redirige `/api` al backend en el puerto `8080`. La interfaz permite configurar y validar topologías L3/NAT o Bridge L2, revisar el plan antes de desplegar, aplicar o reiniciar `tc/netem`, consultar interfaces y tráfico, leases DHCP, estado/reinicio de daemons y el historial con rollback.
 
-Para generar los archivos estáticos de la interfaz: `npm run build`. Sigue siendo una pre-beta: en modo predeterminado los despliegues se simulan mediante `dry-run` y no modifican la red del host.
+Para generar los archivos estáticos de la interfaz: `npm run build`. Sigue siendo una versión pre-estable: en modo predeterminado los despliegues se simulan mediante `dry-run` y no modifican la red del host.
 
 ### Telegram Desde FastAPI
 
@@ -341,6 +341,13 @@ Antes de ejecutar en un servidor compartido, revisa:
 Si una ejecucion falla, el script ejecuta rollback automatico de servicios, dashboard generado, virtualenv parcial, bridges/VLANs generadas y archivos temporales. El log principal se conserva en `~/emix_abundix.log`.
 
 ## Release Notes
+
+### Version 2.0.5-prestable
+
+- Se incorpora una matriz real y automática para Ubuntu 24.04, Debian 12, Fedora 42 y Rocky Linux 9, con reportes JSON por distribución.
+- Cada entorno aplica dos WAN, una LAN VLAN, una LAN de acceso, NAT, forwarding y rollback dentro de un namespace de red desechable.
+- Se agrega compatibilidad con Python 3.9 para Rocky Linux y restauración correcta de snapshots `iptables-nft` vacíos.
+- La matriz y la suite general aprobaron en [GitHub Actions run 35820610126](https://github.com/Ryuz-crypto/WAN_SIM/actions/runs/35820610126); V1.119 continúa como versión estable recomendada.
 
 ### Version 2.0.4-prebeta
 

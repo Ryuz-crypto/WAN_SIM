@@ -1,6 +1,6 @@
 # Project Structure
 
-Version 2.0.4-prebeta keeps `WANsim2.sh` as the main entrypoint while the current stable release remains `v1.119-stable`.
+Version 2.0.5-prestable keeps `WANsim2.sh` as the main entrypoint while the current stable release remains `v1.119-stable`.
 
 Current layout:
 
