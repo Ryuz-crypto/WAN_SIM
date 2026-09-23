@@ -74,12 +74,13 @@ def write_report(report: dict) -> None:
 def cleanup() -> None:
     for name in INTERFACES:
         command("ip", "link", "del", name, check=False)
-    command("iptables", "-t", "nat", "-D", "POSTROUTING", "-j", "WANSIM_POSTROUTING", check=False)
-    command("iptables", "-t", "nat", "-F", "WANSIM_POSTROUTING", check=False)
-    command("iptables", "-t", "nat", "-X", "WANSIM_POSTROUTING", check=False)
-    command("iptables", "-t", "filter", "-D", "FORWARD", "-j", "WANSIM_FORWARD", check=False)
-    command("iptables", "-t", "filter", "-F", "WANSIM_FORWARD", check=False)
-    command("iptables", "-t", "filter", "-X", "WANSIM_FORWARD", check=False)
+    for table, chain, parent in (("nat", "WANSIM_POSTROUTING", "POSTROUTING"), ("filter", "WANSIM_FORWARD", "FORWARD")):
+        for _ in range(32):
+            if not succeeds("iptables", "-t", table, "-C", parent, "-j", chain):
+                break
+            command("iptables", "-t", table, "-D", parent, "-j", chain, check=False)
+        command("iptables", "-t", table, "-F", chain, check=False)
+        command("iptables", "-t", table, "-X", chain, check=False)
 
 
 def main() -> None:
@@ -104,6 +105,8 @@ def main() -> None:
     }
     cleanup()
     try:
+        assert not chain_exists("nat", "WANSIM_POSTROUTING"), "No se pudo limpiar la cadena NAT antes de la prueba"
+        assert not chain_exists("filter", "WANSIM_FORWARD"), "No se pudo limpiar la cadena FORWARD antes de la prueba"
         forwarding_before = output("sysctl", "-n", "net.ipv4.ip_forward")
         for name in INTERFACES:
             command("ip", "link", "add", name, "type", "dummy")
