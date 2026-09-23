@@ -4,14 +4,14 @@ Simulador WAN para Linux con soporte L3/NAT, Bridge L2, VLAN, puertos LAN sin et
 
 **Versión estable recomendada:** [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable)
 
-**Versión más actual:** [`v2.0.8-prestable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v2.0.8-prestable)
+**Versión más actual:** [`v2.0.9-prestable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v2.0.9-prestable)
 
 **Autor:** decameru@outlook.com
 
 | Uso | Versión | Instalador |
 | --- | --- | --- |
 | Producción, centros de datos y laboratorios operativos | `v1.119-stable` | `./WANsim2.sh` |
-| Evaluación de FastAPI, ReactUI y administración centralizada | `v2.0.8-prestable` | `sudo ./install-v2.sh install` |
+| Evaluación de FastAPI, ReactUI y administración centralizada | `v2.0.9-prestable` | `sudo ./install-v2.sh install` |
 
 V1 y V2 deben probarse en directorios o máquinas diferentes. V2 sigue siendo pre-estable y comienza en modo seguro `dry-run`.
 
@@ -82,7 +82,7 @@ http://<IP_DEL_SERVIDOR>:5000
 
 El asistente permite elegir L3/NAT o Bridge L2, interfaces, VLAN/acceso, direccionamiento WAN, DHCP, Telegram y HTTPS.
 
-## Instalar V2.0.8 Pre-Stable
+## Instalar V2.0.9 Pre-Stable
 
 V2 es para laboratorio. Su instalador incorpora Docker, FastAPI, ReactUI, proxy HTTPS, agente de red, base de datos y servicios `systemd`.
 
@@ -91,7 +91,7 @@ V2 es para laboratorio. Su instalador incorpora Docker, FastAPI, ReactUI, proxy 
 ```bash
 sudo apt-get update
 sudo apt-get install -y git sudo
-git clone --branch v2.0.8-prestable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
+git clone --branch v2.0.9-prestable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
 cd WAN_SIM-v2
 chmod +x install-v2.sh
 sudo ./install-v2.sh install
@@ -102,7 +102,7 @@ sudo ./install-v2.sh install
 ```bash
 sudo dnf makecache -y
 sudo dnf install -y git sudo
-git clone --branch v2.0.8-prestable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
+git clone --branch v2.0.9-prestable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
 cd WAN_SIM-v2
 chmod +x install-v2.sh
 sudo ./install-v2.sh install
@@ -113,7 +113,7 @@ sudo ./install-v2.sh install
 ```bash
 sudo dnf makecache -y
 sudo dnf install -y git sudo
-git clone --branch v2.0.8-prestable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
+git clone --branch v2.0.9-prestable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
 cd WAN_SIM-v2
 chmod +x install-v2.sh
 sudo ./install-v2.sh install
@@ -123,7 +123,7 @@ Comprueba que instalaste la etiqueta correcta:
 
 ```bash
 git describe --tags --exact-match
-# Debe mostrar: v2.0.8-prestable
+# Debe mostrar: v2.0.9-prestable
 ```
 
 Consulta el estado y la clave inicial:
@@ -145,7 +145,9 @@ sudo wansim logs
 sudo wansim doctor --export /tmp/wansim-doctor.txt
 sudo wansim backup
 sudo wansim restore /var/backups/wansim/ARCHIVO.tar.gz
-sudo wansim update v2.0.8-prestable
+sudo wansim upgrade v2.0.9-prestable
+sudo wansim rollback-version
+sudo wansim support-bundle
 ```
 
 V2 utiliza `dry-run` de forma predeterminada. Para permitir cambios reales en un servidor de laboratorio:
@@ -179,21 +181,35 @@ sudo ./install-v2.sh install --config installer.example.yaml --non-interactive
 
 No guardes contraseñas directamente en YAML. Utiliza `adminKeyFile` y `tlsPasswordFile` con archivos accesibles únicamente por `root`.
 
-## Novedades De V2.0.8
+## Primer Acceso V2
+
+La clave generada durante la instalación se usa una sola vez para crear el primer administrador:
+
+```bash
+sudo sed -n 's/^WANSIM_V2_API_KEY="\(.*\)"$/\1/p' /etc/wansim/wansim.env
+```
+
+En ReactUI selecciona **Clave heredada**, entra a **Acceso**, crea un usuario `admin`, cierra sesión y vuelve a ingresar con usuario y contraseña. Después podrás crear roles `viewer`, `operator` y `admin`.
+
+## Novedades De V2.0.9
 
 - Asistente ReactUI de cuatro pasos con detección y recomendación de interfaces.
 - Preflight con errores, advertencias y recomendaciones antes de desplegar.
 - Comparación entendible entre la topología activa y la propuesta.
 - Protección de la interfaz administrativa mediante doble confirmación.
 - Watchdog que revierte el cambio si ReactUI no confirma conectividad a tiempo.
-- Validación de gateways, interfaces, subredes y parámetros L2/L3.
+- Centro de recuperación con snapshots versionados, checksum y restauración desde ReactUI.
+- Doctor visual, exportación de soporte y reinicios controlados.
+- Usuarios, sesiones, roles y auditoría por operador.
+- Paquetes `.deb`/`.rpm`, checksums, procedencia y nuevos comandos de mantenimiento.
+- Pruebas de Bridge, `netem`, recuperación, disco crítico e interrupción de SQLite.
 
 La suite general y la matriz automática Linux aprobaron para esta etiqueta:
 
 - [WAN_SIM checks](https://github.com/Ryuz-crypto/WAN_SIM/actions/workflows/checks.yml)
 - [Ubuntu, Debian, Fedora y Rocky](https://github.com/Ryuz-crypto/WAN_SIM/actions/workflows/linux-matrix.yml)
 
-La matriz Vagrant completa no fue ejecutada en el host Windows de desarrollo por no disponer de Vagrant/VirtualBox. V2 conserva por ello su estado **pre-stable**.
+El workflow Vagrant requiere un runner Linux con VirtualBox o VMware y todavía necesita una ejecución manual aprobada. V2 conserva por ello su estado **pre-stable**.
 
 ## Documentación
 

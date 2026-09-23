@@ -1,6 +1,6 @@
 # Operación De WAN_SIM 2
 
-Esta guía aplica a `v2.0.8-prestable`. La versión estable para entornos operativos continúa siendo `v1.119-stable`.
+Esta guía aplica a `v2.0.9-prestable`. La versión estable para entornos operativos continúa siendo `v1.119-stable`.
 
 ## Estado Y Diagnóstico
 
@@ -38,11 +38,27 @@ El respaldo detiene brevemente el plano de control para mantener consistente SQL
 ## Actualización Y Reparación
 
 ```bash
-sudo wansim update v2.0.8-prestable
+sudo wansim upgrade v2.0.9-prestable
+sudo wansim rollback-version
 sudo wansim repair
 ```
 
 `update` sólo descarga una etiqueta V2 permitida, comprueba que el checkout coincide exactamente, respalda y ejecuta el instalador transaccional. `repair` reinstala los componentes de la versión local conservando configuración, secretos, certificados y datos.
+
+## Recuperación, Doctor Y Soporte
+
+ReactUI muestra snapshots transaccionales y respaldos completos del host con fecha, versión, topología, checksum e integridad. Sólo un `admin` puede restaurarlos o volver al último estado funcional. Cada restauración queda registrada en auditoría.
+
+Doctor reúne agente, interfaces, servicios, SQLite, espacio, Telegram y TLS. El reporte puede descargarse desde ReactUI o generarse sin secretos desde consola:
+
+```bash
+sudo wansim doctor --export /var/tmp/wansim-doctor.txt
+sudo wansim support-bundle
+```
+
+## Usuarios Y Roles
+
+La clave API de instalación continúa disponible para transición. Úsala para crear el primer administrador en **Acceso** y opera después con sesiones personales. `viewer` consulta, `operator` aplica topologías y `admin` recupera, reinicia y administra usuarios. Cambios, restauraciones, reinicios y rotaciones quedan auditados.
 
 ## Modo De Red
 

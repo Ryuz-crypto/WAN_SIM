@@ -7,7 +7,7 @@
 ## Instalación
 
 ```bash
-git clone --branch v2.0.8-prestable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
+git clone --branch v2.0.9-prestable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
 cd WAN_SIM-v2
 chmod +x install-v2.sh
 sudo ./install-v2.sh install
@@ -69,10 +69,14 @@ Antes de modificar una instalación, el instalador registra estado de servicios,
 La actualización profesional se hace desde una etiqueta publicada y crea un respaldo adicional:
 
 ```bash
-sudo wansim update v2.0.8-prestable
+sudo wansim upgrade v2.0.9-prestable
+sudo wansim rollback-version
+sudo wansim support-bundle
 ```
 
-No se aceptan ramas ni una etiqueta ajena al patrón `v2.X.Y-prestable` o `v2.X.Y-stable`.
+No se aceptan ramas ni etiquetas ajenas a las publicaciones V2 permitidas.
+
+Las publicaciones etiquetadas también generan `.deb` y `.rpm`, `SHA256SUMS` y procedencia verificable en GitHub. Después de instalar el paquete correspondiente, ejecuta `sudo wansim-install install`; utiliza el mismo instalador transaccional.
 
 ## Aplicación Real
 

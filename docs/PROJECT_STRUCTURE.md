@@ -1,6 +1,6 @@
 # Project Structure
 
-Version 2.0.8-prestable keeps `WANsim2.sh` as the V1 entrypoint while `install-v2.sh` manages the V2 platform. The current stable release remains `v1.119-stable`.
+Version 2.0.9-prestable keeps `WANsim2.sh` as the V1 entrypoint while `install-v2.sh` manages the V2 platform. The current stable release remains `v1.119-stable`.
 
 Current layout:
 
@@ -9,6 +9,7 @@ WAN_SIM/
   WANsim2.sh              # Main simulator and installer entrypoint
   install-v2.sh           # All-in-one V2 installer and lifecycle entrypoint
   installer/              # Wizard, lifecycle, platform, security, agent and systemd modules
+  packaging/              # Reproducible DEB/RPM builders and bootstrap command
   VERSION                 # Single source for the released version
   README.md               # User installation and operating guide
   tests/
@@ -24,7 +25,7 @@ WAN_SIM/
     backend/              # FastAPI control plane, SQLite state and transaction engine
     frontend/             # React + TypeScript operational interface
     deploy/               # Docker Compose and Nginx proxy definitions
-    integration/          # Vagrant VM matrix for native Linux network checks
+    integration/          # Container and Vagrant Linux acceptance matrices
 ```
 
 The V1 entrypoint sources `lib/` to preserve `./WANsim2.sh` compatibility. The V2 backend is deliberately isolated; it does not replace the stable dashboard or alter the V1 installer.

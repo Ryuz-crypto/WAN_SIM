@@ -21,7 +21,7 @@ No copies tokens de Telegram ni llaves TLS a V2. El instalador crea secretos ind
 Clona V2 en otro directorio y utiliza puertos distintos a V1:
 
 ```bash
-git clone --branch v2.0.8-prestable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
+git clone --branch v2.0.9-prestable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
 cd WAN_SIM-v2
 sudo ./install-v2.sh install
 ```

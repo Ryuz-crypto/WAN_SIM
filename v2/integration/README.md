@@ -1,6 +1,6 @@
 # Matriz De Integración V2
 
-La matriz ejecuta el agente V2 sobre Ubuntu, Debian, Fedora y Rocky Linux. Crea únicamente interfaces `dummy` llamadas `wswan*`/`wslan*`, cadenas `iptables` administradas y luego valida dos WAN, una LAN por VLAN, una LAN en acceso y el rollback completo.
+La matriz ejecuta el agente V2 sobre Ubuntu, Debian, Fedora y Rocky Linux. Crea únicamente interfaces `dummy` llamadas `wswan*`/`wslan*` y valida dos WAN, VLAN/acceso, Bridge L2, `netem`, recuperación con checksum y rollback completo.
 
 ## Matriz Automática En GitHub
 
@@ -28,6 +28,8 @@ chmod +x provision.sh run-matrix.sh
 ```
 
 Cada VM ejecuta el ciclo integral: instalación nueva, `doctor`, respaldo, fallo inducido durante `repair`, rollback automático, reparación, reinicio, transacción real de red, restauración, desinstalación conservadora, reinstalación y desinstalación total. Los reportes quedan en `test-results/vagrant/<distribución>/`.
+
+El workflow manual `.github/workflows/vagrant-matrix.yml` automatiza las cuatro VMs en un runner `self-hosted` con etiquetas `linux`, `x64` y `vagrant`. Esto evita asumir virtualización anidada en runners hospedados que no ofrecen VirtualBox o VMware de forma confiable.
 
 Para ejecutar una sola distribución:
 
