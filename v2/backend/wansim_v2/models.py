@@ -153,6 +153,40 @@ class TelegramPermission(str, Enum):
     ADMIN = "admin"
 
 
+class UserRole(str, Enum):
+    VIEWER = "viewer"
+    OPERATOR = "operator"
+    ADMIN = "admin"
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=64, pattern=r"^[a-zA-Z0-9_.-]+$")
+    password: str = Field(min_length=12, max_length=256)
+
+
+class UserCreate(BaseModel):
+    username: str = Field(min_length=3, max_length=64, pattern=r"^[a-zA-Z0-9_.-]+$")
+    password: str = Field(min_length=12, max_length=256)
+    role: UserRole = UserRole.VIEWER
+
+
+class UserUpdate(BaseModel):
+    role: UserRole | None = None
+    enabled: bool | None = None
+    password: str | None = Field(default=None, min_length=12, max_length=256)
+
+
+class PasswordChange(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    current_password: str = Field(min_length=12, max_length=256, alias="currentPassword")
+    new_password: str = Field(min_length=12, max_length=256, alias="newPassword")
+
+
+class RecoveryRequest(BaseModel):
+    confirmation: str = Field(min_length=8, max_length=160)
+
+
 class TelegramBotCreate(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

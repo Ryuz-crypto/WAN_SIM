@@ -12,6 +12,8 @@ services:
       WANSIM_V2_AGENT_TOKEN: ${WANSIM_V2_AGENT_TOKEN:?Set the host agent token before starting Compose}
       WANSIM_V2_AGENT_SOCKET: /run/wansim/agent.sock
       WANSIM_V2_CONFIRMATION_TIMEOUT: ${WANSIM_V2_CONFIRMATION_TIMEOUT:-45}
+      WANSIM_V2_SESSION_HOURS: ${WANSIM_V2_SESSION_HOURS:-12}
+      WANSIM_HTTPS_MODE: ${WANSIM_HTTPS_MODE:-off}
     group_add:
       - "${WANSIM_GID:?Set the wansim host group id}"
     volumes:

@@ -116,6 +116,12 @@ class RemoteNetworkAgent:
     def restart_service(self, service: str) -> dict:
         return self._request("POST", "/v1/restart-service", {"service": service})  # type: ignore[return-value]
 
+    def backup_catalog(self) -> list[dict]:
+        return self._request("GET", "/v1/backups")  # type: ignore[return-value]
+
+    def schedule_backup_restore(self, name: str) -> dict:
+        return self._request("POST", "/v1/restore-backup", {"name": name})  # type: ignore[return-value]
+
 
 def network_agent_from_environment() -> NetworkAgent | RemoteNetworkAgent:
     socket_path = os.getenv("WANSIM_V2_AGENT_SOCKET", "")

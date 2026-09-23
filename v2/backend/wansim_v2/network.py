@@ -4,6 +4,7 @@ import json
 import os
 import re
 import subprocess
+from hashlib import sha256
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -495,7 +496,7 @@ class NetworkAgent:
 
     def service_statuses(self) -> list[dict]:
         services = (
-            "wansim-agent.service", "wansim-control-plane.service", "wansim.service",
+            "docker.service", "wansim-agent.service", "wansim-control-plane.service", "wansim.service",
             "wansim-l2-persist.service", "isc-dhcp-server", "dhcpd", "iptables",
         )
         output = []
@@ -559,6 +560,45 @@ class NetworkAgent:
             "services": self.service_statuses(),
             "leases": self.dhcp_leases(),
         }
+
+    def backup_catalog(self) -> list[dict]:
+        root = Path(os.getenv("WANSIM_BACKUP_DIR", "/var/backups/wansim"))
+        output = []
+        try:
+            archives = sorted(root.glob("wansim-*.tar.gz"), key=lambda item: item.stat().st_mtime, reverse=True)
+        except OSError:
+            return []
+        for archive in archives[:50]:
+            checksum_file = Path(f"{archive}.sha256")
+            try:
+                expected = checksum_file.read_text(encoding="utf-8").split()[0]
+                digest = sha256()
+                with archive.open("rb") as stream:
+                    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                integrity = digest.hexdigest() == expected
+                size = archive.stat().st_size
+                created_at = datetime.fromtimestamp(archive.stat().st_mtime, timezone.utc).isoformat()
+            except (OSError, IndexError):
+                expected, integrity, size, created_at = "", False, 0, ""
+            output.append({"name": archive.name, "size": size, "created_at": created_at, "checksum": expected, "integrity": integrity})
+        return output
+
+    def schedule_backup_restore(self, name: str) -> dict:
+        if not re.fullmatch(r"wansim-[A-Za-z0-9._~-]+\.tar\.gz", name):
+            return {"ok": False, "error": "Nombre de respaldo no permitido."}
+        backup = next((item for item in self.backup_catalog() if item["name"] == name), None)
+        if not backup:
+            return {"ok": False, "error": "Respaldo no encontrado."}
+        if not backup["integrity"]:
+            return {"ok": False, "error": "El checksum del respaldo no coincide."}
+        archive = str(Path(os.getenv("WANSIM_BACKUP_DIR", "/var/backups/wansim")) / name)
+        unit = f"wansim-restore-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+        result = self.runner.run([
+            "systemd-run", f"--unit={unit}", "--collect", "--property=Type=exec",
+            "/usr/local/bin/wansim", "restore", archive,
+        ])
+        return {"ok": result.ok, "mode": self.runner.mode, "unit": unit, "output": result.output, "backup": name}
 
     def rollback(self, actions: Iterable[CommandAction], snapshot: dict, restore_actions: Iterable[CommandAction] | None = None) -> list[dict]:
         results: list[dict] = []

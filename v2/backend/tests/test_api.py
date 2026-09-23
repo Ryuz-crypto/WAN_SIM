@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -150,7 +153,8 @@ class RecordingTelegramGateway(TelegramGateway):
 class ApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.directory = tempfile.TemporaryDirectory()
-        self.client = TestClient(create_app(Path(self.directory.name), NetworkAgent(CommandRunner("dry-run")), api_key=API_KEY), headers=AUTH_HEADERS)
+        self.app = create_app(Path(self.directory.name), NetworkAgent(CommandRunner("dry-run")), api_key=API_KEY)
+        self.client = TestClient(self.app, headers=AUTH_HEADERS)
 
     def tearDown(self) -> None:
         self.directory.cleanup()
@@ -340,6 +344,100 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(restart.status_code, 200)
         blocked = self.client.post("/api/v2/operations/services/restart", json={"service": "ssh"})
         self.assertEqual(blocked.status_code, 400)
+
+    def test_sessions_roles_and_audit_enforce_least_privilege(self) -> None:
+        admin = self.client.post("/api/v2/auth/users", json={
+            "username": "admin", "password": "correct-horse-battery-staple", "role": "admin",
+        })
+        self.assertEqual(admin.status_code, 201)
+        viewer = self.client.post("/api/v2/auth/users", json={
+            "username": "observer", "password": "viewer-password-1234", "role": "viewer",
+        })
+        self.assertEqual(viewer.status_code, 201)
+
+        anonymous = TestClient(self.app)
+        login = anonymous.post("/api/v2/auth/login", json={"username": "observer", "password": "viewer-password-1234"})
+        self.assertEqual(login.status_code, 200)
+        session = {"Authorization": f"Bearer {login.json()['token']}"}
+        self.assertEqual(anonymous.get("/api/v2/operations/doctor", headers=session).status_code, 200)
+        denied = anonymous.post("/api/v2/configurations", headers=session, json=self.nat_payload())
+        self.assertEqual(denied.status_code, 403)
+        me = anonymous.get("/api/v2/auth/me", headers=session).json()
+        self.assertEqual(me["role"], "viewer")
+        events = self.client.get("/api/v2/audit/events").json()
+        self.assertTrue(any(item["action"] == "auth.login" and item["actor"] == "observer" for item in events))
+
+    def test_password_rotation_revokes_existing_session(self) -> None:
+        self.client.post("/api/v2/auth/users", json={
+            "username": "operator", "password": "operator-password-123", "role": "operator",
+        })
+        anonymous = TestClient(self.app)
+        login = anonymous.post("/api/v2/auth/login", json={"username": "operator", "password": "operator-password-123"}).json()
+        session = {"Authorization": f"Bearer {login['token']}"}
+        changed = anonymous.post("/api/v2/auth/password", headers=session, json={
+            "currentPassword": "operator-password-123", "newPassword": "operator-password-456",
+        })
+        self.assertEqual(changed.status_code, 200)
+        self.assertEqual(anonymous.get("/api/v2/auth/me", headers=session).status_code, 401)
+        relogin = anonymous.post("/api/v2/auth/login", json={"username": "operator", "password": "operator-password-456"})
+        self.assertEqual(relogin.status_code, 200)
+
+    def test_recovery_center_verifies_checksum_and_restores_snapshot(self) -> None:
+        first = self.client.post("/api/v2/configurations", json=self.nat_payload()).json()
+        self.client.post(f"/api/v2/configurations/{first['id']}/deploy", json={"apply": True})
+        second_payload = self.nat_payload(lan_mode="vlan")
+        second_payload["name"] = "Cambio posterior"
+        second_payload["config"]["l3"]["links"][0]["baseOctet"] = 30
+        second = self.client.post("/api/v2/configurations", json=second_payload).json()
+        self.client.post(f"/api/v2/configurations/{second['id']}/deploy", json={"apply": True})
+        snapshots = self.client.get("/api/v2/recovery/snapshots").json()
+        target = next(item for item in snapshots if item["configuration_id"] == first["id"])
+        self.assertTrue(target["integrity"])
+        restored = self.client.post(
+            f"/api/v2/recovery/snapshots/{target['id']}/restore",
+            json={"confirmation": f"RESTAURAR {target['id']}"},
+        )
+        self.assertEqual(restored.status_code, 200)
+        self.assertEqual(restored.json()["status"], "RESTORED")
+        self.assertEqual(self.client.get("/api/v2/configurations/active/current").json()["id"], first["id"])
+
+        with self.app.state.repository.connection() as connection:
+            connection.execute("UPDATE snapshots SET checksum='alterado' WHERE id=?", (target["id"],))
+        rejected = self.client.post(
+            f"/api/v2/recovery/snapshots/{target['id']}/restore",
+            json={"confirmation": f"RESTAURAR {target['id']}"},
+        )
+        self.assertEqual(rejected.status_code, 409)
+
+    def test_host_backups_require_integrity_and_admin_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as backup_dir, patch.dict(os.environ, {"WANSIM_BACKUP_DIR": backup_dir}):
+            archive = Path(backup_dir) / "wansim-2.0.8-prestable.tar.gz"
+            archive.write_bytes(b"host backup")
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            Path(f"{archive}.sha256").write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
+
+            listed = self.client.get("/api/v2/recovery/backups")
+            self.assertEqual(listed.status_code, 200)
+            self.assertTrue(listed.json()[0]["integrity"])
+            rejected = self.client.post(
+                f"/api/v2/recovery/backups/{archive.name}/restore",
+                json={"confirmation": "incorrecta"},
+            )
+            self.assertEqual(rejected.status_code, 409)
+            restored = self.client.post(
+                f"/api/v2/recovery/backups/{archive.name}/restore",
+                json={"confirmation": f"RESTAURAR BACKUP {archive.name}"},
+            )
+            self.assertEqual(restored.status_code, 200)
+            self.assertTrue(restored.json()["ok"])
+
+    def test_doctor_returns_structured_remediation_without_secrets(self) -> None:
+        report = self.client.get("/api/v2/operations/doctor")
+        self.assertEqual(report.status_code, 200)
+        body = report.json()
+        self.assertIn(body["status"], ("ok", "warning", "error"))
+        self.assertTrue(any(item["component"] == "database" for item in body["checks"]))
+        self.assertNotIn(API_KEY, json.dumps(body))
 
     def test_telegram_bots_mask_tokens_and_enforce_permissions(self) -> None:
         gateway = RecordingTelegramGateway()

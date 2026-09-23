@@ -5,7 +5,8 @@ import os
 from datetime import datetime, timedelta, timezone
 from threading import Lock, Timer
 
-from .models import CommandAction, ConfigurationRecord, DeploymentRecord, LanMode, Topology
+from . import __version__
+from .models import CommandAction, ConfigurationRecord, DeploymentRecord, LanMode, Topology, TopologyConfig
 from .network import ApplyError, ApplyOutcome, NetworkAgent
 from .repository import ConfigRepository
 
@@ -49,7 +50,7 @@ class DeploymentService:
             deployment = self.repository.create_deployment(configuration.id, None, [action.model_dump() for action in actions])
             return self.repository.update_deployment(deployment.id, "REJECTED", {"mode": self.agent.execution_mode, "preflight": preflight})
         snapshot = self.agent.snapshot()
-        snapshot_id = self.repository.create_snapshot(active.id if active else None, active.config if active else None, snapshot)
+        snapshot_id = self.repository.create_snapshot(active.id if active else None, active.config if active else None, snapshot, __version__)
         deployment = self.repository.create_deployment(configuration.id, snapshot_id, [action.model_dump() for action in actions])
         outcome = ApplyOutcome([], [])
         previous_actions = self.agent.plan(active.config) if active and active.id != configuration.id else []
@@ -85,6 +86,45 @@ class DeploymentService:
     def rollback(self, deployment: DeploymentRecord) -> DeploymentRecord:
         with self._deployment_lock:
             return self._rollback_locked(deployment)
+
+    def restore_snapshot(self, snapshot_id: str) -> DeploymentRecord:
+        with self._deployment_lock:
+            snapshot = self.repository.get_snapshot(snapshot_id)
+            if not snapshot:
+                raise LookupError("Snapshot no encontrado.")
+            if not self.repository.snapshot_integrity(snapshot):
+                raise ValueError("El checksum del snapshot no coincide; restauración bloqueada.")
+            payload = json.loads(snapshot["config_payload"])
+            target = self.repository.get_configuration(snapshot["configuration_id"]) if snapshot["configuration_id"] else None
+            if payload and not target:
+                target = self.repository.create_configuration(f"Recuperado {snapshot_id[:8]}", TopologyConfig.model_validate(payload))
+            active = self.repository.active_configuration()
+            current_actions = self.agent.plan(active.config) if active else []
+            target_actions = self.agent.plan(target.config) if target else []
+            deployment = self.repository.create_deployment(
+                target.id if target else active.id if active else f"snapshot-{snapshot_id}", snapshot_id,
+                [action.model_dump() for action in target_actions],
+            )
+            conflicts = self.agent.cleanup_conflicts(current_actions, target_actions) if current_actions else []
+            cleanup = self.agent.cleanup_obsolete(current_actions, target_actions) if current_actions else []
+            restored = self.agent.rollback([], json.loads(snapshot["host_state"]), target_actions)
+            recovery = self._recover_previous(target)
+            status = "RESTORED" if self._results_ok([*cleanup, *restored, *recovery]) else "RESTORE_FAILED"
+            if status == "RESTORED":
+                if target:
+                    self.repository.activate(target.id)
+                elif active:
+                    self.repository.deactivate(active.id)
+            return self.repository.update_deployment(deployment.id, status, {
+                "mode": self.agent.execution_mode, "reason": "snapshot-restore", "snapshot_id": snapshot_id,
+                "conflicts": conflicts, "cleanup": cleanup, "rollback": restored, "recovery": recovery,
+            })
+
+    def restore_last_known_good(self) -> DeploymentRecord:
+        snapshot = next((item for item in self.repository.list_snapshots(100) if item["integrity"]), None)
+        if not snapshot:
+            raise LookupError("No existe un snapshot íntegro para recuperar.")
+        return self.restore_snapshot(snapshot["id"])
 
     def _rollback_locked(self, deployment: DeploymentRecord, reason: str = "operator") -> DeploymentRecord:
         if deployment.status not in ("APPLIED", "AWAITING_CONFIRMATION"):

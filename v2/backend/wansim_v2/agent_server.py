@@ -150,3 +150,14 @@ def netem(payload: dict) -> dict:
 def restart_service(payload: dict) -> dict:
     with exclusive_operation():
         return agent.restart_service(payload["service"])
+
+
+@app.get("/v1/backups")
+def backups() -> list[dict]:
+    return agent.backup_catalog()
+
+
+@app.post("/v1/restore-backup")
+def restore_backup(payload: dict) -> dict:
+    with exclusive_operation():
+        return agent.schedule_backup_restore(str(payload.get("name", "")))
