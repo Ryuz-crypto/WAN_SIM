@@ -14,14 +14,13 @@ Vagrant.configure("2") do |config|
     config.vm.define name do |machine|
       machine.vm.hostname = "wansim-#{name}"
       machine.vm.synced_folder repository, "/vagrant"
-      machine.vm.provision "shell", inline: "bash /vagrant/v2/integration/installer-lifecycle.sh", privileged: true
 
       if provider == "docker"
         machine.vm.provider "docker" do |docker|
           docker.build_dir = File.expand_path("vagrant-docker", __dir__)
           docker.build_args = ["--build-arg", "BASE_IMAGE=#{platform[:image]}"]
           docker.name = "wansim-vagrant-#{name}-#{ENV.fetch('GITHUB_RUN_ID', 'local')}"
-          docker.has_ssh = true
+          docker.has_ssh = false
           docker.remains_running = true
           docker.create_args = [
             "--privileged", "--cgroupns=host", "--tmpfs=/run", "--tmpfs=/run/lock",
@@ -32,6 +31,7 @@ Vagrant.configure("2") do |config|
       else
         machine.vm.box = platform[:box]
         machine.vm.network "private_network", type: "dhcp"
+        machine.vm.provision "shell", inline: "bash /vagrant/v2/integration/installer-lifecycle.sh", privileged: true
       end
     end
   end

@@ -33,16 +33,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y vagrant
           vagrant version
-      - name: Run installation lifecycle in VM
+      - name: Start Vagrant environment
         working-directory: v2/integration
         env:
           VAGRANT_PROVIDER: docker
-        run: vagrant up ${{ matrix.machine }} --provider=docker --provision
-      - name: Verify SSH management remains available
+        run: vagrant up ${{ matrix.machine }} --provider=docker
+      - name: Run installation lifecycle through Vagrant
         working-directory: v2/integration
         env:
           VAGRANT_PROVIDER: docker
-        run: vagrant ssh ${{ matrix.machine }} -c "test -d /vagrant/test-results/vagrant"
+        run: vagrant docker-exec ${{ matrix.machine }} -- bash /vagrant/v2/integration/installer-lifecycle.sh
+      - name: Verify Vagrant management remains available
+        working-directory: v2/integration
+        env:
+          VAGRANT_PROVIDER: docker
+        run: vagrant docker-exec ${{ matrix.machine }} -- test -d /vagrant/test-results/vagrant
       - name: Collect acceptance evidence
         if: always()
         run: |

@@ -19,7 +19,7 @@ docker run --rm --privileged --network bridge \
 
 ## Matriz Completa Del Instalador Con Vagrant
 
-El workflow `vagrant-matrix.yml` usa el proveedor Docker integrado de Vagrant sobre runners hospedados de GitHub. Cada entorno inicia `systemd`, conserva acceso SSH y ejecuta el instalador integral con Docker anidado. Para VMs completas en un host de laboratorio se conserva VirtualBox como proveedor predeterminado.
+El workflow `vagrant-matrix.yml` usa el proveedor Docker integrado de Vagrant sobre runners hospedados de GitHub. Cada entorno inicia `systemd` y ejecuta el instalador integral mediante `vagrant docker-exec`, con Docker anidado. Para VMs completas en un host de laboratorio se conserva VirtualBox como proveedor predeterminado y su acceso SSH habitual.
 
 ```bash
 cd v2/integration
