@@ -112,6 +112,11 @@ class InstallerStructureTests(unittest.TestCase):
         self.assertIn("uname -n", security)
         self.assertIn("${name:-wansim.local}", security)
 
+    def test_install_summary_does_not_require_hostname_package(self) -> None:
+        healthcheck = (ROOT / "installer/healthcheck.sh").read_text(encoding="utf-8")
+        self.assertIn("ip -o -4 addr show scope global", healthcheck)
+        self.assertNotIn("hostname -I", healthcheck)
+
 
 if __name__ == "__main__":
     unittest.main()

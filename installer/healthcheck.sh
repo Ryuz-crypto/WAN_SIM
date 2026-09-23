@@ -141,7 +141,9 @@ print_install_summary() {
   local scheme=http port="$WANSIM_HTTP_PORT"
   if [[ "$WANSIM_HTTPS_MODE" != "off" ]]; then scheme=https; port="$WANSIM_HTTPS_PORT"; fi
   local address="$WANSIM_BIND_ADDRESS"
-  [[ "$address" == "0.0.0.0" ]] && address="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  if [[ "$address" == "0.0.0.0" ]]; then
+    address="$(ip -o -4 addr show scope global 2>/dev/null | awk '{split($4, value, "/"); print value[1]; exit}' || true)"
+  fi
   [[ -n "$address" ]] || address=127.0.0.1
   printf '\nWAN_SIM 2 instalado correctamente\n'
   printf 'ReactUI: %s://%s:%s/\n' "$scheme" "$address" "$port"
