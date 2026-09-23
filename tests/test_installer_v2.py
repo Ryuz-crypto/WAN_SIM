@@ -93,6 +93,10 @@ class InstallerStructureTests(unittest.TestCase):
         ):
             self.assertIn(evidence, lifecycle)
 
+    def test_frontend_workspace_declares_its_root_package(self) -> None:
+        workspace = (ROOT / "v2/frontend/pnpm-workspace.yaml").read_text(encoding="utf-8")
+        self.assertIn('packages:\n  - "."', workspace)
+
 
 if __name__ == "__main__":
     unittest.main()
