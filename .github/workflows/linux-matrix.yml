@@ -45,21 +45,30 @@ jobs:
         env:
           IMAGE: ${{ matrix.image }}
           DISTRO: ${{ matrix.distro }}
+          NAME: ${{ matrix.name }}
           REPORT: test-results/linux-matrix/${{ matrix.slug }}/report.json
         run: |
           mkdir -p "$(dirname "$REPORT")"
           docker pull "$IMAGE"
+          set +e
           docker run --rm --privileged \
             --network bridge \
             --volume "$GITHUB_WORKSPACE:/workspace" \
             --workdir /workspace \
             --env "WANSIM_EXPECTED_DISTRO=$DISTRO" \
             --env "WANSIM_INTEGRATION_REPORT=/workspace/$REPORT" \
-            "$IMAGE" bash /workspace/v2/integration/container-entrypoint.sh
+            "$IMAGE" bash /workspace/v2/integration/container-entrypoint.sh \
+            2>&1 | tee "$(dirname "$REPORT")/run.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            detail=$(tail -n 12 "$(dirname "$REPORT")/run.log" | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+            echo "::error title=$NAME integration failed::$detail"
+            exit "$status"
+          fi
       - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: linux-matrix-${{ matrix.slug }}
           path: test-results/linux-matrix/${{ matrix.slug }}/
           if-no-files-found: error
-

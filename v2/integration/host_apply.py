@@ -159,6 +159,8 @@ def main() -> None:
     except BaseException as error:
         report["status"] = "failed"
         report["error"] = f"{type(error).__name__}: {error}"
+        annotation = report["error"].replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        print(f"::error title=WAN_SIM host integration::{annotation}", flush=True)
         raise
     finally:
         cleanup()

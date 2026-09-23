@@ -10,7 +10,8 @@ if command -v apt-get >/dev/null 2>&1; then
     ca-certificates iproute2 iptables procps python3 python3-pip
 elif command -v dnf >/dev/null 2>&1; then
   dnf install -y \
-    ca-certificates iproute iptables procps-ng python3 python3-pip
+    ca-certificates iproute procps-ng python3 python3-pip
+  dnf install -y iptables || dnf install -y iptables-nft
   dnf clean all
 else
   echo "No se reconoce apt-get ni dnf en la imagen de integración." >&2
