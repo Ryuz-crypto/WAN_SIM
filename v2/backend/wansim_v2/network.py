@@ -5,7 +5,7 @@ import os
 import re
 import subprocess
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
@@ -91,7 +91,7 @@ class NetworkAgent:
             return []
 
     def snapshot(self) -> dict:
-        captured_at = datetime.now(UTC).isoformat()
+        captured_at = datetime.now(timezone.utc).isoformat()
         probes = {
             "links": ["ip", "-j", "link", "show"],
             "addresses": ["ip", "-j", "addr", "show"],
@@ -468,6 +468,8 @@ class NetworkAgent:
         if self.runner.mode == "host" and snapshot.get("iptables"):
             result = self.runner.run(["iptables-restore"], input_data=snapshot["iptables"])
             results.append({"id": "iptables-restore", "ok": result.ok, "output": result.output})
+            if result.ok:
+                results.extend(self._remove_new_managed_chains(str(snapshot["iptables"])))
         if self.runner.mode == "host":
             results.extend(self._restore_network_state(snapshot, list(restore_actions) if restore_actions is not None else applied))
             forwarding = str(snapshot.get("forwarding", "")).strip()
@@ -475,6 +477,24 @@ class NetworkAgent:
                 result = self.runner.run(["sysctl", "-w", f"net.ipv4.ip_forward={forwarding}"])
                 results.append({"id": "forwarding-restore", "ok": result.ok, "output": result.output})
             results.extend(self._restore_dhcp(snapshot))
+        return results
+
+    def _remove_new_managed_chains(self, snapshot: str) -> list[dict]:
+        """Delete nft/legacy chains that did not exist before the transaction."""
+        results: list[dict] = []
+        for table, chain, parent in (("nat", "WANSIM_POSTROUTING", "POSTROUTING"), ("filter", "WANSIM_FORWARD", "FORWARD")):
+            if any(line.startswith(f":{chain} ") for line in snapshot.splitlines()):
+                continue
+            if not self.runner.probe(["iptables", "-t", table, "-S", chain]).ok:
+                results.append({"id": f"iptables-remove:{chain}", "ok": True, "output": "already-absent"})
+                continue
+            jump = self.runner.run(["iptables", "-t", table, "-D", parent, "-j", chain])
+            jump_missing = not jump.ok and any(message in jump.output for message in ("Bad rule", "No chain/target/match"))
+            results.append({"id": f"iptables-unlink:{chain}", "ok": jump.ok or jump_missing, "output": jump.output or ("already-absent" if jump_missing else "")})
+            flush = self.runner.run(["iptables", "-t", table, "-F", chain])
+            results.append({"id": f"iptables-flush:{chain}", "ok": flush.ok, "output": flush.output})
+            delete = self.runner.run(["iptables", "-t", table, "-X", chain])
+            results.append({"id": f"iptables-remove:{chain}", "ok": delete.ok, "output": delete.output})
         return results
 
     def _restore_network_state(self, snapshot: dict, actions: list[CommandAction]) -> list[dict]:

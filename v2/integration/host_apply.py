@@ -6,7 +6,7 @@ import os
 import platform
 import subprocess
 import tempfile
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from wansim_v2.models import TopologyConfig
@@ -87,7 +87,7 @@ def main() -> None:
         raise SystemExit(f"Distribución inesperada: se esperaba {expected}, se obtuvo {sorted(compatible_ids)}")
     report = {
         "status": "running",
-        "started_at": datetime.now(UTC).isoformat(),
+        "started_at": datetime.now(timezone.utc).isoformat(),
         "distribution": {
             "id": release.get("ID", "unknown"),
             "version_id": release.get("VERSION_ID", "unknown"),
@@ -164,7 +164,7 @@ def main() -> None:
         raise
     finally:
         cleanup()
-        report["finished_at"] = datetime.now(UTC).isoformat()
+        report["finished_at"] = datetime.now(timezone.utc).isoformat()
         write_report(report)
 
 

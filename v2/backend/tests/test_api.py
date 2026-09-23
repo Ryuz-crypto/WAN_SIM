@@ -52,6 +52,32 @@ class RollbackFailingRunner(FailingRunner):
         return super().run(command, **kwargs)
 
 
+class StickyNftChainRunner(CommandRunner):
+    def __init__(self) -> None:
+        self.mode = "host"
+        self.commands: list[list[str]] = []
+        self.chains = {"WANSIM_POSTROUTING", "WANSIM_FORWARD"}
+
+    def run(self, command: list[str], **_: object):
+        from wansim_v2.network import CommandResult
+
+        self.commands.append(command)
+        if "-X" in command:
+            self.chains.discard(command[-1])
+        return CommandResult(True, command, "ok")
+
+    def probe(self, command: list[str], **_: object):
+        from wansim_v2.network import CommandResult
+
+        self.commands.append(command)
+        if command[:4] == ["iptables", "-t", "nat", "-S"] or command[:4] == ["iptables", "-t", "filter", "-S"]:
+            chain = command[-1]
+            return CommandResult(chain in self.chains, command, "present" if chain in self.chains else "missing")
+        if command in (["ip", "-j", "addr", "show"], ["ip", "-j", "route", "show"]):
+            return CommandResult(True, command, "[]")
+        return CommandResult(False, command, "missing")
+
+
 class RecordingTelegramGateway(TelegramGateway):
     def __init__(self) -> None:
         self.messages: list[dict] = []
@@ -171,6 +197,20 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(deployment["status"], "ROLLBACK_FAILED")
         self.assertTrue(any(item["output"] == "forced rollback failure" for item in deployment["result"]["rollback"]))
         self.assertIsNone(client.get("/api/v2/configurations/active/current").json())
+
+    def test_rollback_removes_nft_chains_absent_from_snapshot(self) -> None:
+        runner = StickyNftChainRunner()
+        snapshot = {
+            "iptables": "*nat\n:POSTROUTING ACCEPT [0:0]\nCOMMIT\n*filter\n:FORWARD ACCEPT [0:0]\nCOMMIT\n",
+            "network": {"addresses": "[]", "routes": "[]"},
+            "dhcp_config": {"exists": False, "content": ""},
+            "dhcp_active": "",
+        }
+        results = NetworkAgent(runner).rollback([], snapshot, [])
+        self.assertFalse(runner.chains)
+        self.assertTrue(all(item["ok"] for item in results))
+        self.assertIn(["iptables", "-t", "nat", "-X", "WANSIM_POSTROUTING"], runner.commands)
+        self.assertIn(["iptables", "-t", "filter", "-X", "WANSIM_FORWARD"], runner.commands)
 
     def test_operations_endpoints_are_safe_in_dry_run(self) -> None:
         overview = self.client.get("/api/v2/operations/overview")
