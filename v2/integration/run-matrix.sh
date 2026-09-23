@@ -3,5 +3,5 @@ set -euo pipefail
 
 provider="${VAGRANT_PROVIDER:-virtualbox}"
 for machine in ubuntu debian fedora rocky; do
-  vagrant up "$machine" --provider="$provider"
+  VAGRANT_PROVIDER="$provider" vagrant up "$machine" --provider="$provider"
 done

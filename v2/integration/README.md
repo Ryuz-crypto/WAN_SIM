@@ -17,9 +17,9 @@ docker run --rm --privileged --network bridge \
   ubuntu:24.04 bash /workspace/v2/integration/container-entrypoint.sh
 ```
 
-## Matriz Completa Del Instalador En VMs
+## Matriz Completa Del Instalador Con Vagrant
 
-Requisitos en la estación que lanza las pruebas: Vagrant y un proveedor de VMs. VirtualBox es el predeterminado; VMware se usa con `VAGRANT_PROVIDER=vmware_desktop` si está disponible.
+El workflow `vagrant-matrix.yml` usa el proveedor Docker integrado de Vagrant sobre runners hospedados de GitHub. Cada entorno inicia `systemd`, conserva acceso SSH y ejecuta el instalador integral con Docker anidado. Para VMs completas en un host de laboratorio se conserva VirtualBox como proveedor predeterminado.
 
 ```bash
 cd v2/integration
@@ -27,9 +27,9 @@ chmod +x provision.sh run-matrix.sh
 ./run-matrix.sh
 ```
 
-Cada VM ejecuta el ciclo integral: instalación nueva, `doctor`, respaldo, fallo inducido durante `repair`, rollback automático, reparación, reinicio, transacción real de red, restauración, desinstalación conservadora, reinstalación y desinstalación total. Los reportes quedan en `test-results/vagrant/<distribución>/`.
+Cada entorno ejecuta instalación nueva, HTTPS, `doctor`, respaldo, fallo inducido durante `repair`, rollback automático, certificado PEM, sesiones/RBAC, rotación, Telegram cifrado, soporte sanitizado, transacción real de red, restauración, desinstalación conservadora, reinstalación y desinstalación total. También conserva una referencia verificable a `v1.119-stable`. Los reportes quedan en `test-results/vagrant/<distribución>/`.
 
-El workflow manual `.github/workflows/vagrant-matrix.yml` automatiza las cuatro VMs en un runner `self-hosted` con etiquetas `linux`, `x64` y `vagrant`. Esto evita asumir virtualización anidada en runners hospedados que no ofrecen VirtualBox o VMware de forma confiable.
+El mismo `Vagrantfile` selecciona Docker cuando `VAGRANT_PROVIDER=docker`; sin esa variable utiliza VirtualBox. Así CI no depende de un runner privado y la prueba local sigue usando máquinas virtuales tradicionales.
 
 Para ejecutar una sola distribución:
 

@@ -76,6 +76,16 @@ class InstallerStructureTests(unittest.TestCase):
         self.assertIn("sanitize_support_file", support)
         self.assertIn("Bearer ", support)
 
+    def test_vagrant_matrix_runs_on_hosted_runners_with_full_acceptance(self) -> None:
+        workflow = (ROOT / ".github/workflows/vagrant-matrix.yml").read_text(encoding="utf-8")
+        vagrantfile = (ROOT / "v2/integration/Vagrantfile").read_text(encoding="utf-8")
+        lifecycle = (ROOT / "v2/integration/installer-lifecycle.sh").read_text(encoding="utf-8")
+        self.assertIn("runs-on: ubuntu-24.04", workflow)
+        self.assertIn("--provider=docker", workflow)
+        self.assertIn('docker.has_ssh = true', vagrantfile)
+        for evidence in ("control_plane_acceptance.py", "--https pem", "support-bundle", "v1.119-stable"):
+            self.assertIn(evidence, lifecycle)
+
 
 if __name__ == "__main__":
     unittest.main()

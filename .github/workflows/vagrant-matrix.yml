@@ -1,6 +1,10 @@
 name: WAN_SIM Vagrant acceptance matrix
 
 on:
+  push:
+    branches: [main]
+    tags: ["v2.*-stable"]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -9,7 +13,7 @@ permissions:
 jobs:
   vagrant:
     name: ${{ matrix.machine }} VM acceptance
-    runs-on: [self-hosted, linux, x64, vagrant]
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     strategy:
       fail-fast: false
@@ -17,16 +21,28 @@ jobs:
         machine: [ubuntu, debian, fedora, rocky]
     steps:
       - uses: actions/checkout@v5
+      - name: Install Vagrant
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y vagrant
+          vagrant version
       - name: Run installation lifecycle in VM
         working-directory: v2/integration
-        run: vagrant up ${{ matrix.machine }} --provision
+        env:
+          VAGRANT_PROVIDER: docker
+        run: vagrant up ${{ matrix.machine }} --provider=docker --provision
+      - name: Verify SSH management remains available
+        working-directory: v2/integration
+        env:
+          VAGRANT_PROVIDER: docker
+        run: vagrant ssh ${{ matrix.machine }} -c "test -f /vagrant/test-results/vagrant/*/installer-lifecycle.log"
       - name: Collect acceptance evidence
         if: always()
         run: |
           mkdir -p "test-results/vagrant-${{ matrix.machine }}"
           cp -a test-results/vagrant/. "test-results/vagrant-${{ matrix.machine }}/" 2>/dev/null || true
           vagrant -v > "test-results/vagrant-${{ matrix.machine }}/versions.txt"
-          VBoxManage --version >> "test-results/vagrant-${{ matrix.machine }}/versions.txt"
+          docker version --format '{{.Server.Version}}' >> "test-results/vagrant-${{ matrix.machine }}/versions.txt"
       - uses: actions/upload-artifact@v6
         if: always()
         with:
@@ -35,4 +51,6 @@ jobs:
       - name: Destroy VM
         if: always()
         working-directory: v2/integration
+        env:
+          VAGRANT_PROVIDER: docker
         run: vagrant destroy -f ${{ matrix.machine }}
