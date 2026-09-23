@@ -66,6 +66,8 @@ class InstallerStructureTests(unittest.TestCase):
         self.assertIn("dpkg-deb", builder)
         self.assertIn("rpmbuild", builder)
         self.assertIn("SHA256SUMS", builder)
+        self.assertIn("sed 's/-/~/g'", builder)
+        self.assertNotIn('${VERSION//-/~}', builder)
         self.assertIn("attest-build-provenance", workflow)
 
     def test_support_bundle_redacts_environment_and_logs(self) -> None:

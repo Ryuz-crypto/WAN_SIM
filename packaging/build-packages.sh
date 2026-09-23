@@ -18,7 +18,8 @@ stage_payload() {
 
 build_deb() {
   command -v dpkg-deb >/dev/null || return 0
-  local stage="$WORK/deb" deb_version="${VERSION//-/~}"
+  local stage="$WORK/deb" deb_version
+  deb_version="$(printf '%s' "$VERSION" | sed 's/-/~/g')"
   stage_payload "$stage"
   mkdir -p "$stage/DEBIAN"
   cat > "$stage/DEBIAN/control" <<EOF
