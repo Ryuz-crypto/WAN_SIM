@@ -35,7 +35,21 @@ class FailingRunner(CommandRunner):
             return CommandResult(True, command, '[{"ifname":"wan0"},{"ifname":"lan0"}]')
         if command == ["ip", "-j", "addr", "show"]:
             return CommandResult(True, command, '[]')
+        if command == ["ip", "-j", "route", "show"]:
+            return CommandResult(True, command, '[]')
+        if command[:2] == ["systemctl", "is-active"]:
+            return CommandResult(False, command, "inactive")
         return CommandResult(True, command, "ok")
+
+
+class RollbackFailingRunner(FailingRunner):
+    def run(self, command: list[str], **kwargs: object):
+        from wansim_v2.network import CommandResult
+
+        if command == ["iptables-restore"]:
+            self.commands.append(command)
+            return CommandResult(False, command, "forced rollback failure")
+        return super().run(command, **kwargs)
 
 
 class RecordingTelegramGateway(TelegramGateway):
@@ -147,6 +161,16 @@ class ApiTests(unittest.TestCase):
         self.assertIn("forced address failure", deployment["result"]["error"])
         self.assertIsNone(client.get("/api/v2/configurations/active/current").json())
         self.assertFalse(any(command[:3] == ["ip", "addr", "del"] for command in runner.commands))
+
+    def test_failed_host_rollback_is_reported_and_never_activates_draft(self) -> None:
+        runner = RollbackFailingRunner()
+        app = create_app(Path(self.directory.name) / "rollback-failure", NetworkAgent(runner), api_key=API_KEY)
+        client = TestClient(app, headers=AUTH_HEADERS)
+        created = client.post("/api/v2/configurations", json=self.nat_payload()).json()
+        deployment = client.post(f"/api/v2/configurations/{created['id']}/deploy", json={"apply": True}).json()
+        self.assertEqual(deployment["status"], "ROLLBACK_FAILED")
+        self.assertTrue(any(item["output"] == "forced rollback failure" for item in deployment["result"]["rollback"]))
+        self.assertIsNone(client.get("/api/v2/configurations/active/current").json())
 
     def test_operations_endpoints_are_safe_in_dry_run(self) -> None:
         overview = self.client.get("/api/v2/operations/overview")

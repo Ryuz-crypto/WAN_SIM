@@ -349,6 +349,7 @@ Si una ejecucion falla, el script ejecuta rollback automatico de servicios, dash
 - NAT crea y enlaza su cadena administrada de forma idempotente; las colisiones de VLAN/Bridge se rechazan o migran de forma controlada.
 - DHCP deja de ser una acción simulada: genera, valida y activa la configuración ISC, y la verificación comprueba interfaces, direcciones, gateways, NAT, DHCP y miembros Bridge.
 - Telegram propaga fallos reales de entrega y ofrece presets de latencia, jitter, pérdida y reset.
+- La regresión transaccional distingue un rollback completado de uno fallido y el CI usa acciones compatibles con Node.js 24.
 
 ### Version 2.0.3-prebeta
 
