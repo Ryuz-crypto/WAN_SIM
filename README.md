@@ -1,7 +1,7 @@
 # Ryuz WAN Simulator
 
 [![Versión estable](https://img.shields.io/badge/versi%C3%B3n-v2.0.10--stable-00b388?style=flat-square)](https://github.com/Ryuz-crypto/WAN_SIM/releases/tag/v2.0.10-stable)
-[![Plataformas Linux](https://img.shields.io/badge/Linux-Ubuntu%20%7C%20Debian%20%7C%20Fedora%20%7C%20Rocky-f58220?style=flat-square&logo=linux&logoColor=white)](#sistemas-soportados)
+[![Plataformas Linux](https://img.shields.io/badge/Linux-Ubuntu%2024.04%20%7C%20Debian%2012%20%7C%20Fedora%2042%20%7C%20Rocky%209-f58220?style=flat-square&logo=linux&logoColor=white)](#sistemas-soportados)
 [![Licencia CC0 1.0](https://img.shields.io/badge/licencia-CC0%201.0-00739d?style=flat-square)](LICENSE)
 [![WAN_SIM checks](https://github.com/Ryuz-crypto/WAN_SIM/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/Ryuz-crypto/WAN_SIM/actions/workflows/checks.yml)
 [![Matriz Linux](https://github.com/Ryuz-crypto/WAN_SIM/actions/workflows/linux-matrix.yml/badge.svg?branch=main)](https://github.com/Ryuz-crypto/WAN_SIM/actions/workflows/linux-matrix.yml)
@@ -35,11 +35,16 @@ V2 comienza en modo seguro `dry-run`. Si conservas V1, instala cada versión en 
 
 ## Sistemas Soportados
 
-- Ubuntu Server y Workstation 20.04 o superior.
-- Debian 10 o superior.
-- Fedora Server y Workstation.
-- Rocky Linux 8/9 y CentOS Stream.
-- Arquitecturas `x86_64` y `aarch64` para V2.
+V2.0.10 está validada por la matriz automática en estas versiones:
+
+- Ubuntu Server o Workstation 24.04 LTS.
+- Debian 12.
+- Fedora 42.
+- Rocky Linux 9.
+
+El instalador acepta arquitecturas `x86_64` y `aarch64`; la matriz automática publicada actualmente se ejecuta en `x86_64`.
+
+> **Importante:** V2.0.10 no debe instalarse en Ubuntu 20.04 con Python 3.8: la versión fijada de Uvicorn requiere Python 3.9 o posterior. Debian 10 y Rocky Linux 8 tampoco forman parte de la matriz certificada de V2. Para esos sistemas conserva V1.119 o actualiza primero el sistema operativo.
 
 Se requiere Linux con `systemd`, acceso a Internet y un usuario con permisos `sudo`.
 
@@ -92,7 +97,7 @@ El asistente permite elegir L3/NAT o Bridge L2, interfaces, VLAN/acceso, direcci
 
 V2 es la versión recomendada. Su instalador incorpora Docker, FastAPI, ReactUI, proxy HTTPS, agente de red, base de datos y servicios `systemd`.
 
-### Ubuntu Server, Ubuntu Workstation o Debian
+### Ubuntu 24.04 o Debian 12
 
 ```bash
 sudo apt-get update
@@ -103,7 +108,7 @@ chmod +x install-v2.sh
 sudo ./install-v2.sh install
 ```
 
-### Fedora
+### Fedora 42
 
 ```bash
 sudo dnf makecache -y
@@ -114,7 +119,7 @@ chmod +x install-v2.sh
 sudo ./install-v2.sh install
 ```
 
-### Rocky Linux
+### Rocky Linux 9
 
 ```bash
 sudo dnf makecache -y
