@@ -1,5 +1,11 @@
 # Ryuz WAN Simulator
 
+[![Versión estable](https://img.shields.io/badge/versi%C3%B3n-v2.0.10--stable-00b388?style=flat-square)](https://github.com/Ryuz-crypto/WAN_SIM/releases/tag/v2.0.10-stable)
+[![Plataformas Linux](https://img.shields.io/badge/Linux-Ubuntu%20%7C%20Debian%20%7C%20Fedora%20%7C%20Rocky-f58220?style=flat-square&logo=linux&logoColor=white)](#sistemas-soportados)
+[![Licencia CC0 1.0](https://img.shields.io/badge/licencia-CC0%201.0-00739d?style=flat-square)](LICENSE)
+[![WAN_SIM checks](https://github.com/Ryuz-crypto/WAN_SIM/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/Ryuz-crypto/WAN_SIM/actions/workflows/checks.yml)
+[![Matriz Linux](https://github.com/Ryuz-crypto/WAN_SIM/actions/workflows/linux-matrix.yml/badge.svg?branch=main)](https://github.com/Ryuz-crypto/WAN_SIM/actions/workflows/linux-matrix.yml)
+
 Simulador WAN para Linux con soporte L3/NAT, Bridge L2, VLAN, puertos LAN sin etiqueta, DHCP, `tc/netem`, HTTPS, Telegram y panel web.
 
 **Versión estable recomendada y más actual:** [`v2.0.10-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v2.0.10-stable)
