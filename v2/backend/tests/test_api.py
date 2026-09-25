@@ -221,6 +221,23 @@ class ApiTests(unittest.TestCase):
         commands = [item["command"] for item in plan["actions"]]
         self.assertIn(["ip", "link", "set", "br_wan1", "type", "bridge", "stp_state", "1"], commands)
 
+    def test_bridge_plan_keeps_ip_forwarding_enabled(self) -> None:
+        payload = {
+            "name": "Bridge sin tocar forwarding",
+            "config": {
+                "topology": "bridge", "dhcpEnabled": False,
+                "bridge": {"pairs": [{"input": "wan0", "output": "lan0"}]},
+            },
+        }
+        created = self.client.post("/api/v2/configurations", json=payload).json()
+        plan = self.client.post(f"/api/v2/configurations/{created['id']}/plan").json()
+        commands = [item["command"] for item in plan["actions"]]
+        self.assertFalse(
+            any("net.ipv4.ip_forward" in " ".join(command) and "ip_forward=0" in " ".join(command) for command in commands),
+            "El plan Bridge no debe deshabilitar el forwarding global: rompe el plano de control Docker.",
+        )
+        self.assertIn(["ip", "link", "set", "br_wan1", "type", "bridge", "stp_state", "1"], commands)
+
     def test_access_plan_has_no_vlan_creation(self) -> None:
         created = self.client.post("/api/v2/configurations", json=self.nat_payload()).json()
         plan = self.client.post(f"/api/v2/configurations/{created['id']}/plan").json()
