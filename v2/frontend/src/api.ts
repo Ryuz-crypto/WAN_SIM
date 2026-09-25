@@ -1,5 +1,5 @@
 import type {
-  AuditEvent, Config, Configuration, Deployment, DoctorReport, Identity, Overview, PlanReview,
+  AuditEvent, ConfigPayload, Configuration, Deployment, DoctorReport, Identity, Overview, PlanReview,
   HostBackup, RecoverySnapshot, TelegramBot, TelegramBotCreated, TelegramPermission, User, UserRole,
 } from './types'
 
@@ -26,7 +26,11 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     const payload = await response.json().catch(() => ({})) as { detail?: string | Array<{ msg?: string; loc?: Array<string | number> }> }
     const detail = Array.isArray(payload.detail)
-      ? payload.detail.map(item => `${item.loc?.slice(1).join('.') ?? 'configuración'}: ${item.msg ?? 'valor inválido'}`).join(' · ')
+      ? payload.detail.map(item => {
+          const field = item.loc?.slice(1).join('.') ?? 'configuración'
+          if (item.msg?.includes('String should have at least 1 character')) return `${field}: selecciona una interfaz válida`
+          return `${field}: ${item.msg ?? 'valor inválido'}`
+        }).join(' · ')
       : payload.detail
     throw new Error(detail ?? `HTTP ${response.status}`)
   }
@@ -44,7 +48,7 @@ export const api = {
   changePassword: (currentPassword: string, newPassword: string) => request<{ ok: boolean; reauthenticate: boolean }>('/api/v2/auth/password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) }),
   overview: () => request<Overview>('/api/v2/operations/overview'),
   doctor: () => request<DoctorReport>('/api/v2/operations/doctor'),
-  createConfig: (name: string, config: Config) => request<Configuration>('/api/v2/configurations', { method: 'POST', body: JSON.stringify({ name, config }) }),
+  createConfig: (name: string, config: ConfigPayload) => request<Configuration>('/api/v2/configurations', { method: 'POST', body: JSON.stringify({ name, config }) }),
   plan: (id: string) => request<PlanReview>(`/api/v2/configurations/${id}/plan`, { method: 'POST' }),
   deploy: (id: string, apply: boolean, confirmation?: string, managementConfirmation?: string) => request<Deployment>(`/api/v2/configurations/${id}/deploy`, { method: 'POST', body: JSON.stringify({ apply, confirmation, managementConfirmation }), signal: AbortSignal.timeout(120000) }),
   confirmDeployment: (id: string) => request<Deployment>(`/api/v2/deployments/${id}/confirm`, { method: 'POST', signal: AbortSignal.timeout(30000) }),

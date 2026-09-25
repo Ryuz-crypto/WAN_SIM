@@ -182,6 +182,32 @@ class ApiTests(unittest.TestCase):
         response = self.client.get("/api/v2/operations/overview", headers={"X-WAN-SIM-API-Key": ""})
         self.assertEqual(response.status_code, 401)
 
+    def test_wizard_payload_with_inactive_section_is_accepted(self) -> None:
+        payload = self.nat_payload()
+        payload["config"]["bridge"] = {"pairs": [{"input": "", "output": ""}]}
+        response = self.client.post("/api/v2/configurations", json=payload)
+        self.assertEqual(response.status_code, 201)
+        config = response.json()["config"]
+        self.assertEqual(config["topology"], "nat")
+        self.assertIsNotNone(config["l3"])
+        self.assertIsNone(config["bridge"])
+
+    def test_bridge_payload_discards_inactive_l3_section(self) -> None:
+        payload = {
+            "name": "Laboratorio Bridge",
+            "config": {
+                "topology": "bridge", "dhcpEnabled": False,
+                "bridge": {"pairs": [{"input": "wan0", "output": "lan0"}]},
+                "l3": {"segment": "10.254", "links": [{"wan": "", "lan": ""}]},
+            },
+        }
+        response = self.client.post("/api/v2/configurations", json=payload)
+        self.assertEqual(response.status_code, 201)
+        config = response.json()["config"]
+        self.assertEqual(config["topology"], "bridge")
+        self.assertIsNotNone(config["bridge"])
+        self.assertIsNone(config["l3"])
+
     def test_access_plan_has_no_vlan_creation(self) -> None:
         created = self.client.post("/api/v2/configurations", json=self.nat_payload()).json()
         plan = self.client.post(f"/api/v2/configurations/{created['id']}/plan").json()

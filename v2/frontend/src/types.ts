@@ -10,6 +10,7 @@ export type Config = {
   l3: { segment: '10.254' | '172.16' | '192.168'; links: L3Link[] }
   bridge: { pairs: { input: string; output: string }[] }
 }
+export type ConfigPayload = Omit<Config, 'l3' | 'bridge'> & { l3?: Config['l3']; bridge?: Config['bridge'] }
 export type Configuration = { id: string; name: string; state: string; config: Config; created_at: string; updated_at: string }
 export type Action = { id: string; phase: string; description: string; command: string[]; undo?: string[] }
 export type Deployment = { id: string; configuration_id: string; status: string; plan: Action[]; result: Record<string, unknown>; created_at: string; updated_at: string }

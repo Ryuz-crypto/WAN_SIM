@@ -1,6 +1,6 @@
 # Ryuz WAN Simulator
 
-[![Versión estable](https://img.shields.io/badge/versi%C3%B3n-v2.0.12--stable-00b388?style=flat-square)](https://github.com/Ryuz-crypto/WAN_SIM/releases/tag/v2.0.12-stable)
+[![Versión estable](https://img.shields.io/badge/versi%C3%B3n-v2.0.13--stable-00b388?style=flat-square)](https://github.com/Ryuz-crypto/WAN_SIM/releases/tag/v2.0.13-stable)
 [![Plataformas Linux](https://img.shields.io/badge/Linux-Ubuntu%2024.04%2F26.04%20%7C%20Debian%2012%20%7C%20Fedora%2042%20%7C%20Rocky%209-f58220?style=flat-square&logo=linux&logoColor=white)](#sistemas-soportados)
 [![Licencia CC0 1.0](https://img.shields.io/badge/licencia-CC0%201.0-00739d?style=flat-square)](LICENSE)
 [![WAN_SIM checks](https://github.com/Ryuz-crypto/WAN_SIM/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/Ryuz-crypto/WAN_SIM/actions/workflows/checks.yml)
@@ -8,7 +8,7 @@
 
 Simulador WAN para Linux con soporte L3/NAT, Bridge L2, VLAN, puertos LAN sin etiqueta, DHCP, `tc/netem`, HTTPS, Telegram y panel web.
 
-**Versión estable recomendada y más actual:** [`v2.0.12-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v2.0.12-stable)
+**Versión estable recomendada y más actual:** [`v2.0.13-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v2.0.13-stable)
 
 **Versión estable anterior:** [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable)
 
@@ -16,7 +16,7 @@ Simulador WAN para Linux con soporte L3/NAT, Bridge L2, VLAN, puertos LAN sin et
 
 | Uso | Versión | Instalador |
 | --- | --- | --- |
-| Instalación recomendada con FastAPI, ReactUI y rollback | `v2.0.12-stable` | `sudo ./install-v2.sh install` |
+| Instalación recomendada con FastAPI, ReactUI y rollback | `v2.0.13-stable` | `sudo ./install-v2.sh install` |
 | Compatibilidad con el dashboard clásico | `v1.119-stable` | `./WANsim2.sh` |
 
 V2 comienza en modo seguro `dry-run`. Si conservas V1, instala cada versión en un directorio o máquina diferente.
@@ -35,7 +35,7 @@ V2 comienza en modo seguro `dry-run`. Si conservas V1, instala cada versión en 
 
 ## Sistemas Soportados
 
-La matriz de V2 cubre estas versiones; el arreglo de Bridge V2.0.12 se enfoca en Ubuntu:
+La matriz de V2 cubre estas versiones; la corrección de Bridge V2.0.13 se enfoca en Ubuntu:
 
 - Ubuntu Server o Workstation 24.04 y 26.04 LTS.
 - Debian 12.
@@ -93,7 +93,7 @@ http://<IP_DEL_SERVIDOR>:5000
 
 El asistente permite elegir L3/NAT o Bridge L2, interfaces, VLAN/acceso, direccionamiento WAN, DHCP, Telegram y HTTPS.
 
-## Instalar V2.0.12 Stable
+## Instalar V2.0.13 Stable
 
 V2 es la versión recomendada. Su instalador incorpora Docker, FastAPI, ReactUI, proxy HTTPS, agente de red, base de datos y servicios `systemd`.
 
@@ -102,7 +102,7 @@ V2 es la versión recomendada. Su instalador incorpora Docker, FastAPI, ReactUI,
 ```bash
 sudo apt-get update
 sudo apt-get install -y git sudo
-git clone --branch v2.0.12-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
+git clone --branch v2.0.13-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
 cd WAN_SIM-v2
 chmod +x install-v2.sh
 sudo ./install-v2.sh install
@@ -113,7 +113,7 @@ sudo ./install-v2.sh install
 ```bash
 sudo dnf makecache -y
 sudo dnf install -y git sudo
-git clone --branch v2.0.12-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
+git clone --branch v2.0.13-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
 cd WAN_SIM-v2
 chmod +x install-v2.sh
 sudo ./install-v2.sh install
@@ -124,7 +124,7 @@ sudo ./install-v2.sh install
 ```bash
 sudo dnf makecache -y
 sudo dnf install -y git sudo
-git clone --branch v2.0.12-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
+git clone --branch v2.0.13-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
 cd WAN_SIM-v2
 chmod +x install-v2.sh
 sudo ./install-v2.sh install
@@ -134,7 +134,7 @@ Comprueba que instalaste la etiqueta correcta:
 
 ```bash
 git describe --tags --exact-match
-# Debe mostrar: v2.0.12-stable
+# Debe mostrar: v2.0.13-stable
 ```
 
 Consulta el estado y la clave inicial:
@@ -156,7 +156,7 @@ sudo wansim logs
 sudo wansim doctor --export /tmp/wansim-doctor.txt
 sudo wansim backup
 sudo wansim restore /var/backups/wansim/ARCHIVO.tar.gz
-sudo wansim upgrade v2.0.12-stable
+sudo wansim upgrade v2.0.13-stable
 sudo wansim rollback-version
 sudo wansim support-bundle
 ```
@@ -202,13 +202,19 @@ sudo sed -n 's/^WANSIM_V2_API_KEY="\(.*\)"$/\1/p' /etc/wansim/wansim.env
 
 En ReactUI selecciona **Clave heredada**, entra a **Acceso**, crea un usuario `admin`, cierra sesión y vuelve a ingresar con usuario y contraseña. Después podrás crear roles `viewer`, `operator` y `admin`.
 
-## Corrección De V2.0.12 En Ubuntu
+## Correcciones De V2.0.13 En Ubuntu
 
 - Bridge L2 conserva el forwarding IPv4 global que Docker necesita para publicar ReactUI. Ping y SSH podían seguir funcionando mientras la web quedaba inaccesible.
 - Las solicitudes de despliegue y estado dejan de esperar indefinidamente. Si se pierde la respuesta, revisa `sudo wansim doctor` y el historial antes de volver a enviar la configuración.
-- Para actualizar una instalación V2 existente en Ubuntu: `sudo wansim backup` y después `sudo wansim upgrade v2.0.12-stable`. Conserva acceso por consola durante el primer despliegue Bridge.
+- Para actualizar una instalación V2 existente en Ubuntu: `sudo wansim backup` y después `sudo wansim upgrade v2.0.13-stable`. Conserva acceso por consola durante el primer despliegue Bridge.
 
-## Novedades De V2.0.11
+V2.0.12-rev1 incorporó:
+
+- Corrige el rechazo `422 String should have at least 1 character` que impedía finalizar el asistente cuando la topología no activa conservaba interfaces sin seleccionar.
+- El asistente ReactUI ahora envía únicamente la sección de la topología elegida (L3 o Bridge) y exige interfaces seleccionadas antes de revisar.
+- Los errores de validación del API se muestran traducidos y accionables en ReactUI.
+
+V2.0.11 incorporó:
 
 - Agente nativo compatible con Python 3.14 en Ubuntu 26.04.
 - Pydantic Core y Cryptography se instalan desde wheels, sin compilar Rust o C.

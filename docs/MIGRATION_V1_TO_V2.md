@@ -21,12 +21,12 @@ No copies tokens de Telegram ni llaves TLS a V2. El instalador crea secretos ind
 Clona V2 en otro directorio y utiliza puertos distintos a V1:
 
 ```bash
-git clone --branch v2.0.12-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
+git clone --branch v2.0.13-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
 cd WAN_SIM-v2
 sudo ./install-v2.sh install
 ```
 
-Sigue la sección **Instalar V2.0.12 Stable** del README. V1 conserva el dashboard en `5000`; V2 publica ReactUI y la API mediante su proxy HTTPS.
+Sigue la sección **Instalar V2.0.13 Stable** del README. V1 conserva el dashboard en `5000`; V2 publica ReactUI y la API mediante su proxy HTTPS.
 
 ## 3. Recrear La Topología Como Borrador
 
@@ -36,4 +36,4 @@ No importes directamente `~/emix_abundix.conf`: V2 valida el modelo antes de apl
 
 Mantén V2 en `dry-run` durante la primera revisión. Cuando la matriz de integración haya sido aprobada para tu distribución, realiza el primer despliegue en una VM aislada, comprueba interfaces, DHCP, NAT y `netem`, y usa el botón **Rollback** si el plan no coincide con lo esperado.
 
-`v2.0.12-stable` es la ruta recomendada para instalaciones nuevas en Ubuntu. Conserva el respaldo y la referencia V1.119 hasta completar tus pruebas de aceptación locales.
+`v2.0.13-stable` es la ruta recomendada para instalaciones nuevas en Ubuntu. Conserva el respaldo y la referencia V1.119 hasta completar tus pruebas de aceptación locales.

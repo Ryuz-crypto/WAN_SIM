@@ -8,7 +8,7 @@ import { AccessControl } from './AccessControl'
 import { ConfigurationWizard } from './ConfigurationWizard'
 import { DoctorPanel } from './DoctorPanel'
 import { RecoveryCenter } from './RecoveryCenter'
-import type { Config, Configuration, Deployment, Identity, L3Link, Overview, PlanReview, TelegramBot, TelegramPermission } from './types'
+import type { Config, ConfigPayload, Configuration, Deployment, Identity, L3Link, Overview, PlanReview, TelegramBot, TelegramPermission } from './types'
 
 const emptyLink = (): L3Link => ({ wan: '', lan: '', lanMode: 'vlan', vlans: 1, startVlan: 100, baseOctet: 10, wanMode: 'dhcp', wanCidr: '', wanGateway: '' })
 const initialConfig = (): Config => ({ topology: 'nat', dhcpEnabled: true, l3: { segment: '10.254', links: [emptyLink()] }, bridge: { pairs: [{ input: '', output: '' }] } })
@@ -18,6 +18,11 @@ function bytes(value: number) {
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
   const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1)
   return `${(value / 1024 ** index).toFixed(index ? 1 : 0)} ${units[index]}`
+}
+
+function configPayload(config: Config): ConfigPayload {
+  const { l3, bridge, ...rest } = config
+  return config.topology === 'nat' ? { ...rest, l3 } : { ...rest, bridge }
 }
 
 function App() {
@@ -111,9 +116,18 @@ function App() {
   const changeName = (value: string) => { setName(value); setConfiguration(null); setReview(null) }
   const resetConfig = () => { changeConfig(initialConfig()); setName('Topología WAN_SIM 2.0') }
   const createPlan = async () => {
+    const missing = config.topology === 'nat'
+      ? config.l3.links.flatMap(link => [['WAN', link.wan], ['LAN', link.lan]] as const)
+      : config.bridge.pairs.flatMap(pair => [['entrada', pair.input], ['salida', pair.output]] as const)
+    const pending = missing.filter(([, value]) => !value)
+    if (pending.length) {
+      setConfiguration(null); setReview(null)
+      setNotice(`Selecciona la interfaz ${pending.map(([label]) => label).join(', ')} en el paso Interfaces antes de revisar.`)
+      return
+    }
     setBusy(true); setNotice('')
     try {
-      const created = await api.createConfig(name, config)
+      const created = await api.createConfig(name, configPayload(config))
       const response = await api.plan(created.id)
       setConfiguration(created); setReview(response)
       setNotice(response.preflight.can_apply ? 'Revisión completada. El cambio está listo para desplegar.' : 'La revisión encontró errores que deben corregirse.')
@@ -182,7 +196,7 @@ function App() {
   }
 
   return <main className="app-shell">
-    <header className="topbar"><div className="brand"><Router size={28} /><div><strong>WAN_SIM</strong><span>Control Plane 2.0</span></div></div><div className="topbar-actions">{identity && <span className="identity-badge"><strong>{identity.username}</strong>{identity.role}</span>}<span className={`mode ${health?.execution_mode === 'host' ? 'host' : ''}`}><ShieldCheck size={15} />{authenticated ? health?.execution_mode ?? 'conectando' : 'protegido'}</span><span className="version">{health?.version ?? '2.0.12-stable'}</span>{authenticated && <><button className="icon-button" onClick={() => void refresh()} title="Actualizar estado"><RefreshCw size={18} /></button><button className="icon-button" onClick={logout} title="Cerrar sesión"><LogOut size={18} /></button></>}</div></header>
+    <header className="topbar"><div className="brand"><Router size={28} /><div><strong>WAN_SIM</strong><span>Control Plane 2.0</span></div></div><div className="topbar-actions">{identity && <span className="identity-badge"><strong>{identity.username}</strong>{identity.role}</span>}<span className={`mode ${health?.execution_mode === 'host' ? 'host' : ''}`}><ShieldCheck size={15} />{authenticated ? health?.execution_mode ?? 'conectando' : 'protegido'}</span><span className="version">{health?.version ?? '2.0.13-stable'}</span>{authenticated && <><button className="icon-button" onClick={() => void refresh()} title="Actualizar estado"><RefreshCw size={18} /></button><button className="icon-button" onClick={logout} title="Cerrar sesión"><LogOut size={18} /></button></>}</div></header>
     {!authenticated && <section className="workspace"><section className="panel auth-panel"><div className="panel-heading"><div><span className="eyebrow">Acceso seguro</span><h1>Plano de control protegido</h1></div><KeyRound size={23} /></div><div className="segmented"><button className={authMethod === 'user' ? 'selected' : ''} onClick={() => setAuthMethod('user')}>Usuario</button><button className={authMethod === 'key' ? 'selected' : ''} onClick={() => setAuthMethod('key')}>Clave heredada</button></div>{authMethod === 'user' ? <><label>Usuario<input autoComplete="username" value={username} onChange={event => setUsername(event.target.value)} /></label><label>Contraseña<input type="password" autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void authenticateUser() }} /></label><div className="button-row"><button className="primary-button" onClick={() => void authenticateUser()}><KeyRound size={17} />Iniciar sesión</button></div></> : <><label>Clave API de instalación<input type="password" autoComplete="current-password" value={apiKeyDraft} onChange={event => setApiKeyDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void authenticateKey() }} /></label><p className="auth-help">Utilízala para crear el primer administrador y migra después a sesiones personales.</p><div className="button-row"><button className="primary-button" onClick={() => void authenticateKey()}><KeyRound size={17} />Ingresar con clave</button></div></>}</section></section>}
     {authenticated && identity && <>
     <nav className="nav-tabs" aria-label="Navegación principal">
