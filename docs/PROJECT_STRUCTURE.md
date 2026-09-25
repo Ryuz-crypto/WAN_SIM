@@ -1,6 +1,6 @@
 # Project Structure
 
-Version 2.0.11-stable keeps `WANsim2.sh` as the V1 entrypoint while `install-v2.sh` manages the stable V2 platform. The previous stable release remains available as `v1.119-stable`.
+Version 2.0.12-rev1 keeps `WANsim2.sh` as the V1 entrypoint while `install-v2.sh` manages the stable V2 platform. The previous stable release remains available as `v1.119-stable`.
 
 Current layout:
 

@@ -114,6 +114,19 @@ class TopologyConfig(BaseModel):
     bridge: BridgeConfig | None = None
     dhcp_enabled: bool = Field(default=True, alias="dhcpEnabled")
 
+    @model_validator(mode="before")
+    @classmethod
+    def discard_inactive_section(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        payload = dict(data)
+        topology = payload.get("topology")
+        if topology in (Topology.NAT, Topology.NAT.value):
+            payload.pop("bridge", None)
+        elif topology in (Topology.BRIDGE, Topology.BRIDGE.value):
+            payload.pop("l3", None)
+        return payload
+
     @model_validator(mode="after")
     def selected_topology(self) -> "TopologyConfig":
         if self.topology == Topology.NAT and self.l3 is None:
