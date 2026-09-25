@@ -194,6 +194,19 @@ class ApiTests(unittest.TestCase):
         plan = self.client.post(f"/api/v2/configurations/{created['id']}/plan").json()
         self.assertTrue(any(item["command"][:3] == ["ip", "link", "add"] for item in plan["actions"]))
 
+    def test_bridge_plan_preserves_host_forwarding_for_published_web_ports(self) -> None:
+        payload = {
+            "name": "Bridge sin interrumpir Docker",
+            "config": {
+                "topology": "bridge", "dhcpEnabled": False,
+                "bridge": {"pairs": [{"input": "wan0", "output": "lan0"}]},
+            },
+        }
+        created = self.client.post("/api/v2/configurations", json=payload).json()
+        plan = self.client.post(f"/api/v2/configurations/{created['id']}/plan").json()
+        self.assertTrue(any(action["id"] == "bridge-create-1" for action in plan["actions"]))
+        self.assertFalse(any(action["command"] == ["sysctl", "-w", "net.ipv4.ip_forward=0"] for action in plan["actions"]))
+
     def test_dry_run_deploy_activates_draft_without_host_changes(self) -> None:
         created = self.client.post("/api/v2/configurations", json=self.nat_payload()).json()
         deployed = self.client.post(f"/api/v2/configurations/{created['id']}/deploy", json={"apply": True})

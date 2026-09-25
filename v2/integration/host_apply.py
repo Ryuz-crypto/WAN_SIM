@@ -165,9 +165,11 @@ def main() -> None:
                 bridge_deployment = service.confirm_management(bridge_deployment)
             assert bridge_deployment.status == "APPLIED", bridge_deployment
             assert exists("br_wan1") and exists("br_wan2"), "No se crearon los bridges L2"
+            assert output("sysctl", "-n", "net.ipv4.ip_forward") == "1", "Bridge desactivó el forwarding requerido por Docker"
             report["checks"]["bridge"] = {
                 "status": bridge_deployment.status,
                 "pairs": 2,
+                "docker_forwarding_preserved": True,
                 "management_guard_confirmed": management_guard,
             }
 

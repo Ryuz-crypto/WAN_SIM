@@ -17,7 +17,8 @@ export function configureSessionToken(value: string) {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, { headers: {
+  const signal = init?.signal ?? (init?.method ? undefined : AbortSignal.timeout(30000))
+  const response = await fetch(url, { signal, headers: {
     'Content-Type': 'application/json',
     ...(operatorKey ? { 'X-WAN-SIM-API-Key': operatorKey } : {}),
     ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
@@ -45,8 +46,8 @@ export const api = {
   doctor: () => request<DoctorReport>('/api/v2/operations/doctor'),
   createConfig: (name: string, config: Config) => request<Configuration>('/api/v2/configurations', { method: 'POST', body: JSON.stringify({ name, config }) }),
   plan: (id: string) => request<PlanReview>(`/api/v2/configurations/${id}/plan`, { method: 'POST' }),
-  deploy: (id: string, apply: boolean, confirmation?: string, managementConfirmation?: string) => request<Deployment>(`/api/v2/configurations/${id}/deploy`, { method: 'POST', body: JSON.stringify({ apply, confirmation, managementConfirmation }) }),
-  confirmDeployment: (id: string) => request<Deployment>(`/api/v2/deployments/${id}/confirm`, { method: 'POST' }),
+  deploy: (id: string, apply: boolean, confirmation?: string, managementConfirmation?: string) => request<Deployment>(`/api/v2/configurations/${id}/deploy`, { method: 'POST', body: JSON.stringify({ apply, confirmation, managementConfirmation }), signal: AbortSignal.timeout(120000) }),
+  confirmDeployment: (id: string) => request<Deployment>(`/api/v2/deployments/${id}/confirm`, { method: 'POST', signal: AbortSignal.timeout(30000) }),
   deployments: () => request<Deployment[]>('/api/v2/deployments'),
   rollback: (id: string) => request<Deployment>(`/api/v2/deployments/${id}/rollback`, { method: 'POST' }),
   snapshots: () => request<RecoverySnapshot[]>('/api/v2/recovery/snapshots'),

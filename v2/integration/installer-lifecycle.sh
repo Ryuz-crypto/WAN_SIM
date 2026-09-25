@@ -77,6 +77,7 @@ fi
 
 phase "Transacción real del agente en interfaces desechables"
 PYTHONPATH="$ROOT/v2/backend" /opt/wansim/agent/venv/bin/python "$ROOT/v2/integration/host_apply.py"
+curl --fail --silent --show-error --cacert "$TLS_DIR/ca.crt" https://localhost/health >/dev/null
 
 phase "Restauración validada"
 "$WANSIM" restore "$BACKUP"

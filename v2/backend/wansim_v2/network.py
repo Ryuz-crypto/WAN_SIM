@@ -148,7 +148,7 @@ class NetworkAgent:
                 actions.append(self._action("dhcp-disable", "apply", "Detener DHCP administrado", ["wansim-agent", "dhcp", "disable"]))
         else:
             assert config.bridge is not None
-            actions.append(self._action("forwarding-disable", "prepare", "Deshabilitar IPv4 forwarding en Bridge L2", ["sysctl", "-w", "net.ipv4.ip_forward=0"]))
+            # Docker publishes ReactUI through host forwarding; L2 bridging must not change that global setting.
             actions.append(self._action("dhcp-disable", "apply", "Detener DHCP administrado", ["wansim-agent", "dhcp", "disable"]))
             for index, pair in enumerate(config.bridge.pairs, start=1):
                 bridge = f"br_wan{index}"

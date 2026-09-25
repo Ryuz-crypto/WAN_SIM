@@ -138,7 +138,9 @@ function App() {
       const detail = error instanceof Error ? error.message : 'error desconocido'
       setNotice(awaitingConnectivityConfirmation
         ? `No se confirmó la conectividad administrativa. El watchdog revertirá el cambio automáticamente: ${detail}`
-        : detail)
+        : error instanceof TypeError || error instanceof DOMException
+          ? 'Se perdió la respuesta del despliegue. El cambio pudo haberse aplicado; revisa el historial o ejecuta sudo wansim doctor antes de volver a enviarlo.'
+          : detail)
     }
     finally { setBusy(false) }
   }
@@ -180,7 +182,7 @@ function App() {
   }
 
   return <main className="app-shell">
-    <header className="topbar"><div className="brand"><Router size={28} /><div><strong>WAN_SIM</strong><span>Control Plane 2.0</span></div></div><div className="topbar-actions">{identity && <span className="identity-badge"><strong>{identity.username}</strong>{identity.role}</span>}<span className={`mode ${health?.execution_mode === 'host' ? 'host' : ''}`}><ShieldCheck size={15} />{authenticated ? health?.execution_mode ?? 'conectando' : 'protegido'}</span><span className="version">{health?.version ?? '2.0.11-stable'}</span>{authenticated && <><button className="icon-button" onClick={() => void refresh()} title="Actualizar estado"><RefreshCw size={18} /></button><button className="icon-button" onClick={logout} title="Cerrar sesión"><LogOut size={18} /></button></>}</div></header>
+    <header className="topbar"><div className="brand"><Router size={28} /><div><strong>WAN_SIM</strong><span>Control Plane 2.0</span></div></div><div className="topbar-actions">{identity && <span className="identity-badge"><strong>{identity.username}</strong>{identity.role}</span>}<span className={`mode ${health?.execution_mode === 'host' ? 'host' : ''}`}><ShieldCheck size={15} />{authenticated ? health?.execution_mode ?? 'conectando' : 'protegido'}</span><span className="version">{health?.version ?? '2.0.12-stable'}</span>{authenticated && <><button className="icon-button" onClick={() => void refresh()} title="Actualizar estado"><RefreshCw size={18} /></button><button className="icon-button" onClick={logout} title="Cerrar sesión"><LogOut size={18} /></button></>}</div></header>
     {!authenticated && <section className="workspace"><section className="panel auth-panel"><div className="panel-heading"><div><span className="eyebrow">Acceso seguro</span><h1>Plano de control protegido</h1></div><KeyRound size={23} /></div><div className="segmented"><button className={authMethod === 'user' ? 'selected' : ''} onClick={() => setAuthMethod('user')}>Usuario</button><button className={authMethod === 'key' ? 'selected' : ''} onClick={() => setAuthMethod('key')}>Clave heredada</button></div>{authMethod === 'user' ? <><label>Usuario<input autoComplete="username" value={username} onChange={event => setUsername(event.target.value)} /></label><label>Contraseña<input type="password" autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void authenticateUser() }} /></label><div className="button-row"><button className="primary-button" onClick={() => void authenticateUser()}><KeyRound size={17} />Iniciar sesión</button></div></> : <><label>Clave API de instalación<input type="password" autoComplete="current-password" value={apiKeyDraft} onChange={event => setApiKeyDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void authenticateKey() }} /></label><p className="auth-help">Utilízala para crear el primer administrador y migra después a sesiones personales.</p><div className="button-row"><button className="primary-button" onClick={() => void authenticateKey()}><KeyRound size={17} />Ingresar con clave</button></div></>}</section></section>}
     {authenticated && identity && <>
     <nav className="nav-tabs" aria-label="Navegación principal">

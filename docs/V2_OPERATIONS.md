@@ -1,6 +1,6 @@
 # Operación De WAN_SIM 2
 
-Esta guía aplica a `v2.0.11-stable`. La versión `v1.119-stable` se conserva como estable anterior para el dashboard clásico.
+Esta guía aplica a `v2.0.12-stable`. La versión `v1.119-stable` se conserva como estable anterior para el dashboard clásico.
 
 ## Estado Y Diagnóstico
 
@@ -38,7 +38,7 @@ El respaldo detiene brevemente el plano de control para mantener consistente SQL
 ## Actualización Y Reparación
 
 ```bash
-sudo wansim upgrade v2.0.11-stable
+sudo wansim upgrade v2.0.12-stable
 sudo wansim rollback-version
 sudo wansim repair
 ```
