@@ -1,16 +1,23 @@
 #!/usr/bin/env bash
 
 install_native_agent() {
-  log_info "Instalando el agente nativo en $WANSIM_OPT_DIR/agent..."
-  install -d -m 0755 "$WANSIM_OPT_DIR/agent/app"
-  rm -rf "$WANSIM_OPT_DIR/agent/app/wansim_v2"
-  cp -a "$INSTALLER_ROOT/v2/backend/wansim_v2" "$WANSIM_OPT_DIR/agent/app/wansim_v2"
-  install -m 0644 "$INSTALLER_ROOT/v2/backend/requirements.txt" "$WANSIM_OPT_DIR/agent/requirements.txt"
-  if [[ ! -x "$WANSIM_OPT_DIR/agent/venv/bin/python" ]]; then
-    python3 -m venv "$WANSIM_OPT_DIR/agent/venv"
-  fi
-  "$WANSIM_OPT_DIR/agent/venv/bin/pip" install --disable-pip-version-check --no-cache-dir -r "$WANSIM_OPT_DIR/agent/requirements.txt"
-  chown -R root:"$WANSIM_SERVICE_GROUP" "$WANSIM_OPT_DIR/agent"
-  chmod -R o-rwx "$WANSIM_OPT_DIR/agent"
+  local target="$WANSIM_OPT_DIR/agent"
+  local stage="$WANSIM_OPT_DIR/.agent-new"
+  log_info "Instalando el agente nativo en $target..."
+  rm -rf "$stage"
+  install -d -m 0755 "$stage/app"
+  cp -a "$INSTALLER_ROOT/v2/backend/wansim_v2" "$stage/app/wansim_v2"
+  install -m 0644 "$INSTALLER_ROOT/v2/agent/requirements.txt" "$stage/requirements.txt"
+  python3 -m venv "$stage/venv"
+  "$stage/venv/bin/python" -m pip install \
+    --disable-pip-version-check --no-cache-dir --only-binary=:all: \
+    -r "$stage/requirements.txt"
+  WANSIM_V2_AGENT_TOKEN="agent-install-smoke-test-token-32chars" \
+    PYTHONPATH="$stage/app" "$stage/venv/bin/python" -c \
+    'from wansim_v2.agent_server import app; assert app.title == "WAN_SIM 2 Host Agent"'
+  rm -rf "$target"
+  mv "$stage" "$target"
+  chown -R root:"$WANSIM_SERVICE_GROUP" "$target"
+  chmod -R o-rwx "$target"
   log_ok "Agente nativo instalado; no se ha modificado ninguna interfaz."
 }

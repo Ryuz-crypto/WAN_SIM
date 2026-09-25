@@ -127,6 +127,18 @@ class InstallerStructureTests(unittest.TestCase):
         self.assertIn("ip -o -4 addr show scope global", healthcheck)
         self.assertNotIn("hostname -I", healthcheck)
 
+    def test_native_agent_has_python_314_binary_dependencies(self) -> None:
+        agent = (ROOT / "installer/agent.sh").read_text(encoding="utf-8")
+        requirements = (ROOT / "v2/agent/requirements.txt").read_text(encoding="utf-8")
+        checks = (ROOT / ".github/workflows/checks.yml").read_text(encoding="utf-8")
+        matrix = (ROOT / ".github/workflows/linux-matrix.yml").read_text(encoding="utf-8")
+        self.assertIn("v2/agent/requirements.txt", agent)
+        self.assertIn("--only-binary=:all:", agent)
+        self.assertIn('python_version >= "3.14"', requirements)
+        self.assertIn("pydantic==2.13.5", requirements)
+        self.assertIn("'3.14'", checks)
+        self.assertIn("ubuntu:26.04", matrix)
+
 
 if __name__ == "__main__":
     unittest.main()

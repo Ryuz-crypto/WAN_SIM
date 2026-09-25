@@ -27,6 +27,10 @@ jobs:
             slug: ubuntu-24.04
             distro: ubuntu
             image: ubuntu:24.04
+          - name: Ubuntu 26.04
+            slug: ubuntu-26.04
+            distro: ubuntu
+            image: ubuntu:26.04
           - name: Debian 12
             slug: debian-12
             distro: debian

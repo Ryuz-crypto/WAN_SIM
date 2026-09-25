@@ -28,8 +28,8 @@ else
   exit 1
 fi
 
-python3 -m pip install --disable-pip-version-check --no-cache-dir --target /tmp/wansim-integration-deps \
-  -r "$workspace/v2/backend/requirements.txt"
+python3 -m pip install --disable-pip-version-check --no-cache-dir --only-binary=:all: \
+  --target /tmp/wansim-integration-deps -r "$workspace/v2/agent/requirements.txt"
 
 export PYTHONPATH="$workspace/v2/backend:/tmp/wansim-integration-deps"
 exec python3 "$workspace/v2/integration/host_apply.py"

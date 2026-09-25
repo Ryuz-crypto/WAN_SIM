@@ -31,6 +31,16 @@ validate_platform() {
   log_ok "Validación local correcta; entorno: $WANSIM_VIRTUALIZATION."
 }
 
+validate_python_runtime() {
+  command_exists python3 || die "Python 3 no quedó disponible después de instalar las dependencias base."
+  local version
+  version="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+  python3 -c 'import sys; raise SystemExit(0 if (3, 9) <= sys.version_info[:2] <= (3, 14) else 1)' || \
+    die "Python $version no está soportado por WAN_SIM 2; se requiere Python 3.9 a 3.14."
+  export WANSIM_PYTHON_VERSION="$version"
+  log_ok "Runtime Python $version compatible."
+}
+
 validate_connectivity() {
   [[ "$WANSIM_SKIP_CONNECTIVITY" == "1" ]] && { log_warn "Pruebas de conectividad omitidas."; return; }
   command_exists curl || return 0

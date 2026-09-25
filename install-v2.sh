@@ -134,6 +134,7 @@ install_or_refresh() {
   validate_connectivity
   begin_install_transaction
   install_base_packages
+  validate_python_runtime
   maybe_fail_for_test after-packages
   install_docker_engine
   validate_network_tooling
