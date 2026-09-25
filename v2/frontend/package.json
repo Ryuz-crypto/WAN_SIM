@@ -1,7 +1,7 @@
 {
   "name": "wansim-reactui",
   "private": true,
-  "version": "2.0.10-stable",
+  "version": "2.0.11-stable",
   "packageManager": "pnpm@9.15.4",
   "type": "module",
   "scripts": {

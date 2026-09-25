@@ -1,14 +1,14 @@
 # Ryuz WAN Simulator
 
-[![Versión estable](https://img.shields.io/badge/versi%C3%B3n-v2.0.10--stable-00b388?style=flat-square)](https://github.com/Ryuz-crypto/WAN_SIM/releases/tag/v2.0.10-stable)
-[![Plataformas Linux](https://img.shields.io/badge/Linux-Ubuntu%2024.04%20%7C%20Debian%2012%20%7C%20Fedora%2042%20%7C%20Rocky%209-f58220?style=flat-square&logo=linux&logoColor=white)](#sistemas-soportados)
+[![Versión estable](https://img.shields.io/badge/versi%C3%B3n-v2.0.11--stable-00b388?style=flat-square)](https://github.com/Ryuz-crypto/WAN_SIM/releases/tag/v2.0.11-stable)
+[![Plataformas Linux](https://img.shields.io/badge/Linux-Ubuntu%2024.04%2F26.04%20%7C%20Debian%2012%20%7C%20Fedora%2042%20%7C%20Rocky%209-f58220?style=flat-square&logo=linux&logoColor=white)](#sistemas-soportados)
 [![Licencia CC0 1.0](https://img.shields.io/badge/licencia-CC0%201.0-00739d?style=flat-square)](LICENSE)
 [![WAN_SIM checks](https://github.com/Ryuz-crypto/WAN_SIM/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/Ryuz-crypto/WAN_SIM/actions/workflows/checks.yml)
 [![Matriz Linux](https://github.com/Ryuz-crypto/WAN_SIM/actions/workflows/linux-matrix.yml/badge.svg?branch=main)](https://github.com/Ryuz-crypto/WAN_SIM/actions/workflows/linux-matrix.yml)
 
 Simulador WAN para Linux con soporte L3/NAT, Bridge L2, VLAN, puertos LAN sin etiqueta, DHCP, `tc/netem`, HTTPS, Telegram y panel web.
 
-**Versión estable recomendada y más actual:** [`v2.0.10-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v2.0.10-stable)
+**Versión estable recomendada y más actual:** [`v2.0.11-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v2.0.11-stable)
 
 **Versión estable anterior:** [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable)
 
@@ -16,7 +16,7 @@ Simulador WAN para Linux con soporte L3/NAT, Bridge L2, VLAN, puertos LAN sin et
 
 | Uso | Versión | Instalador |
 | --- | --- | --- |
-| Instalación recomendada con FastAPI, ReactUI y rollback | `v2.0.10-stable` | `sudo ./install-v2.sh install` |
+| Instalación recomendada con FastAPI, ReactUI y rollback | `v2.0.11-stable` | `sudo ./install-v2.sh install` |
 | Compatibilidad con el dashboard clásico | `v1.119-stable` | `./WANsim2.sh` |
 
 V2 comienza en modo seguro `dry-run`. Si conservas V1, instala cada versión en un directorio o máquina diferente.
@@ -35,16 +35,16 @@ V2 comienza en modo seguro `dry-run`. Si conservas V1, instala cada versión en 
 
 ## Sistemas Soportados
 
-V2.0.10 está validada por la matriz automática en estas versiones:
+V2.0.11 está validada por la matriz automática en estas versiones:
 
-- Ubuntu Server o Workstation 24.04 LTS.
+- Ubuntu Server o Workstation 24.04 y 26.04 LTS.
 - Debian 12.
 - Fedora 42.
 - Rocky Linux 9.
 
 El instalador acepta arquitecturas `x86_64` y `aarch64`; la matriz automática publicada actualmente se ejecuta en `x86_64`.
 
-> **Importante:** V2.0.10 no debe instalarse en Ubuntu 20.04 con Python 3.8: la versión fijada de Uvicorn requiere Python 3.9 o posterior. Debian 10 y Rocky Linux 8 tampoco forman parte de la matriz certificada de V2. Para esos sistemas conserva V1.119 o actualiza primero el sistema operativo.
+> **Importante:** V2 requiere Python 3.9 a 3.14. Ubuntu 20.04 con Python 3.8, Debian 10 y Rocky Linux 8 no forman parte de la matriz certificada. Para esos sistemas conserva V1.119 o actualiza primero el sistema operativo.
 
 Se requiere Linux con `systemd`, acceso a Internet y un usuario con permisos `sudo`.
 
@@ -93,16 +93,16 @@ http://<IP_DEL_SERVIDOR>:5000
 
 El asistente permite elegir L3/NAT o Bridge L2, interfaces, VLAN/acceso, direccionamiento WAN, DHCP, Telegram y HTTPS.
 
-## Instalar V2.0.10 Stable
+## Instalar V2.0.11 Stable
 
 V2 es la versión recomendada. Su instalador incorpora Docker, FastAPI, ReactUI, proxy HTTPS, agente de red, base de datos y servicios `systemd`.
 
-### Ubuntu 24.04 o Debian 12
+### Ubuntu 24.04, Ubuntu 26.04 o Debian 12
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y git sudo
-git clone --branch v2.0.10-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
+git clone --branch v2.0.11-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
 cd WAN_SIM-v2
 chmod +x install-v2.sh
 sudo ./install-v2.sh install
@@ -113,7 +113,7 @@ sudo ./install-v2.sh install
 ```bash
 sudo dnf makecache -y
 sudo dnf install -y git sudo
-git clone --branch v2.0.10-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
+git clone --branch v2.0.11-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
 cd WAN_SIM-v2
 chmod +x install-v2.sh
 sudo ./install-v2.sh install
@@ -124,7 +124,7 @@ sudo ./install-v2.sh install
 ```bash
 sudo dnf makecache -y
 sudo dnf install -y git sudo
-git clone --branch v2.0.10-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
+git clone --branch v2.0.11-stable --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
 cd WAN_SIM-v2
 chmod +x install-v2.sh
 sudo ./install-v2.sh install
@@ -134,7 +134,7 @@ Comprueba que instalaste la etiqueta correcta:
 
 ```bash
 git describe --tags --exact-match
-# Debe mostrar: v2.0.10-stable
+# Debe mostrar: v2.0.11-stable
 ```
 
 Consulta el estado y la clave inicial:
@@ -156,7 +156,7 @@ sudo wansim logs
 sudo wansim doctor --export /tmp/wansim-doctor.txt
 sudo wansim backup
 sudo wansim restore /var/backups/wansim/ARCHIVO.tar.gz
-sudo wansim upgrade v2.0.10-stable
+sudo wansim upgrade v2.0.11-stable
 sudo wansim rollback-version
 sudo wansim support-bundle
 ```
@@ -202,7 +202,15 @@ sudo sed -n 's/^WANSIM_V2_API_KEY="\(.*\)"$/\1/p' /etc/wansim/wansim.env
 
 En ReactUI selecciona **Clave heredada**, entra a **Acceso**, crea un usuario `admin`, cierra sesión y vuelve a ingresar con usuario y contraseña. Después podrás crear roles `viewer`, `operator` y `admin`.
 
-## Novedades De V2.0.10
+## Novedades De V2.0.11
+
+- Agente nativo compatible con Python 3.14 en Ubuntu 26.04.
+- Pydantic Core y Cryptography se instalan desde wheels, sin compilar Rust o C.
+- Dependencias del agente separadas de las del backend Docker.
+- Entorno virtual preparado de forma atómica y arranque portable con `python -m uvicorn`.
+- Validación previa de Python y matriz automática adicional para Ubuntu 26.04.
+
+V2.0.10 incorporó:
 
 - Asistente ReactUI de cuatro pasos con detección y recomendación de interfaces.
 - Preflight con errores, advertencias y recomendaciones antes de desplegar.
