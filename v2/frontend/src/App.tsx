@@ -149,6 +149,7 @@ function App() {
       setConfirmDeployment(false); setConfirmationText(''); setManagementConfirmationText(''); await refresh()
     }
     catch (error) {
+      setConfirmDeployment(false)
       const detail = error instanceof Error ? error.message : 'error desconocido'
       setNotice(awaitingConnectivityConfirmation
         ? `No se confirmó la conectividad administrativa. El watchdog revertirá el cambio automáticamente: ${detail}`

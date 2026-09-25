@@ -39,6 +39,7 @@ async function main() {
         preflight: { ok: true, can_apply: true, mode: 'host', missing_interfaces: [], selected_interfaces: ['ens160', 'ens192'], management_interfaces: ['ens160'], protected_interfaces: ['ens160'], requires_management_confirmation: true, issues: [{ severity: 'warning', code: 'management_interface', title: 'ens160 transporta la administración', detail: 'Se activará recuperación automática.', interfaces: ['ens160'] }] },
         comparison: { current_name: 'Sin configuración activa', proposed_name: 'Topología WAN_SIM 2.0', current: ['Sin configuración activa'], proposed: ['Enlace 1: ens192 -> ens160'], changes: ['Agregar: Enlace 1: ens192 -> ens160'] },
       } });
+      if (url.pathname === '/api/v2/configurations/cfg-browser-1/deploy' && request.method() === 'POST') return route.abort('failed');
       const localPath = url.pathname === '/' ? path.join(dist, 'index.html') : path.join(dist, url.pathname);
       if (fs.existsSync(localPath) && fs.statSync(localPath).isFile()) {
         const extension = path.extname(localPath);
@@ -76,8 +77,14 @@ async function main() {
     await page.screenshot({ path: 'test-results/v2-wizard-desktop.png', fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
     await page.screenshot({ path: 'test-results/v2-wizard-mobile.png', fullPage: true });
+    await page.getByLabel('Confirmación del cambio').fill('APLICAR cfg-browser-1');
+    await page.getByLabel('Confirmación de riesgo').fill('RIESGO ens160 cfg-browser-1');
+    await page.getByRole('button', { name: 'Aplicar cambios' }).click();
+    await page.getByText(/Se perdió la respuesta del despliegue/).waitFor();
+    assert.equal(await page.getByRole('dialog').count(), 0, 'A failed submit must reveal the notice instead of leaving the modal open');
+    assert.equal(await page.getByRole('button', { name: 'Desplegar cambio' }).isEnabled(), true);
     assert.deepEqual(errors, []);
-    console.log('ReactUI V2: wizard, preflight, comparison and management guard passed.');
+    console.log('ReactUI V2: wizard, management guard and lost-response handling passed.');
   } finally {
     await browser.close();
   }
