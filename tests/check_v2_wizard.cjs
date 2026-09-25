@@ -12,10 +12,11 @@ async function main() {
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.addInitScript(() => window.sessionStorage.setItem('wansim-api-key', 'browser-test-key'));
+    let createdPayload = null;
     await page.route('http://wansim-v2.test/**', async route => {
       const request = route.request();
       const url = new URL(request.url());
-      if (url.pathname === '/health') return route.fulfill({ json: { ok: true, version: '2.0.11-stable', execution_mode: 'host' } });
+      if (url.pathname === '/health') return route.fulfill({ json: { ok: true, version: '2.0.12-rev1', execution_mode: 'host' } });
       if (url.pathname === '/api/v2/auth/me') return route.fulfill({ json: { id: 'legacy-api-key', username: 'legacy-api-key', role: 'admin', auth: 'api_key' } });
       if (url.pathname === '/api/v2/operations/overview') return route.fulfill({ json: {
         execution_mode: 'host', active_configuration: null, deployments: [], leases: [], services: [],
@@ -29,6 +30,7 @@ async function main() {
       if (url.pathname === '/api/v2/telegram/bots') return route.fulfill({ json: [] });
       if (url.pathname === '/api/v2/configurations' && request.method() === 'POST') {
         const body = request.postDataJSON();
+        createdPayload = body.config;
         return route.fulfill({ json: { id: 'cfg-browser-1', name: body.name, state: 'DRAFT', config: body.config, created_at: new Date().toISOString(), updated_at: new Date().toISOString() } });
       }
       if (url.pathname === '/api/v2/configurations/cfg-browser-1/plan') return route.fulfill({ json: {
@@ -47,6 +49,10 @@ async function main() {
     });
 
     await page.goto('http://wansim-v2.test/');
+    await page.getByRole('button', { name: /Revisión/ }).click();
+    await page.getByRole('button', { name: 'Revisar cambio' }).click();
+    await page.getByText(/Selecciona la interfaz WAN, LAN en el paso Interfaces/).waitFor();
+    assert.equal(createdPayload, null);
     await page.getByRole('button', { name: /Interfaces/ }).click();
     await page.getByText('3 interfaces detectadas').waitFor();
     assert.match(await page.locator('.interface-inventory').innerText(), /ens160.*Administración/s);
@@ -58,6 +64,9 @@ async function main() {
     await page.getByRole('button', { name: /Red/ }).click();
     await page.getByRole('button', { name: /Revisión/ }).click();
     await page.getByRole('button', { name: 'Revisar cambio' }).click();
+    assert.equal(createdPayload.topology, 'nat');
+    assert.ok(createdPayload.l3, 'NAT payload must include the l3 section');
+    assert.equal(createdPayload.bridge, undefined, 'NAT payload must not include the inactive bridge section');
     await page.getByText('ens160 transporta la administración').waitFor();
     assert.match(await page.locator('.comparison').innerText(), /ACTUAL.*PROPUESTA/s);
     await page.getByRole('button', { name: 'Desplegar cambio' }).click();

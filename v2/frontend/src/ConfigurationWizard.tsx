@@ -36,8 +36,8 @@ function InterfaceSelect({ value, interfaces, onChange }: { value: string; inter
 }
 
 function Diagram({ config }: { config: Config }) {
-  if (config.topology === 'bridge') return <div className="diagram">{config.bridge.pairs.map((pair, index) => <div className="flow" key={index}><span>{pair.input || 'Entrada'}</span><i /><b>Bridge {index + 1}</b><i /><span>{pair.output || 'Salida'}</span></div>)}</div>
-  return <div className="diagram">{config.l3.links.map((link, index) => <div className="flow" key={index}><span>{link.lan || 'LAN'}</span><i /><b>{link.lanMode === 'access' ? 'Acceso' : `VLAN ${link.startVlan}-${link.startVlan + link.vlans - 1}`}</b><i /><span>{link.wan || 'WAN'}</span></div>)}</div>
+  if (config.topology === 'bridge') return <div className="diagram">{(config.bridge?.pairs ?? []).map((pair, index) => <div className="flow" key={index}><span>{pair.input || 'Entrada'}</span><i /><b>Bridge {index + 1}</b><i /><span>{pair.output || 'Salida'}</span></div>)}</div>
+  return <div className="diagram">{(config.l3?.links ?? []).map((link, index) => <div className="flow" key={index}><span>{link.lan || 'LAN'}</span><i /><b>{link.lanMode === 'access' ? 'Acceso' : `VLAN ${link.startVlan}-${link.startVlan + link.vlans - 1}`}</b><i /><span>{link.wan || 'WAN'}</span></div>)}</div>
 }
 
 export function ConfigurationWizard(props: Props) {
