@@ -15,12 +15,12 @@ async function main() {
     await page.route('http://wansim-admin.test/**', async route => {
       const request = route.request();
       const url = new URL(request.url());
-      if (url.pathname === '/health') return route.fulfill({ json: { ok: true, version: '2.0.12-rev1', execution_mode: 'dry-run' } });
+      if (url.pathname === '/health') return route.fulfill({ json: { ok: true, version: '2.0.12-rev2', execution_mode: 'dry-run' } });
       if (url.pathname === '/api/v2/auth/me') return route.fulfill({ json: { id: 'legacy-api-key', username: 'bootstrap-admin', role: 'admin', auth: 'api_key' } });
       if (url.pathname === '/api/v2/operations/overview') return route.fulfill({ json: { execution_mode: 'dry-run', active_configuration: null, deployments: [], leases: [], services: [], interfaces: [] } });
       if (url.pathname === '/api/v2/deployments') return route.fulfill({ json: [] });
       if (url.pathname === '/api/v2/telegram/bots') return route.fulfill({ json: [] });
-      if (url.pathname === '/api/v2/recovery/snapshots') return route.fulfill({ json: [{ id: 'snapshot-0001', configuration_id: 'config-0001', created_at: new Date().toISOString(), version: '2.0.12-rev1', checksum: 'abc123', integrity: true, topology: 'nat' }] });
+      if (url.pathname === '/api/v2/recovery/snapshots') return route.fulfill({ json: [{ id: 'snapshot-0001', configuration_id: 'config-0001', created_at: new Date().toISOString(), version: '2.0.12-rev2', checksum: 'abc123', integrity: true, topology: 'nat' }] });
       if (url.pathname === '/api/v2/recovery/backups') return route.fulfill({ json: [{ name: 'wansim-2.0.8-prestable.tar.gz', size: 3145728, created_at: new Date().toISOString(), checksum: 'def456', integrity: true }] });
       if (url.pathname === '/api/v2/operations/doctor') return route.fulfill({ json: { generated_at: new Date().toISOString(), status: 'warning', summary: { ok: 2, warning: 1, error: 0 }, checks: [{ component: 'database', status: 'ok', title: 'Integridad SQLite', detail: 'ok', remediation: '', restart_service: '' }, { component: 'telegram', status: 'warning', title: 'Bots de Telegram', detail: '1 sin webhook.', remediation: 'Sincroniza el bot.', restart_service: '' }] } });
       if (url.pathname === '/api/v2/audit/events') return route.fulfill({ json: [{ id: 'audit-1', actor: 'bootstrap-admin', role: 'admin', action: 'recovery.restore', target: 'snapshot-0001', detail: {}, created_at: new Date().toISOString() }] });

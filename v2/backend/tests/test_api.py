@@ -208,6 +208,19 @@ class ApiTests(unittest.TestCase):
         self.assertIsNotNone(config["bridge"])
         self.assertIsNone(config["l3"])
 
+    def test_bridge_plan_enables_stp_and_verify_requires_it(self) -> None:
+        payload = {
+            "name": "Bridge con STP",
+            "config": {
+                "topology": "bridge", "dhcpEnabled": False,
+                "bridge": {"pairs": [{"input": "wan0", "output": "lan0"}]},
+            },
+        }
+        created = self.client.post("/api/v2/configurations", json=payload).json()
+        plan = self.client.post(f"/api/v2/configurations/{created['id']}/plan").json()
+        commands = [item["command"] for item in plan["actions"]]
+        self.assertIn(["ip", "link", "set", "br_wan1", "type", "bridge", "stp_state", "1"], commands)
+
     def test_access_plan_has_no_vlan_creation(self) -> None:
         created = self.client.post("/api/v2/configurations", json=self.nat_payload()).json()
         plan = self.client.post(f"/api/v2/configurations/{created['id']}/plan").json()
