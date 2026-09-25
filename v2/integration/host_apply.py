@@ -165,9 +165,15 @@ def main() -> None:
                 bridge_deployment = service.confirm_management(bridge_deployment)
             assert bridge_deployment.status == "APPLIED", bridge_deployment
             assert exists("br_wan1") and exists("br_wan2"), "No se crearon los bridges L2"
+            stp = lambda name: output("ip", "-j", "-d", "link", "show", name)
+            for bridge in ("br_wan1", "br_wan2"):
+                details = json.loads(stp(bridge))[0]
+                stp_state = ((details.get("linkinfo") or {}).get("info_data") or {}).get("stp_state")
+                assert stp_state == 1, f"STP no quedo activo en {bridge}: {stp_state}"
             report["checks"]["bridge"] = {
                 "status": bridge_deployment.status,
                 "pairs": 2,
+                "stp_enabled": True,
                 "management_guard_confirmed": management_guard,
             }
 

@@ -148,12 +148,12 @@ class NetworkAgent:
                 actions.append(self._action("dhcp-disable", "apply", "Detener DHCP administrado", ["wansim-agent", "dhcp", "disable"]))
         else:
             assert config.bridge is not None
-            actions.append(self._action("forwarding-disable", "prepare", "Deshabilitar IPv4 forwarding en Bridge L2", ["sysctl", "-w", "net.ipv4.ip_forward=0"]))
             actions.append(self._action("dhcp-disable", "apply", "Detener DHCP administrado", ["wansim-agent", "dhcp", "disable"]))
             for index, pair in enumerate(config.bridge.pairs, start=1):
                 bridge = f"br_wan{index}"
                 actions.extend([
                     self._action(f"bridge-create-{index}", "apply", f"Crear bridge {bridge}", ["ip", "link", "add", "name", bridge, "type", "bridge"], ["ip", "link", "del", bridge]),
+                    self._action(f"bridge-stp-{index}", "apply", f"Activar STP en {bridge}", ["ip", "link", "set", bridge, "type", "bridge", "stp_state", "1"]),
                     self._action(f"bridge-in-{index}", "apply", f"Agregar {pair.input} a {bridge}", ["ip", "link", "set", pair.input, "master", bridge], ["ip", "link", "set", pair.input, "nomaster"]),
                     self._action(f"bridge-out-{index}", "apply", f"Agregar {pair.output} a {bridge}", ["ip", "link", "set", pair.output, "master", bridge], ["ip", "link", "set", pair.output, "nomaster"]),
                     self._action(f"bridge-in-up-{index}", "apply", f"Activar {pair.input}", ["ip", "link", "set", pair.input, "up"]),
@@ -378,11 +378,21 @@ class NetworkAgent:
                 masters = {item.get("ifname"): item.get("master") for item in json.loads(links.output or "[]")}
             except json.JSONDecodeError:
                 masters = {}
+            details = self.runner.probe(["ip", "-d", "-j", "link", "show"])
+            try:
+                stp_states = {
+                    item.get("ifname"): ((item.get("linkinfo") or {}).get("info_data") or {}).get("stp_state")
+                    for item in json.loads(details.output or "[]")
+                }
+            except json.JSONDecodeError:
+                stp_states = {}
             for index, pair in enumerate(config.bridge.pairs, start=1):
                 bridge = f"br_wan{index}"
                 for member in (pair.input, pair.output):
                     if masters.get(member) != bridge:
                         errors.append(f"{member} no pertenece a {bridge}")
+                if stp_states.get(bridge) != 1:
+                    errors.append(f"STP inactivo en {bridge}")
         missing = sorted(required - interfaces)
         errors.extend(f"Interfaz ausente: {name}" for name in missing)
         management_check = self.verify_management_path(management or {})

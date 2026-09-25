@@ -21,7 +21,7 @@ No copies tokens de Telegram ni llaves TLS a V2. El instalador crea secretos ind
 Clona V2 en otro directorio y utiliza puertos distintos a V1:
 
 ```bash
-git clone --branch v2.0.12-rev1 --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
+git clone --branch v2.0.12-rev3 --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v2
 cd WAN_SIM-v2
 sudo ./install-v2.sh install
 ```
@@ -36,4 +36,4 @@ No importes directamente `~/emix_abundix.conf`: V2 valida el modelo antes de apl
 
 Mantén V2 en `dry-run` durante la primera revisión. Cuando la matriz de integración haya sido aprobada para tu distribución, realiza el primer despliegue en una VM aislada, comprueba interfaces, DHCP, NAT y `netem`, y usa el botón **Rollback** si el plan no coincide con lo esperado.
 
-`v2.0.12-rev1` es la ruta recomendada para instalaciones nuevas. Conserva el respaldo y la referencia V1.119 hasta completar tus pruebas de aceptación locales.
+`v2.0.12-rev3` es la ruta recomendada para instalaciones nuevas. Conserva el respaldo y la referencia V1.119 hasta completar tus pruebas de aceptación locales.

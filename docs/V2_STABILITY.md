@@ -1,6 +1,6 @@
 # Evidencia De Estabilidad V2.0
 
-La etiqueta `v2.0.12-rev1` se publica con evidencia automática reproducible:
+La etiqueta `v2.0.12-rev3` se publica con evidencia automática reproducible:
 
 - [x] Pruebas unitarias V1/V2, compilación ReactUI y validación Docker Compose.
 - [x] Matriz de red real en Ubuntu 24.04, Ubuntu 26.04, Debian 12, Fedora 42 y Rocky Linux 9, con dos WAN, LAN VLAN/acceso, Bridge, `netem` y rollback.
