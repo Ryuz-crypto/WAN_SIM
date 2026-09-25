@@ -136,6 +136,7 @@ class InstallerStructureTests(unittest.TestCase):
         self.assertIn("--only-binary=:all:", agent)
         self.assertIn('python_version >= "3.14"', requirements)
         self.assertIn("pydantic==2.13.5", requirements)
+        self.assertIn("cryptography==50.0.1", requirements)
         self.assertIn("'3.14'", checks)
         self.assertIn("ubuntu:26.04", matrix)
 
