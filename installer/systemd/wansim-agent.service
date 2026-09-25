@@ -14,7 +14,7 @@ Environment=PYTHONPATH=/opt/wansim/agent/app
 RuntimeDirectory=wansim
 RuntimeDirectoryMode=0770
 ExecStartPre=/usr/bin/rm -f /run/wansim/agent.sock
-ExecStart=/opt/wansim/agent/venv/bin/uvicorn wansim_v2.agent_server:app --uds /run/wansim/agent.sock --workers 1
+ExecStart=/opt/wansim/agent/venv/bin/python -m uvicorn wansim_v2.agent_server:app --uds /run/wansim/agent.sock --workers 1
 ExecStartPost=/usr/local/libexec/wansim-agent-ready
 Restart=on-failure
 RestartSec=3

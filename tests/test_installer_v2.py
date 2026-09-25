@@ -61,6 +61,8 @@ class InstallerStructureTests(unittest.TestCase):
         agent = (ROOT / "installer/systemd/wansim-agent.service").read_text(encoding="utf-8")
         control = (ROOT / "installer/systemd/wansim-control-plane.service").read_text(encoding="utf-8")
         self.assertIn("Restart=on-failure", agent)
+        self.assertIn("venv/bin/python -m uvicorn", agent)
+        self.assertNotIn("venv/bin/uvicorn", agent)
         self.assertIn("Requires=docker.service wansim-agent.service", control)
         self.assertIn("WantedBy=multi-user.target", control)
 
