@@ -16,7 +16,7 @@ async function main() {
     await page.route('http://wansim-v2.test/**', async route => {
       const request = route.request();
       const url = new URL(request.url());
-      if (url.pathname === '/health') return route.fulfill({ json: { ok: true, version: '2.0.12-rev1', execution_mode: 'host' } });
+      if (url.pathname === '/health') return route.fulfill({ json: { ok: true, version: '3.0.0-beta.1', execution_mode: 'host' } });
       if (url.pathname === '/api/v2/auth/me') return route.fulfill({ json: { id: 'legacy-api-key', username: 'legacy-api-key', role: 'admin', auth: 'api_key' } });
       if (url.pathname === '/api/v2/operations/overview') return route.fulfill({ json: {
         execution_mode: 'host', active_configuration: null, deployments: [], leases: [], services: [],
@@ -28,6 +28,7 @@ async function main() {
       } });
       if (url.pathname === '/api/v2/deployments') return route.fulfill({ json: [] });
       if (url.pathname === '/api/v2/telegram/bots') return route.fulfill({ json: [] });
+      if (url.pathname === '/api/v2/configurations' && request.method() === 'GET') return route.fulfill({ json: [] });
       if (url.pathname === '/api/v2/configurations' && request.method() === 'POST') {
         const body = request.postDataJSON();
         createdPayload = body.config;

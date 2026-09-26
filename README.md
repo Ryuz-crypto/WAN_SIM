@@ -1,6 +1,6 @@
 # Ryuz WAN Simulator
 
-[![Versión estable](https://img.shields.io/badge/versi%C3%B3n-v2.0.13--stable-00b388?style=flat-square)](https://github.com/Ryuz-crypto/WAN_SIM/releases/tag/v2.0.13-stable)
+[![Versión pública](https://img.shields.io/badge/versi%C3%B3n-v3.0.0--beta.1-00b388?style=flat-square)](https://github.com/Ryuz-crypto/WAN_SIM/releases/tag/v3.0.0-beta.1)
 [![Plataformas Linux](https://img.shields.io/badge/Linux-Ubuntu%2024.04%2F26.04%20%7C%20Debian%2012%20%7C%20Fedora%2042%20%7C%20Rocky%209-f58220?style=flat-square&logo=linux&logoColor=white)](#sistemas-soportados)
 [![Licencia CC0 1.0](https://img.shields.io/badge/licencia-CC0%201.0-00739d?style=flat-square)](LICENSE)
 [![WAN_SIM checks](https://github.com/Ryuz-crypto/WAN_SIM/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/Ryuz-crypto/WAN_SIM/actions/workflows/checks.yml)
@@ -8,7 +8,9 @@
 
 Simulador WAN para Linux con soporte L3/NAT, Bridge L2, VLAN, puertos LAN sin etiqueta, DHCP, `tc/netem`, HTTPS, Telegram y panel web.
 
-**Versión estable recomendada y más actual:** [`v2.0.13-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v2.0.13-stable)
+**Versión pública para evaluación:** [`v3.0.0-beta.1`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v3.0.0-beta.1)
+
+**Versión estable recomendada:** [`v2.0.13-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v2.0.13-stable)
 
 **Versión estable anterior:** [`v1.119-stable`](https://github.com/Ryuz-crypto/WAN_SIM/tree/v1.119-stable)
 
@@ -16,10 +18,11 @@ Simulador WAN para Linux con soporte L3/NAT, Bridge L2, VLAN, puertos LAN sin et
 
 | Uso | Versión | Instalador |
 | --- | --- | --- |
-| Instalación recomendada con FastAPI, ReactUI y rollback | `v2.0.13-stable` | `sudo ./install-v2.sh install` |
+| Evaluación pública de las funciones nuevas | `v3.0.0-beta.1` | `sudo ./install-v2.sh install` |
+| Producción con FastAPI, ReactUI y rollback | `v2.0.13-stable` | `sudo ./install-v2.sh install` |
 | Compatibilidad con el dashboard clásico | `v1.119-stable` | `./WANsim2.sh` |
 
-V2 comienza en modo seguro `dry-run`. Si conservas V1, instala cada versión en un directorio o máquina diferente.
+V2 y V3 comienzan en modo seguro `dry-run`. Si conservas V1, instala cada versión en un directorio o máquina diferente.
 
 ## Funciones Principales
 
@@ -32,6 +35,7 @@ V2 comienza en modo seguro `dry-run`. Si conservas V1, instala cada versión en 
 - HTTPS con certificados PEM, PFX/PKCS12 o DER.
 - Telegram con botones operativos.
 - V2 agrega FastAPI, ReactUI, SQLite, Docker Compose, rollback y CLI administrativo.
+- V3 agrega configuración reutilizable, Netem observable, operación de interfaces, auditoría humana, usuarios eliminables y actualización desde ReactUI.
 
 ## Sistemas Soportados
 
@@ -47,6 +51,46 @@ El instalador acepta arquitecturas `x86_64` y `aarch64`; la matriz automática p
 > **Importante:** V2 requiere Python 3.9 a 3.14. Ubuntu 20.04 con Python 3.8, Debian 10 y Rocky Linux 8 no forman parte de la matriz certificada. Para esos sistemas conserva V1.119 o actualiza primero el sistema operativo.
 
 Se requiere Linux con `systemd`, acceso a Internet y un usuario con permisos `sudo`.
+
+## Instalar V3.0.0 Beta 1 Pública
+
+V3 es pública para evaluación, pero todavía no reemplaza a V2 estable. Conserva acceso por consola durante las pruebas de red.
+
+### Ubuntu Server, Ubuntu Workstation o Debian
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git sudo
+git clone --branch v3.0.0-beta.1 --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v3
+cd WAN_SIM-v3
+chmod +x install-v2.sh
+sudo ./install-v2.sh install
+```
+
+### Fedora o Rocky Linux
+
+```bash
+sudo dnf makecache -y
+sudo dnf install -y git sudo
+git clone --branch v3.0.0-beta.1 --depth 1 https://github.com/Ryuz-crypto/WAN_SIM.git WAN_SIM-v3
+cd WAN_SIM-v3
+chmod +x install-v2.sh
+sudo ./install-v2.sh install
+```
+
+Actualizar desde V2 estable:
+
+```bash
+sudo wansim backup
+sudo wansim upgrade v3.0.0-beta.1
+sudo wansim doctor
+```
+
+El regreso conserva los datos y utiliza el respaldo transaccional:
+
+```bash
+sudo wansim rollback-version v2.0.13-stable
+```
 
 ## Instalar V1.119 Stable Anterior
 
@@ -202,6 +246,16 @@ sudo sed -n 's/^WANSIM_V2_API_KEY="\(.*\)"$/\1/p' /etc/wansim/wansim.env
 
 En ReactUI selecciona **Clave heredada**, entra a **Acceso**, crea un usuario `admin`, cierra sesión y vuelve a ingresar con usuario y contraseña. Después podrás crear roles `viewer`, `operator` y `admin`.
 
+## Novedades De V3.0.0 Beta 1
+
+- Eliminar usuarios con protección de la sesión actual y del último administrador.
+- Consultar la topología activa y reutilizar configuraciones guardadas como borradores editables.
+- Ver el perfil Netem aplicado y el ancho de banda actual de la interfaz seleccionada.
+- Operar interfaces con `up`, `down` o `restart`, protegiendo la ruta administrativa.
+- Consultar despliegues desplegables y eventos descritos en lenguaje operativo.
+- Buscar y aplicar versiones oficiales desde ReactUI con respaldo transaccional.
+- Créditos de Emilio Abundis, contacto y apartado para apoyar el proyecto.
+
 ## Correcciones De V2.0.13 En Ubuntu
 
 - Bridge L2 conserva el forwarding IPv4 global que Docker necesita para publicar ReactUI. Ping y SSH podían seguir funcionando mientras la web quedaba inaccesible.
@@ -245,6 +299,7 @@ La aceptación Vagrant ejecuta instalación, fallo inducido y rollback, reparaci
 
 ## Documentación
 
+- [V3 beta pública](docs/V3_PUBLIC_BETA.md)
 - [Instalador V2](docs/V2_INSTALLER.md)
 - [Operación V2](docs/V2_OPERATIONS.md)
 - [Migración de V1.119 a V2](docs/MIGRATION_V1_TO_V2.md)

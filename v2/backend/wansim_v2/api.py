@@ -9,10 +9,10 @@ from fastapi.responses import JSONResponse
 
 from . import __version__
 from .auth import AuthService
-from .models import (ConfigurationCreate, ConfigurationRecord, DeploymentRecord, DeploymentRequest, NetemRequest,
+from .models import (ConfigurationCreate, ConfigurationRecord, DeploymentRecord, DeploymentRequest, InterfaceActionRequest, NetemRequest,
                      LoginRequest, PasswordChange, RecoveryRequest, ServiceRestartRequest, TelegramBotCreate,
                      TelegramBotCreated, TelegramBotRecord, TelegramBotUpdate, TelegramDeliveryRequest,
-                     TelegramWebhookSyncRequest, UserCreate, UserRole, UserUpdate)
+                     TelegramWebhookSyncRequest, UpdateApplyRequest, UserCreate, UserRole, UserUpdate)
 from .agent_client import network_agent_from_environment
 from .network import NetworkAgent
 from .operations import OperationsService
@@ -40,7 +40,7 @@ def create_app(data_dir: Path | None = None, agent: NetworkAgent | None = None, 
     telegram = TelegramService(repository, operations, telegram_gateway or TelegramGateway())
     auth = AuthService(repository)
     api_guard = ApiKeyGuard(root, api_key)
-    app = FastAPI(title="WAN_SIM 2.0 API", version=__version__)
+    app = FastAPI(title="WAN_SIM Control Plane API", version=__version__)
     app.state.repository = repository
     app.state.service = service
     app.state.operations = operations
@@ -130,6 +130,21 @@ def create_app(data_dir: Path | None = None, agent: NetworkAgent | None = None, 
         audit(request, "user.update", user_id, {"role": user["role"], "enabled": bool(user["enabled"]), "password_rotated": bool(payload.password)})
         return user
 
+    @app.delete("/api/v2/auth/users/{user_id}")
+    def delete_user(user_id: str, request: Request) -> dict:
+        identity = require_role(request, UserRole.ADMIN)
+        current = repository.get_user(user_id)
+        if not current:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado.")
+        if identity.get("id") == user_id:
+            raise HTTPException(status_code=409, detail="No puedes eliminar tu propia cuenta durante una sesión activa.")
+        active_admins = [item for item in repository.list_users() if item["role"] == "admin" and item["enabled"]]
+        if current["role"] == "admin" and current["enabled"] and len(active_admins) <= 1:
+            raise HTTPException(status_code=409, detail="No se puede eliminar el último administrador habilitado.")
+        auth.delete_user(user_id)
+        audit(request, "user.delete", user_id, {"username": current["username"], "role": current["role"]})
+        return {"ok": True}
+
     @app.post("/api/v2/auth/password")
     def change_password(payload: PasswordChange, request: Request) -> dict:
         identity = require_role(request, UserRole.VIEWER)
@@ -168,6 +183,31 @@ def create_app(data_dir: Path | None = None, agent: NetworkAgent | None = None, 
         audit(request, "service.restart", payload.service)
         return result
 
+    @app.post("/api/v2/operations/interfaces/action")
+    def interface_action(payload: InterfaceActionRequest, request: Request) -> dict:
+        require_role(request, UserRole.ADMIN)
+        result = operations.interface_action(payload.interface, payload.action)
+        if not result.get("ok"):
+            raise HTTPException(status_code=409, detail=result.get("error", "No se pudo operar la interfaz."))
+        audit(request, f"interface.{payload.action}", payload.interface)
+        return result
+
+    @app.get("/api/v2/system/releases")
+    def release_status(request: Request) -> dict:
+        require_role(request, UserRole.ADMIN)
+        return operations.release_status()
+
+    @app.post("/api/v2/system/update", status_code=status.HTTP_202_ACCEPTED)
+    def apply_update(payload: UpdateApplyRequest, request: Request) -> dict:
+        require_role(request, UserRole.ADMIN)
+        if payload.confirmation != f"ACTUALIZAR {payload.version}":
+            raise HTTPException(status_code=409, detail="Escribe la confirmación exacta de actualización.")
+        result = operations.schedule_update(payload.version)
+        if not result.get("ok"):
+            raise HTTPException(status_code=409, detail=result.get("error", result.get("output", "No se pudo programar la actualización.")))
+        audit(request, "system.update", payload.version, {"unit": result.get("unit")})
+        return result
+
     @app.get("/api/v2/operations/doctor")
     def doctor(request: Request) -> dict:
         require_role(request, UserRole.VIEWER)
@@ -179,6 +219,11 @@ def create_app(data_dir: Path | None = None, agent: NetworkAgent | None = None, 
         created = repository.create_configuration(payload.name, payload.config)
         audit(request, "configuration.create", created.id, {"name": created.name, "topology": created.config.topology.value})
         return created
+
+    @app.get("/api/v2/configurations", response_model=list[ConfigurationRecord])
+    def list_configurations(request: Request) -> list[ConfigurationRecord]:
+        require_role(request, UserRole.VIEWER)
+        return repository.list_configurations()
 
     @app.get("/api/v2/configurations/{configuration_id}", response_model=ConfigurationRecord)
     def get_configuration(configuration_id: str) -> ConfigurationRecord:

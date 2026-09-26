@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import time
 from datetime import datetime, timezone
 
 from .network import NetworkAgent
@@ -14,10 +15,24 @@ class OperationsService:
     def __init__(self, repository: ConfigRepository, agent: NetworkAgent):
         self.repository = repository
         self.agent = agent
+        self._traffic_sample: dict[str, tuple[float, int, int]] = {}
 
     def overview(self) -> dict:
+        agent_overview = self.agent.overview()
+        sampled_at = time.monotonic()
+        for interface in agent_overview.get("interfaces", []):
+            name = interface["name"]
+            rx, tx = int(interface.get("rx_bytes", 0)), int(interface.get("tx_bytes", 0))
+            previous = self._traffic_sample.get(name)
+            rx_mbps = tx_mbps = 0.0
+            if previous and sampled_at > previous[0]:
+                elapsed = sampled_at - previous[0]
+                rx_mbps = max(0.0, (rx - previous[1]) * 8 / elapsed / 1_000_000)
+                tx_mbps = max(0.0, (tx - previous[2]) * 8 / elapsed / 1_000_000)
+            interface.update({"rx_mbps": round(rx_mbps, 3), "tx_mbps": round(tx_mbps, 3), "total_mbps": round(rx_mbps + tx_mbps, 3)})
+            self._traffic_sample[name] = (sampled_at, rx, tx)
         return {
-            **self.agent.overview(),
+            **agent_overview,
             "active_configuration": self.repository.active_configuration(),
             "deployments": self.repository.list_deployments(20),
         }
@@ -27,6 +42,15 @@ class OperationsService:
 
     def restart(self, service: str) -> dict:
         return self.agent.restart_service(service)
+
+    def interface_action(self, interface: str, action: str) -> dict:
+        return self.agent.interface_action(interface, action)
+
+    def release_status(self) -> dict:
+        return self.agent.release_status()
+
+    def schedule_update(self, version: str) -> dict:
+        return self.agent.schedule_update(version)
 
     def doctor(self) -> dict:
         checks: list[dict] = []

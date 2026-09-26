@@ -14,7 +14,11 @@ export type ConfigPayload = Omit<Config, 'l3' | 'bridge'> & { l3?: Config['l3'];
 export type Configuration = { id: string; name: string; state: string; config: Config; created_at: string; updated_at: string }
 export type Action = { id: string; phase: string; description: string; command: string[]; undo?: string[] }
 export type Deployment = { id: string; configuration_id: string; status: string; plan: Action[]; result: Record<string, unknown>; created_at: string; updated_at: string }
-export type NetworkInterface = { name: string; mac: string; state: string; ips: string[]; rx_bytes: number; tx_bytes: number; is_management?: boolean }
+export type NetemStatus = { active: boolean; delay_ms: number; jitter_ms: number; loss_percent: number; raw?: string }
+export type NetworkInterface = {
+  name: string; mac: string; state: string; ips: string[]; rx_bytes: number; tx_bytes: number; is_management?: boolean
+  rx_mbps?: number; tx_mbps?: number; total_mbps?: number; netem?: NetemStatus
+}
 export type Service = { name: string; active: string; enabled: string }
 export type Lease = { ip: string; mac: string; host: string; state: string }
 export type Overview = { execution_mode: string; interfaces: NetworkInterface[]; services: Service[]; leases: Lease[]; active_configuration: Configuration | null; deployments: Deployment[] }
@@ -55,4 +59,8 @@ export type DoctorReport = {
 export type AuditEvent = {
   id: string; actor: string; role: string; action: string; target: string
   detail: Record<string, unknown>; created_at: string
+}
+export type ReleaseStatus = {
+  ok: boolean; current: string; latest?: string; latest_stable?: string; update_available?: boolean
+  releases: string[]; error?: string
 }

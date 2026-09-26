@@ -160,6 +160,16 @@ class ServiceRestartRequest(BaseModel):
     service: str = Field(min_length=1, max_length=80, pattern=r"^[a-zA-Z0-9_.@-]+$")
 
 
+class InterfaceActionRequest(BaseModel):
+    interface: str = Field(min_length=1, max_length=15, pattern=r"^[a-zA-Z0-9_.-]+$")
+    action: Literal["up", "down", "restart"]
+
+
+class UpdateApplyRequest(BaseModel):
+    version: str = Field(pattern=r"^v[23]\.[0-9]+\.[0-9]+-(stable|prestable|beta\.[0-9]+|rc\.[0-9]+)$")
+    confirmation: str = Field(min_length=8, max_length=160)
+
+
 class TelegramPermission(str, Enum):
     READ = "read"
     OPERATE = "operate"

@@ -3,7 +3,7 @@ name: WAN_SIM Vagrant acceptance matrix
 on:
   push:
     branches: [main]
-    tags: ["v2.*-stable"]
+    tags: ["v2.*-stable", "v3.*-stable", "v3.*-beta.*", "v3.*-rc.*"]
   pull_request:
   workflow_dispatch:
 

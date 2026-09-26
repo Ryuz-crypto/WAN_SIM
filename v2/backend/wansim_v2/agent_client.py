@@ -116,6 +116,15 @@ class RemoteNetworkAgent:
     def restart_service(self, service: str) -> dict:
         return self._request("POST", "/v1/restart-service", {"service": service})  # type: ignore[return-value]
 
+    def interface_action(self, interface: str, action: str) -> dict:
+        return self._request("POST", "/v1/interface-action", {"interface": interface, "action": action})  # type: ignore[return-value]
+
+    def release_status(self) -> dict:
+        return self._request("GET", "/v1/releases")  # type: ignore[return-value]
+
+    def schedule_update(self, version: str) -> dict:
+        return self._request("POST", "/v1/update", {"version": version})  # type: ignore[return-value]
+
     def backup_catalog(self) -> list[dict]:
         return self._request("GET", "/v1/backups")  # type: ignore[return-value]
 

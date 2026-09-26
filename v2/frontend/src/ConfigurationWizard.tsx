@@ -13,6 +13,8 @@ type Props = {
   review: PlanReview | null
   busy: boolean
   canOperate: boolean
+  configurations: Configuration[]
+  onLoadConfiguration: (configuration: Configuration) => void
   setName: (value: string) => void
   setConfig: Dispatch<SetStateAction<Config>>
   onReview: () => void
@@ -107,6 +109,7 @@ export function ConfigurationWizard(props: Props) {
     </section>
 
     <section className="right-stack">
+      <section className="panel saved-configs"><div className="panel-heading"><div><span className="eyebrow">Partir de una existente</span><h2>Configuraciones</h2></div><Save size={20} /></div>{props.configurations.length ? <div className="compact-config-list">{props.configurations.slice(0, 6).map(item => <button key={item.id} onClick={() => props.onLoadConfiguration(item)}><span className={`state ${item.state.toLowerCase()}`}>{item.state}</span><strong>{item.name}</strong><small>{item.config.topology === 'nat' ? 'L3 / NAT' : 'Bridge L2'}</small></button>)}</div> : <p className="empty">Sin configuraciones guardadas.</p>}</section>
       <section className="panel topology-preview"><div className="panel-heading"><div><span className="eyebrow">Vista conceptual</span><h2>Topología propuesta</h2></div><GitCompareArrows size={22} /></div><Diagram config={config} /></section>
       <section className="panel selection-summary"><div className="panel-heading"><div><span className="eyebrow">Selección</span><h2>Resumen</h2></div><CheckCircle2 size={22} /></div><dl><div><dt>Modo</dt><dd>{config.topology === 'nat' ? 'L3 / NAT' : 'Bridge L2'}</dd></div><div><dt>Pares</dt><dd>{config.topology === 'nat' ? config.l3.links.length : config.bridge.pairs.length}</dd></div><div><dt>DHCP LAN</dt><dd>{config.topology === 'nat' && config.dhcpEnabled ? 'Activo' : 'Inactivo'}</dd></div><div><dt>Ruta principal</dt><dd>{interfaces.filter(item => item.is_management).map(item => item.name).join(', ') || 'No detectada'}</dd></div></dl></section>
     </section>

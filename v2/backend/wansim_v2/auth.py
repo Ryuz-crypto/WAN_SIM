@@ -42,6 +42,10 @@ class AuthService:
             raise LookupError("Usuario no encontrado.")
         return user
 
+    def delete_user(self, user_id: str) -> None:
+        if not self.repository.delete_user(user_id):
+            raise LookupError("Usuario no encontrado.")
+
     def change_password(self, user_id: str, current_password: str, new_password: str) -> None:
         user = self.repository.get_user(user_id)
         if not user or not password_valid(current_password, user["password_hash"]):

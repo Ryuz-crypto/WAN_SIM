@@ -2,7 +2,7 @@
 
 update_to_release() {
   local release="$1" temp current
-  [[ "$release" =~ ^v2\.[0-9]+\.[0-9]+-(prestable|stable|rc\.[0-9]+)$ ]] || die "Versión no permitida: $release. Usa una etiqueta V2 publicada."
+  [[ "$release" =~ ^v(2|3)\.[0-9]+\.[0-9]+-(prestable|stable|beta\.[0-9]+|rc\.[0-9]+)$ ]] || die "Versión no permitida: $release. Usa una etiqueta oficial V2/V3 publicada."
   current="v$(cat "$WANSIM_ETC_DIR/version" 2>/dev/null || printf unknown)"
   [[ "$current" != "$release" ]] || { log_ok "WAN_SIM ya está en $release."; return 0; }
   git ls-remote --exit-code --tags https://github.com/Ryuz-crypto/WAN_SIM.git "refs/tags/$release" >/dev/null \

@@ -152,6 +152,23 @@ def restart_service(payload: dict) -> dict:
         return agent.restart_service(payload["service"])
 
 
+@app.post("/v1/interface-action")
+def interface_action(payload: dict) -> dict:
+    with exclusive_operation():
+        return agent.interface_action(str(payload.get("interface", "")), str(payload.get("action", "")))
+
+
+@app.get("/v1/releases")
+def releases() -> dict:
+    return agent.release_status()
+
+
+@app.post("/v1/update")
+def update(payload: dict) -> dict:
+    with exclusive_operation():
+        return agent.schedule_update(str(payload.get("version", "")))
+
+
 @app.get("/v1/backups")
 def backups() -> list[dict]:
     return agent.backup_catalog()

@@ -2,7 +2,7 @@ name: WAN_SIM release packages
 
 on:
   push:
-    tags: ["v2.*"]
+    tags: ["v2.*", "v3.*"]
   workflow_dispatch:
 
 permissions:

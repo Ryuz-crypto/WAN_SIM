@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
+from . import __version__
 from .models import CommandAction, LanMode, Topology, TopologyConfig, WanAddressing
 
 
@@ -542,6 +543,91 @@ class NetworkAgent:
             result = self.runner.run(command)
         return {"ok": result.ok, "mode": self.runner.mode, "command": result.command, "output": result.output}
 
+    def netem_status(self, interface: str) -> dict:
+        result = self.runner.probe(["tc", "qdisc", "show", "dev", interface])
+        output = result.output if result.ok else ""
+        active = " netem " in f" {output} "
+
+        def value(pattern: str) -> float:
+            match = re.search(pattern, output)
+            return float(match.group(1)) if match else 0.0
+
+        delays = re.search(r"\bdelay\s+([0-9.]+)ms(?:\s+([0-9.]+)ms)?", output)
+        return {
+            "active": active,
+            "delay_ms": float(delays.group(1)) if delays else 0.0,
+            "jitter_ms": float(delays.group(2)) if delays and delays.group(2) else 0.0,
+            "loss_percent": value(r"\bloss\s+([0-9.]+)%"),
+            "raw": output if active else "",
+        }
+
+    def interface_action(self, interface: str, action: str) -> dict:
+        items = {item["name"]: item for item in self.interfaces()}
+        if interface not in items:
+            return {"ok": False, "error": f"Interfaz no encontrada: {interface}"}
+        if items[interface].get("is_management") and action in {"down", "restart"}:
+            return {"ok": False, "error": "La interfaz de administración no puede bajarse desde ReactUI. Usa consola local."}
+        commands = [["ip", "link", "set", interface, action]] if action in {"up", "down"} else [
+            ["ip", "link", "set", interface, "down"],
+            ["ip", "link", "set", interface, "up"],
+        ]
+        results = []
+        for command in commands:
+            result = self.runner.run(command)
+            results.append({"command": command, "ok": result.ok, "output": result.output})
+            if not result.ok:
+                return {"ok": False, "mode": self.runner.mode, "results": results, "error": result.output}
+        return {"ok": True, "mode": self.runner.mode, "results": results}
+
+    @staticmethod
+    def _release_key(tag: str) -> tuple[int, int, int, int, int]:
+        match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)-(stable|prestable|beta\.(\d+)|rc\.(\d+))", tag)
+        if not match:
+            return (0, 0, 0, 0, 0)
+        channel = match.group(4)
+        rank = 3 if channel == "stable" else 2 if channel.startswith("rc.") else 1
+        serial = int(match.group(5) or match.group(6) or 0)
+        return (int(match.group(1)), int(match.group(2)), int(match.group(3)), rank, serial)
+
+    def release_status(self) -> dict:
+        current = __version__
+        try:
+            installed = Path("/etc/wansim/version").read_text(encoding="utf-8").strip()
+            if installed:
+                current = installed
+        except OSError:
+            pass
+        result = self.runner.probe([
+            "git", "ls-remote", "--tags", "--refs", "https://github.com/Ryuz-crypto/WAN_SIM.git",
+        ], timeout=25)
+        if not result.ok:
+            return {"ok": False, "current": current, "error": result.output, "releases": []}
+        tags = sorted({
+            line.rsplit("refs/tags/", 1)[-1]
+            for line in result.output.splitlines()
+            if "refs/tags/" in line and self._release_key(line.rsplit("refs/tags/", 1)[-1]) != (0, 0, 0, 0, 0)
+        }, key=self._release_key, reverse=True)
+        stable = next((tag for tag in tags if tag.endswith("-stable")), "")
+        latest = tags[0] if tags else ""
+        return {
+            "ok": True, "current": current, "latest": latest, "latest_stable": stable,
+            "update_available": bool(latest and self._release_key(latest) > self._release_key(f"v{current}" if not current.startswith("v") else current)),
+            "releases": tags[:20],
+        }
+
+    def schedule_update(self, version: str) -> dict:
+        if not re.fullmatch(r"v[23]\.[0-9]+\.[0-9]+-(stable|prestable|beta\.[0-9]+|rc\.[0-9]+)", version):
+            return {"ok": False, "error": "Etiqueta de versión no permitida."}
+        available = self.release_status()
+        if not available.get("ok") or version not in available.get("releases", []):
+            return {"ok": False, "error": "La versión no existe entre las etiquetas oficiales publicadas."}
+        unit = f"wansim-update-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+        result = self.runner.run([
+            "systemd-run", f"--unit={unit}", "--collect", "--property=Type=exec",
+            "/usr/local/bin/wansim", "upgrade", version,
+        ])
+        return {"ok": result.ok, "mode": self.runner.mode, "unit": unit, "version": version, "output": result.output}
+
     def restart_service(self, service: str) -> dict:
         allowed = {
             "wansim.service", "wansim-l2-persist.service", "wansim-agent.service",
@@ -554,9 +640,12 @@ class NetworkAgent:
         return {"ok": result.ok, "mode": self.runner.mode, "command": result.command, "output": result.output}
 
     def overview(self) -> dict:
+        interfaces = self.interfaces()
+        for item in interfaces:
+            item["netem"] = self.netem_status(item["name"])
         return {
             "execution_mode": self.execution_mode,
-            "interfaces": self.interfaces(),
+            "interfaces": interfaces,
             "services": self.service_statuses(),
             "leases": self.dhcp_leases(),
         }

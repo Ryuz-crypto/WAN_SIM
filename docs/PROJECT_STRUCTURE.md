@@ -1,13 +1,13 @@
 # Project Structure
 
-Version 2.0.13-stable keeps `WANsim2.sh` as the V1 entrypoint while `install-v2.sh` manages the stable V2 platform. The previous stable release remains available as `v1.119-stable`.
+Version `3.0.0-beta.1` evolves the React/FastAPI control plane while preserving `v2.0.13-stable` as the recommended stable release and `v1.119-stable` as the legacy stable release. `WANsim2.sh` remains the V1 entrypoint and `install-v2.sh` is the all-in-one lifecycle command for V2 and V3.
 
 Current layout:
 
 ```text
 WAN_SIM/
   WANsim2.sh              # Main simulator and installer entrypoint
-  install-v2.sh           # All-in-one V2 installer and lifecycle entrypoint
+  install-v2.sh           # All-in-one V2/V3 installer and lifecycle entrypoint
   installer/              # Wizard, lifecycle, platform, security, agent and systemd modules
   packaging/              # Reproducible DEB/RPM builders and bootstrap command
   VERSION                 # Single source for the released version
@@ -28,7 +28,7 @@ WAN_SIM/
     integration/          # Container and Vagrant Linux acceptance matrices
 ```
 
-The V1 entrypoint sources `lib/` to preserve `./WANsim2.sh` compatibility. The V2 backend is deliberately isolated; it does not replace the stable dashboard or alter the V1 installer.
+The V1 entrypoint sources `lib/` to preserve `./WANsim2.sh` compatibility. The V2/V3 control plane is deliberately isolated; it does not replace the stable V1 dashboard or alter the V1 installer.
 
 Future split:
 
@@ -48,6 +48,6 @@ The safe migration path is to extract one group at a time and keep `WANsim2.sh` 
 ./WANsim2.sh
 ```
 
-WAN_SIM 2.0 uses FastAPI as the control plane and a separate React + TypeScript interface as the operator console. Its privileged `NetworkAgent` runs natively under `wansim-agent.service`; FastAPI reaches it through a group-restricted, HMAC-authenticated Unix socket. It defaults to `dry-run` and persists drafts, active configuration, host snapshots and deployment results in SQLite.
+WAN_SIM V2/V3 uses FastAPI as the control plane and a separate React + TypeScript interface as the operator console. Its privileged `NetworkAgent` runs natively under `wansim-agent.service`; FastAPI reaches it through a group-restricted, HMAC-authenticated Unix socket. It defaults to `dry-run` and persists drafts, active configuration, host snapshots and deployment results in SQLite.
 
 Run V1 regression tests with `python3 -m unittest discover -s tests -v`, V2 API tests with `PYTHONPATH=v2/backend python3 -m unittest discover -s v2/backend/tests -v`, ReactUI checks with `cd v2/frontend && npm install && npm run build`, and shell syntax checks with `bash -n WANsim2.sh`.

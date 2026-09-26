@@ -133,6 +133,19 @@ class StickyNftChainRunner(CommandRunner):
         return CommandResult(False, command, "missing")
 
 
+class ReleaseRunner(ManagementRunner):
+    def probe(self, command: list[str], **kwargs: object):
+        from wansim_v2.network import CommandResult
+
+        if command[:4] == ["git", "ls-remote", "--tags", "--refs"]:
+            self.commands.append(command)
+            return CommandResult(True, command, "\n".join([
+                "abc\trefs/tags/v2.0.13-stable",
+                "def\trefs/tags/v3.0.0-beta.1",
+            ]))
+        return super().probe(command, **kwargs)
+
+
 class RecordingTelegramGateway(TelegramGateway):
     def __init__(self) -> None:
         self.messages: list[dict] = []
@@ -405,6 +418,47 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(me["role"], "viewer")
         events = self.client.get("/api/v2/audit/events").json()
         self.assertTrue(any(item["action"] == "auth.login" and item["actor"] == "observer" for item in events))
+
+    def test_admin_can_delete_user_but_not_current_or_last_admin(self) -> None:
+        admin = self.client.post("/api/v2/auth/users", json={
+            "username": "primary-admin", "password": "primary-password-1234", "role": "admin",
+        }).json()
+        viewer = self.client.post("/api/v2/auth/users", json={
+            "username": "temporary-viewer", "password": "temporary-password-1234", "role": "viewer",
+        }).json()
+        login = TestClient(self.app).post("/api/v2/auth/login", json={"username": "primary-admin", "password": "primary-password-1234"}).json()
+        session = TestClient(self.app, headers={"Authorization": f"Bearer {login['token']}"})
+        self.assertEqual(session.delete(f"/api/v2/auth/users/{viewer['id']}").status_code, 200)
+        self.assertEqual(session.delete(f"/api/v2/auth/users/{admin['id']}").status_code, 409)
+        self.assertFalse(any(item["id"] == viewer["id"] for item in self.client.get("/api/v2/auth/users").json()))
+        events = self.client.get("/api/v2/audit/events").json()
+        self.assertTrue(any(item["action"] == "user.delete" and item["target"] == viewer["id"] for item in events))
+
+    def test_configurations_can_be_listed_for_editing(self) -> None:
+        first = self.client.post("/api/v2/configurations", json=self.nat_payload()).json()
+        listed = self.client.get("/api/v2/configurations")
+        self.assertEqual(listed.status_code, 200)
+        self.assertTrue(any(item["id"] == first["id"] for item in listed.json()))
+
+    def test_interface_actions_protect_management_path(self) -> None:
+        runner = ManagementRunner()
+        client = TestClient(create_app(Path(self.directory.name) / "interface-actions", NetworkAgent(runner), api_key=API_KEY), headers=AUTH_HEADERS)
+        blocked = client.post("/api/v2/operations/interfaces/action", json={"interface": "wan0", "action": "down"})
+        self.assertEqual(blocked.status_code, 409)
+        applied = client.post("/api/v2/operations/interfaces/action", json={"interface": "lan0", "action": "up"})
+        self.assertEqual(applied.status_code, 200)
+        self.assertIn(["ip", "link", "set", "lan0", "up"], runner.commands)
+
+    def test_official_v3_update_can_be_checked_and_scheduled(self) -> None:
+        runner = ReleaseRunner()
+        client = TestClient(create_app(Path(self.directory.name) / "release-update", NetworkAgent(runner), api_key=API_KEY), headers=AUTH_HEADERS)
+        releases = client.get("/api/v2/system/releases").json()
+        self.assertEqual(releases["latest"], "v3.0.0-beta.1")
+        rejected = client.post("/api/v2/system/update", json={"version": "v3.0.0-beta.1", "confirmation": "incorrecta"})
+        self.assertEqual(rejected.status_code, 409)
+        accepted = client.post("/api/v2/system/update", json={"version": "v3.0.0-beta.1", "confirmation": "ACTUALIZAR v3.0.0-beta.1"})
+        self.assertEqual(accepted.status_code, 202)
+        self.assertTrue(any(command[:1] == ["systemd-run"] for command in runner.commands))
 
     def test_password_rotation_revokes_existing_session(self) -> None:
         self.client.post("/api/v2/auth/users", json={

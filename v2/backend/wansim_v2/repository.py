@@ -116,6 +116,14 @@ class ConfigRepository:
             row = connection.execute("SELECT * FROM configurations WHERE state = 'ACTIVE' ORDER BY updated_at DESC LIMIT 1").fetchone()
         return self._to_configuration(row) if row else None
 
+    def list_configurations(self, limit: int = 100) -> list[ConfigurationRecord]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM configurations ORDER BY CASE state WHEN 'ACTIVE' THEN 0 ELSE 1 END, updated_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [self._to_configuration(row) for row in rows]
+
     def _to_configuration(self, row: sqlite3.Row) -> ConfigurationRecord:
         return ConfigurationRecord(
             id=row["id"], name=row["name"], state=row["state"],
@@ -320,6 +328,12 @@ class ConfigRepository:
         if encoded_password or enabled is False:
             self.revoke_user_sessions(user_id)
         return self.public_user(self.get_user(user_id))
+
+    def delete_user(self, user_id: str) -> bool:
+        with self.connection() as connection:
+            connection.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+            result = connection.execute("DELETE FROM users WHERE id=?", (user_id,))
+        return result.rowcount == 1
 
     def create_session(self, user_id: str, hashed_token: str, expires_at: str) -> None:
         timestamp = now()
